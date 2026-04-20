@@ -1,0 +1,450 @@
+import { formatCardName, cardRankText, CARD_SET_GLOW_CLASSES } from "./cardUtils.js";
+import { countSuitsAcrossAllStowed, suitInventoryGlowClass, getModalSetBonusProgressLines } from "./setBonusPresentation.js";
+
+function rankDeckIsCompletelyEmpty(inventory) {
+  for (let rank = 1; rank <= 13; rank++) if (inventory.deckByRank[rank]) return false;
+  return true;
+}
+
+function cardModalInventoryDragHintHtml() {
+  return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Click and hold</strong> a card, then <b>drag</b> it to a slot and <b>release</b> to drop, either in the relevant card slot, or the <b>backpack</b>.</p></aside>`;
+}
+
+/**
+ * @param {object} opts
+ */
+export function createCardPickupModal(opts) {
+  const {
+    cardModal,
+    cardModalFace,
+    modalDeckStripEl,
+    cardSwapRow,
+    modalSetBonusStatusEl,
+    cardCloseButton,
+    inventory,
+    getItemRules,
+    syncDeckSlots,
+    onPausedChange = () => {},
+  } = opts;
+
+  let inventoryModalOpen = false;
+  let cardPickupFlowActive = false;
+  let pendingCard = null;
+  let pickupTargetRank = null;
+  /** While dragging from a backpack or rank slot, overrides stale `pickupTargetRank` for face + deck drop zone (no full row rebuild). */
+  let dragIntentRank = null;
+
+  function effectivePickupRank() {
+    if (pendingCard?.rank != null) return pendingCard.rank;
+    if (dragIntentRank != null) return dragIntentRank;
+    return pickupTargetRank;
+  }
+
+  function parseDeckZoneId(zoneId) {
+    const m = /^deck-(\d+)$/.exec(zoneId);
+    if (!m) return null;
+    const r = Number(m[1]);
+    return r >= 1 && r <= 13 ? r : null;
+  }
+
+  function parseBpZoneId(zoneId) {
+    const m = /^bp-(\d+)$/.exec(zoneId);
+    if (!m) return null;
+    const i = Number(m[1]);
+    return i >= 0 && i < 3 ? i : null;
+  }
+
+  function getCardByZone(zoneId) {
+    if (zoneId === "pickup") return pendingCard;
+    const dr = parseDeckZoneId(zoneId);
+    if (dr != null) return inventory.deckByRank[dr] || null;
+    const bi = parseBpZoneId(zoneId);
+    if (bi != null) return inventory.backpackSlots[bi] || null;
+    return null;
+  }
+
+  function setCardByZone(zoneId, card) {
+    if (zoneId === "pickup") pendingCard = card;
+    else {
+      const dr = parseDeckZoneId(zoneId);
+      if (dr != null) inventory.deckByRank[dr] = card || null;
+      else {
+        const bi = parseBpZoneId(zoneId);
+        if (bi != null) inventory.backpackSlots[bi] = card || null;
+      }
+    }
+  }
+
+  function syncPickupTargetRankAfterSwap(fromZoneId, toZoneId, fromCardBefore, toCardBefore) {
+    if (!cardPickupFlowActive) return;
+    if (pendingCard) {
+      pickupTargetRank = pendingCard.rank;
+      return;
+    }
+    if (fromZoneId === "pickup") {
+      const dTo = parseDeckZoneId(toZoneId);
+      if (dTo != null) {
+        pickupTargetRank = dTo;
+        return;
+      }
+      const bTo = parseBpZoneId(toZoneId);
+      if (bTo != null && !toCardBefore && fromCardBefore) {
+        pickupTargetRank = fromCardBefore.rank;
+        return;
+      }
+    }
+    const bFrom = parseBpZoneId(fromZoneId);
+    if (bFrom != null && fromCardBefore) {
+      pickupTargetRank = fromCardBefore.rank;
+      return;
+    }
+    const dFrom = parseDeckZoneId(fromZoneId);
+    if (dFrom != null && fromCardBefore) {
+      pickupTargetRank = fromCardBefore.rank;
+      return;
+    }
+    pickupTargetRank = null;
+  }
+
+  function swapCardsBetweenZones(fromZoneId, toZoneId) {
+    if (!fromZoneId || !toZoneId || fromZoneId === toZoneId) return;
+
+    const dFrom = parseDeckZoneId(fromZoneId);
+    const dTo = parseDeckZoneId(toZoneId);
+    const bFrom = parseBpZoneId(fromZoneId);
+    const bTo = parseBpZoneId(toZoneId);
+    const toPickup = toZoneId === "pickup";
+
+    if (dFrom != null && dTo != null && dFrom !== dTo) return;
+
+    const fromCard = getCardByZone(fromZoneId);
+    const toCard = getCardByZone(toZoneId);
+    if (!fromCard && !toCard) return;
+
+    const allowStageToEmptyPickup =
+      toPickup &&
+      !pendingCard &&
+      cardPickupFlowActive &&
+      fromCard &&
+      (bFrom != null ||
+        (dFrom != null &&
+          fromCard.rank === dFrom &&
+          (pickupTargetRank == null ||
+            dFrom === pickupTargetRank ||
+            (dragIntentRank != null && dFrom === dragIntentRank))));
+    if (toPickup && !pendingCard && !allowStageToEmptyPickup) return;
+    if (toPickup && !fromCard) return;
+
+    if (dFrom != null && fromCard && fromCard.rank !== dFrom) return;
+    if (dTo != null && fromCard && fromCard.rank !== dTo) return;
+    if (dTo != null && toCard && toCard.rank !== dTo) return;
+    if (dFrom != null && toPickup && toCard && toCard.rank !== dFrom) return;
+    if (dFrom != null && bTo != null && toCard && toCard.rank !== dFrom) return;
+
+    setCardByZone(fromZoneId, toCard || null);
+    setCardByZone(toZoneId, fromCard || null);
+    syncPickupTargetRankAfterSwap(fromZoneId, toZoneId, fromCard, toCard);
+    renderCardModal();
+    syncDeckSlots();
+  }
+
+  function wireDropZone(zoneEl, zoneId) {
+    zoneEl.dataset.zoneId = zoneId;
+    zoneEl.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      zoneEl.classList.add("over");
+    });
+    zoneEl.addEventListener("dragleave", () => zoneEl.classList.remove("over"));
+    zoneEl.addEventListener("drop", (event) => {
+      event.preventDefault();
+      zoneEl.classList.remove("over");
+      const from = event.dataTransfer?.getData("text/plain");
+      if (!from) return;
+      swapCardsBetweenZones(from, zoneId);
+    });
+  }
+
+  function appendCardToZone(zoneEl, zoneId, card, compact, itemRules) {
+    const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+    if (card) {
+      const cardEl = document.createElement("div");
+      cardEl.className = "zone-card";
+      cardEl.draggable = true;
+      const glow = suitInventoryGlowClass(card, suitsAll);
+      if (glow) cardEl.classList.add(glow);
+      cardEl.textContent = compact
+        ? formatCardName(card)
+        : `${formatCardName(card)} — ${itemRules.describeCardEffect(card)}`;
+      cardEl.addEventListener("dragstart", (event) => {
+        event.dataTransfer?.setData("text/plain", zoneId);
+        if (cardPickupFlowActive && card?.rank != null) {
+          const fromBp = parseBpZoneId(zoneId) != null;
+          const fromDeck = parseDeckZoneId(zoneId) != null;
+          if (fromBp || fromDeck) {
+            dragIntentRank = card.rank;
+            refreshRankTargetUiDuringDrag();
+          }
+        }
+      });
+      cardEl.addEventListener("dragend", () => {
+        if (dragIntentRank != null) {
+          dragIntentRank = null;
+          renderCardModal();
+        }
+      });
+      zoneEl.appendChild(cardEl);
+    } else {
+      const emptyEl = document.createElement("div");
+      emptyEl.className = "zone-empty";
+      emptyEl.textContent = "Empty";
+      zoneEl.appendChild(emptyEl);
+    }
+  }
+
+  function appendModalDeckDisplayCell(parent, rank, card, extraClass = "") {
+    const cell = document.createElement("div");
+    cell.className = ["modal-deck-cell", extraClass].filter(Boolean).join(" ");
+    for (const c of CARD_SET_GLOW_CLASSES) cell.classList.remove(c);
+    cell.innerHTML = `<div class="modal-deck-cell-label">${cardRankText(rank)}</div>`;
+    const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+    if (card) {
+      const glow = suitInventoryGlowClass(card, suitsAll);
+      if (glow) cell.classList.add(glow);
+      const t = document.createElement("div");
+      t.className = "modal-deck-cell-card";
+      t.textContent = formatCardName(card);
+      cell.appendChild(t);
+    } else {
+      const e = document.createElement("div");
+      e.className = "modal-deck-cell-empty";
+      e.textContent = "—";
+      cell.appendChild(e);
+    }
+    parent.appendChild(cell);
+  }
+
+  function appendModalBackpackDisplayCell(parent, packIndex, card) {
+    const cell = document.createElement("div");
+    cell.className = "modal-deck-cell modal-deck-cell--bp";
+    for (const c of CARD_SET_GLOW_CLASSES) cell.classList.remove(c);
+    cell.innerHTML = `<div class="modal-deck-cell-label">Pack ${packIndex + 1}</div>`;
+    const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+    if (card) {
+      const glow = suitInventoryGlowClass(card, suitsAll);
+      if (glow) cell.classList.add(glow);
+      const t = document.createElement("div");
+      t.className = "modal-deck-cell-card";
+      t.textContent = formatCardName(card);
+      cell.appendChild(t);
+    } else {
+      const e = document.createElement("div");
+      e.className = "modal-deck-cell-empty";
+      e.textContent = "—";
+      cell.appendChild(e);
+    }
+    parent.appendChild(cell);
+  }
+
+  /** Updates centre face + rank deck drop zone only (swap row backpack/pickup nodes stay intact — safe mid-drag). */
+  function refreshRankTargetUiDuringDrag() {
+    const itemRules = getItemRules();
+    if (!cardPickupFlowActive || !cardModalFace || !cardSwapRow) return;
+    const r = effectivePickupRank();
+    if (r == null) return;
+    renderPickupFlowFaceHtml(itemRules, r);
+
+    const pickupEl = cardSwapRow.querySelector('[data-zone-id="pickup"]');
+    if (!pickupEl) return;
+    const newDeckId = `deck-${r}`;
+    const oldDeck = cardSwapRow.querySelector('[data-zone-id^="deck-"]');
+    if (oldDeck?.dataset.zoneId === newDeckId) return;
+    oldDeck?.remove();
+    const zoneEl = document.createElement("div");
+    zoneEl.className = "drop-zone drop-zone--swap drop-zone--main-slot";
+    zoneEl.innerHTML = `<div class="zone-label">Card slot: ${cardRankText(r)}</div>`;
+    wireDropZone(zoneEl, newDeckId);
+    appendCardToZone(zoneEl, newDeckId, inventory.deckByRank[r] || null, false, itemRules);
+    pickupEl.insertAdjacentElement("afterend", zoneEl);
+  }
+
+  function renderPickupFlowFaceHtml(itemRules, r) {
+    const showCard = pendingCard || inventory.deckByRank[r] || null;
+    const showFirstCardHint = rankDeckIsCompletelyEmpty(inventory);
+    if (showCard) {
+      cardModalFace.classList.remove("compact");
+      if (showFirstCardHint) {
+        cardModalFace.innerHTML = `<div class="card-face-layout"><div class="card-face-primary"><div class="big">${formatCardName(showCard)}</div><div class="desc">${itemRules.describeCardEffect(showCard)}</div></div>${cardModalInventoryDragHintHtml()}</div>`;
+      } else {
+        cardModalFace.innerHTML = `<div class="big">${formatCardName(showCard)}</div><div class="desc">${itemRules.describeCardEffect(showCard)}</div>`;
+      }
+    } else if (showFirstCardHint) {
+      cardModalFace.classList.remove("compact");
+      cardModalFace.innerHTML = `<div class="card-face-layout"><div class="card-face-primary"><div class="desc">Rank <strong>${cardRankText(r)}</strong> — empty. Use <strong>New pickup</strong> or a backpack slot below, or <strong>Leave</strong>.</div></div>${cardModalInventoryDragHintHtml()}</div>`;
+    } else {
+      cardModalFace.classList.add("compact");
+      cardModalFace.innerHTML = `<div class="desc">Rank <strong>${cardRankText(r)}</strong> — empty. Use <strong>New pickup</strong> or a backpack slot below, or <strong>Leave</strong>.</div>`;
+    }
+  }
+
+  function renderCardModal() {
+    const itemRules = getItemRules();
+    if (!cardModal || !cardModalFace || !cardSwapRow) return;
+    dragIntentRank = null;
+    if (modalDeckStripEl) modalDeckStripEl.innerHTML = "";
+    if (!inventoryModalOpen) {
+      cardModal.classList.remove("open");
+      if (modalSetBonusStatusEl) modalSetBonusStatusEl.textContent = "";
+      cardSwapRow.innerHTML = "";
+      cardModalFace.innerHTML = "";
+      syncDeckSlots();
+      return;
+    }
+    cardModal.classList.add("open");
+    if (modalDeckStripEl) {
+      const labelRow = document.createElement("div");
+      labelRow.className = "player-deck-label-row";
+      labelRow.innerHTML =
+        '<span class="deck-slots-label">Deck (one card per rank)</span><span class="deck-slots-label deck-slots-label--sub">Backpack (3)</span>';
+      modalDeckStripEl.appendChild(labelRow);
+      const wings = document.createElement("div");
+      wings.className = "modal-deck-wings-grid";
+      wings.setAttribute("aria-label", "Read-only deck and backpack preview");
+      const aceWing = document.createElement("div");
+      aceWing.className = "modal-deck-ace-wing";
+      appendModalDeckDisplayCell(aceWing, 1, inventory.deckByRank[1] || null, "modal-deck-cell--ace");
+      const mid = document.createElement("div");
+      mid.className = "modal-deck-middle-twelve";
+      for (let r = 2; r <= 13; r++) appendModalDeckDisplayCell(mid, r, inventory.deckByRank[r] || null);
+      const bpWing = document.createElement("div");
+      bpWing.className = "modal-deck-backpack-wing";
+      for (let i = 0; i < 3; i++) appendModalBackpackDisplayCell(bpWing, i, inventory.backpackSlots[i] || null);
+      wings.appendChild(aceWing);
+      wings.appendChild(mid);
+      wings.appendChild(bpWing);
+      modalDeckStripEl.appendChild(wings);
+    }
+
+    if (cardPickupFlowActive) {
+      const r = effectivePickupRank();
+      if (r != null) {
+        renderPickupFlowFaceHtml(itemRules, r);
+      } else {
+        const showFirstHintNoRank = cardPickupFlowActive && rankDeckIsCompletelyEmpty(inventory);
+        if (showFirstHintNoRank) {
+          cardModalFace.classList.remove("compact");
+          cardModalFace.innerHTML = `<div class="card-face-layout"><div class="card-face-primary"><div class="desc">Drag a card into <strong>New pickup</strong> from a backpack slot or the rank row above, or <strong>Leave</strong>.</div></div>${cardModalInventoryDragHintHtml()}</div>`;
+        } else {
+          cardModalFace.classList.add("compact");
+          cardModalFace.innerHTML =
+            '<div class="desc">Drag a card into <strong>New pickup</strong> from a backpack slot or the rank row above, or <strong>Leave</strong>.</div>';
+        }
+      }
+    } else if (pendingCard) {
+      const card = pendingCard;
+      cardModalFace.classList.remove("compact");
+      cardModalFace.innerHTML = `<div class="big">${formatCardName(card)}</div><div class="desc">${itemRules.describeCardEffect(card)}</div>`;
+    } else {
+      cardModalFace.classList.add("compact");
+      cardModalFace.innerHTML =
+        '<div class="desc">Drag between rank slots and the three backpack packs. Leave closes without taking a new pickup.</div>';
+    }
+
+    cardSwapRow.innerHTML = "";
+    const zones = [];
+    if (cardPickupFlowActive) {
+      zones.push({ id: "pickup", label: "New pickup", card: pendingCard, kind: "pickup" });
+      const deckR = effectivePickupRank();
+      if (deckR != null) {
+        zones.push({
+          id: `deck-${deckR}`,
+          label: `Card slot: ${cardRankText(deckR)}`,
+          card: inventory.deckByRank[deckR] || null,
+          kind: "rank",
+        });
+      }
+    } else if (pendingCard) {
+      zones.push({ id: "pickup", label: "New pickup", card: pendingCard, kind: "pickup" });
+    }
+    for (let i = 0; i < 3; i++) {
+      zones.push({ id: `bp-${i}`, label: `Backpack ${i + 1}`, card: inventory.backpackSlots[i] || null, kind: "bp" });
+    }
+    for (const zone of zones) {
+      const zoneEl = document.createElement("div");
+      let zc = "drop-zone drop-zone--swap";
+      if (zone.kind === "pickup" || zone.kind === "rank") zc += " drop-zone--main-slot";
+      if (zone.kind === "bp") zc += " drop-zone--backpack-sm";
+      zoneEl.className = zc;
+      zoneEl.innerHTML = `<div class="zone-label">${zone.label}</div>`;
+      wireDropZone(zoneEl, zone.id);
+      appendCardToZone(zoneEl, zone.id, zone.card, false, itemRules);
+      cardSwapRow.appendChild(zoneEl);
+    }
+
+    const leaveBtn = document.createElement("button");
+    leaveBtn.type = "button";
+    leaveBtn.className = "leave-button";
+    leaveBtn.textContent = "Leave";
+    leaveBtn.addEventListener("click", () => continueAfterLoadout());
+    cardSwapRow.appendChild(leaveBtn);
+
+    if (modalSetBonusStatusEl) {
+      const progress = getModalSetBonusProgressLines(inventory, pendingCard, itemRules);
+      modalSetBonusStatusEl.textContent = progress.length ? progress.join("\n") : "";
+    }
+    syncDeckSlots();
+  }
+
+  function closeCardModal() {
+    inventoryModalOpen = false;
+    pendingCard = null;
+    cardPickupFlowActive = false;
+    pickupTargetRank = null;
+    dragIntentRank = null;
+    onPausedChange(false);
+    renderCardModal();
+  }
+
+  function continueAfterLoadout() {
+    pendingCard = null;
+    closeCardModal();
+  }
+
+  function openCardPickup(card) {
+    pendingCard = card;
+    cardPickupFlowActive = true;
+    pickupTargetRank = card.rank;
+    inventoryModalOpen = true;
+    onPausedChange(true);
+    renderCardModal();
+  }
+
+  function resetAll() {
+    for (let r = 1; r <= 13; r++) inventory.deckByRank[r] = null;
+    for (let i = 0; i < 3; i++) inventory.backpackSlots[i] = null;
+    continueAfterLoadout();
+  }
+
+  const onCloseClick = () => continueAfterLoadout();
+  if (cardCloseButton) cardCloseButton.addEventListener("click", onCloseClick);
+
+  function onGlobalKeydown(e) {
+    if (e.key !== "Escape") return;
+    if (!inventoryModalOpen) return;
+    e.preventDefault();
+    continueAfterLoadout();
+  }
+  window.addEventListener("keydown", onGlobalKeydown);
+
+  return {
+    openCardPickup,
+    isPaused: () => inventoryModalOpen,
+    resetAll,
+    renderCardModal,
+    /** @returns {object | null} */
+    getPendingCard: () => pendingCard,
+    dispose() {
+      if (cardCloseButton) cardCloseButton.removeEventListener("click", onCloseClick);
+      window.removeEventListener("keydown", onGlobalKeydown);
+    },
+  };
+}

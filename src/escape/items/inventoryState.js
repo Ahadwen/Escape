@@ -1,0 +1,43 @@
+import { deckKey } from "./cardUtils.js";
+
+export function createEmptyInventory() {
+  /** @type {Record<number, object | null>} */
+  const deckByRank = {};
+  for (let r = 1; r <= 13; r++) deckByRank[r] = null;
+  return {
+    deckByRank,
+    backpackSlots: /** @type {(object | null)[]} */ ([null, null, null]),
+  };
+}
+
+export function addReservedDeckKey(card, reserved) {
+  if (card?.suit != null && Number.isInteger(card.rank)) {
+    reserved.add(deckKey(card.suit, card.rank));
+    if (card.suit === "joker") {
+      for (const s of ["diamonds", "hearts", "clubs", "spades"]) {
+        reserved.add(deckKey(s, card.rank));
+      }
+    }
+  }
+}
+
+/**
+ * @param {object} inventory
+ * @param {object | null} pendingCard
+ * @param {object[]} worldCards — `{ card }` entries still on the map
+ */
+export function collectReservedDeckKeys(inventory, pendingCard, worldCards) {
+  const reserved = new Set();
+  addReservedDeckKey(pendingCard, reserved);
+  for (let r = 1; r <= 13; r++) addReservedDeckKey(inventory.deckByRank[r], reserved);
+  for (const c of inventory.backpackSlots) addReservedDeckKey(c, reserved);
+  for (const w of worldCards) addReservedDeckKey(w.card, reserved);
+  return reserved;
+}
+
+export function forEachDeckCard(inventory, fn) {
+  for (let r = 1; r <= 13; r++) {
+    const c = inventory.deckByRank[r];
+    if (c) fn(c, r);
+  }
+}

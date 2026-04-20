@@ -1,5 +1,11 @@
 import { TAU, HEAL_PICKUP_PLUS_HALF, HEAL_PICKUP_ARM_THICK } from "./constants.js";
-import { HEX_SIZE, SURGE_SAFE_HEX_DRAW_R } from "./balance.js";
+import {
+  HEX_SIZE,
+  SURGE_SAFE_HEX_DRAW_R,
+  ARENA_NEXUS_INNER_HEX_SCALE,
+  ARENA_NEXUS_SIEGE_SEC,
+  SURGE_GAUNTLET_SAFE_DRAW_R,
+} from "./balance.js";
 
 export function drawCircle(ctx, x, y, r, color, alpha = 1) {
   ctx.save();
@@ -40,6 +46,7 @@ export function drawHealPickup(ctx, p, elapsed) {
   ctx.restore();
 }
 
+/** Tetris-style blocks — matches REFERENCE `Ct` (`#334155` / `#94a3b8`, stroke width 2). */
 export function drawObstacles(ctx, obstacles) {
   ctx.fillStyle = "#334155";
   ctx.strokeStyle = "#94a3b8";
@@ -47,6 +54,305 @@ export function drawObstacles(ctx, obstacles) {
   for (const o of obstacles) {
     ctx.fillRect(o.x, o.y, o.w, o.h);
     ctx.strokeRect(o.x, o.y, o.w, o.h);
+  }
+}
+
+/**
+ * Flat playable hex cell (floor). Pass `strokeStyle: null` to hide hex-to-hex seams; fill uses a
+ * small radius bleed so neighbors don’t leave antialiasing gaps.
+ */
+export function fillPointyHexCell(ctx, cx, cy, vertexRadius, fillStyle, strokeStyle = "rgba(148, 163, 184, 0.35)") {
+  const fillBleed = 0.85;
+  const R = vertexRadius + fillBleed;
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (Math.PI / 3) * i;
+    const x = cx + Math.cos(a) * R;
+    const y = cy + Math.sin(a) * R;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+  if (strokeStyle != null && strokeStyle !== "") {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + (Math.PI / 3) * i;
+      const x = cx + Math.cos(a) * vertexRadius;
+      const y = cy + Math.sin(a) * vertexRadius;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+export function drawDecoy(ctx, d) {
+  ctx.save();
+  ctx.globalAlpha = 0.36;
+  drawCircle(ctx, d.x, d.y, d.r, "#64748b", 1);
+  ctx.globalAlpha = 0.55;
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(d.x, d.y, d.r, 0, TAU);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * HP readout above the player (REFERENCE: centered, stroked `hp / maxHp`, low-HP tint, optional temp line).
+ * @param {object} opts
+ * @param {number} [opts.tempHp]
+ * @param {number} [opts.extraHudYOffset] — e.g. rogue layout bump from character.
+ */
+export function drawPlayerHpHud(ctx, player, opts = {}) {
+  const tempHp = opts.tempHp ?? player.tempHp ?? 0;
+  const extraHudYOffset = opts.extraHudYOffset ?? 0;
+  const x = player.x;
+  const y = player.y;
+  const r = player.r;
+  const maxHp = Math.max(1, player.maxHp ?? 1);
+  const hpText = `${Math.ceil(player.hp)} / ${maxHp}`;
+  const tempText = tempHp > 0 ? `+${Math.ceil(tempHp)} temp` : "";
+  const mainY = y - r - 10 - extraHudYOffset;
+  const extraY = mainY - (tempText ? 14 : 0);
+
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.font = 'bold 15px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(2, 6, 23, 0.82)";
+  ctx.strokeText(hpText, x, mainY);
+  ctx.fillStyle = player.hp <= maxHp * 0.35 ? "#fca5a5" : "#f8fafc";
+  ctx.fillText(hpText, x, mainY);
+  if (tempText) {
+    ctx.font = '11px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(2, 6, 23, 0.82)";
+    ctx.strokeText(tempText, x, extraY);
+    ctx.fillStyle = "#6ee7b7";
+    ctx.fillText(tempText, x, extraY);
+  }
+  ctx.restore();
+}
+
+/**
+ * REFERENCE `drawHud` top-left run stats (Survival, Best, Level, Wave, Hunters).
+ * Call in screen space after world `ctx.restore()` (identity transform).
+ * @param {object} p
+ * @param {number} p.survivalSec
+ * @param {number} p.bestSec
+ * @param {number} p.displayLevel — shown as `runLevel + 1` in REFERENCE
+ * @param {number} p.wave
+ * @param {number} p.hunterCount
+ */
+export function drawRunStatsHud(ctx, { survivalSec, bestSec, displayLevel, wave, hunterCount }) {
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = "15px Arial";
+  ctx.fillText(`Survival: ${survivalSec.toFixed(1)}s`, 14, 12);
+  ctx.fillText(`Best: ${bestSec.toFixed(1)}s`, 14, 32);
+  ctx.fillText(`Level: ${displayLevel}`, 14, 52);
+  ctx.fillText(`Wave: ${wave}`, 14, 72);
+  ctx.fillText(`Hunters: ${hunterCount}`, 14, 92);
+  ctx.restore();
+}
+
+/**
+ * Knight-style player orb (REFERENCE dist: radial + stroke + facing wedge).
+ * @param {{ x: number; y: number }} [facing] — unit-ish; default `{ x: 1, y: 0 }` (east).
+ * @param {number} [hurt01] — 0 = full HP tint (`#60a5fa` mid), 1 = pushes mid toward damage red.
+ * @param {number} [bodyAlpha] — REFERENCE `drawPlayerBody` alpha (e.g. clubs invis ghost ~0.3–0.5).
+ */
+export function drawPlayerBody(ctx, x, y, radius, facing = { x: 1, y: 0 }, hurt01 = 0, bodyAlpha = 1) {
+  const e = Math.max(0, Math.min(1, hurt01)) * 0.65;
+  const t = { r: 96, g: 165, b: 250 };
+  const n = { r: 239, g: 68, b: 68 };
+  const mid = `rgb(${Math.round(t.r + (n.r - t.r) * e)},${Math.round(t.g + (n.g - t.g) * e)},${Math.round(t.b + (n.b - t.b) * e)})`;
+
+  const g = ctx.createRadialGradient(
+    x - radius * 0.42,
+    y - radius * 0.48,
+    radius * 0.06,
+    x,
+    y,
+    radius,
+  );
+  g.addColorStop(0, "rgba(248, 250, 252, 0.95)");
+  g.addColorStop(0.38, mid);
+  g.addColorStop(1, "rgba(15, 23, 42, 0.88)");
+
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, bodyAlpha));
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, TAU);
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.55)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  const c = facing.x;
+  const l = facing.y;
+  const len = Math.hypot(c, l) || 1;
+  const fx = c / len;
+  const fy = l / len;
+  const u = x + fx * radius * 0.72;
+  const d = y + fy * radius * 0.72;
+  const fp = -fy * radius * 0.28;
+  const fq = fx * radius * 0.28;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+  ctx.beginPath();
+  ctx.moveTo(u, d);
+  ctx.lineTo(x + fx * radius * 0.15 + fp, y + fy * radius * 0.15 + fq);
+  ctx.lineTo(x + fx * radius * 0.15 - fp, y + fy * radius * 0.15 - fq);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/** REFERENCE burst speed tint: cyan halo under the player while `burstUntil > elapsed`. */
+export function drawKnightBurstAura(ctx, x, y, radius, bodyAlpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = 0.3 * Math.max(0, Math.min(1, bodyAlpha));
+  drawCircle(ctx, x, y, radius + 4, "#22d3ee", 1);
+  ctx.restore();
+}
+
+/**
+ * REFERENCE `drawArenaNexusWorld` — idle / siege / reward + spent visuals.
+ * @param {(q: number, r: number) => boolean} isArenaTile
+ * @param {(q: number, r: number) => boolean} isArenaSpent
+ * @param {{ phase: number; siegeQ: number; siegeR: number; siegeEndAt: number; simElapsed: number } | null} [arenaFx]
+ */
+export function drawArenaNexusHexWorld(ctx, activeHexes, hexToWorld, isArenaTile, isArenaSpent, arenaFx = null) {
+  for (const h of activeHexes) {
+    if (!isArenaTile(h.q, h.r)) continue;
+    const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+    let outer = "rgba(59, 130, 246, 0.92)";
+    let inner = "rgba(96, 165, 250, 0.88)";
+    if (isArenaSpent(h.q, h.r)) {
+      outer = "rgba(34, 197, 94, 0.92)";
+      inner = "rgba(74, 222, 128, 0.88)";
+    } else if (arenaFx && arenaFx.phase === 1) {
+      outer = "rgba(239, 68, 68, 0.95)";
+      inner = "rgba(248, 113, 113, 0.9)";
+    } else if (arenaFx && arenaFx.phase === 2) {
+      outer = "rgba(34, 197, 94, 0.92)";
+      inner = "rgba(74, 222, 128, 0.88)";
+    }
+    strokePointyHexOutline(ctx, cx, cy, HEX_SIZE, outer, 3.2, 18);
+    strokePointyHexOutline(ctx, cx, cy, HEX_SIZE * ARENA_NEXUS_INNER_HEX_SCALE, inner, 2.4, 14);
+
+    if (
+      arenaFx &&
+      arenaFx.phase === 1 &&
+      h.q === arenaFx.siegeQ &&
+      h.r === arenaFx.siegeR &&
+      !isArenaSpent(h.q, h.r)
+    ) {
+      const rem = Math.max(0, arenaFx.siegeEndAt - arenaFx.simElapsed);
+      const u = rem / ARENA_NEXUS_SIEGE_SEC;
+      const arcR = HEX_SIZE * ARENA_NEXUS_INNER_HEX_SCALE * 0.78;
+      ctx.save();
+      ctx.strokeStyle = "rgba(248, 250, 252, 0.95)";
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.arc(cx, cy, arcR, -Math.PI / 2, -Math.PI / 2 + TAU * u);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(248, 250, 252, 0.85)";
+      ctx.font = "600 13px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(rem <= 0 ? "0" : rem.toFixed(1) + "s", cx, cy);
+      ctx.restore();
+    }
+  }
+}
+
+/**
+ * REFERENCE `drawSurgeHexWorld` — gauntlet phases, safe pocket, travel pulse.
+ * @param {(q: number, r: number) => boolean} isSurgeTile
+ * @param {(q: number, r: number) => boolean} isSurgeSpent
+ * @param {{
+ *   phase: number;
+ *   lockQ: number;
+ *   lockR: number;
+ *   safeX: number;
+ *   safeY: number;
+ *   travelStartAt: number;
+ *   travelDur: number;
+ *   simElapsed: number;
+ * } | null} [surgeFx]
+ */
+export function drawSurgeHexWorld(ctx, activeHexes, hexToWorld, isSurgeTile, isSurgeSpent, surgeFx = null) {
+  const innerVertexR = HEX_SIZE * ARENA_NEXUS_INNER_HEX_SCALE;
+  for (const h of activeHexes) {
+    if (!isSurgeTile(h.q, h.r)) continue;
+    const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+    const isOuterWait =
+      surgeFx && surgeFx.phase === 1 && h.q === surgeFx.lockQ && h.r === surgeFx.lockR;
+    const isActiveGauntlet =
+      surgeFx && surgeFx.phase === 2 && h.q === surgeFx.lockQ && h.r === surgeFx.lockR;
+    const isInnerOpenOuterLocked =
+      surgeFx && surgeFx.phase === 3 && h.q === surgeFx.lockQ && h.r === surgeFx.lockR;
+    const isFullyCleared =
+      surgeFx && surgeFx.phase === 4 && h.q === surgeFx.lockQ && h.r === surgeFx.lockR;
+    let outer = "rgba(59, 130, 246, 0.92)";
+    let inner = "rgba(96, 165, 250, 0.88)";
+    if (isSurgeSpent(h.q, h.r)) {
+      outer = "rgba(34, 197, 94, 0.92)";
+      inner = "rgba(74, 222, 128, 0.88)";
+    } else if (isOuterWait) {
+      outer = "rgba(239, 68, 68, 0.95)";
+    } else if (isActiveGauntlet) {
+      outer = "rgba(239, 68, 68, 0.95)";
+      inner = "rgba(248, 113, 113, 0.9)";
+    } else if (isInnerOpenOuterLocked) {
+      outer = "rgba(239, 68, 68, 0.95)";
+      inner = "rgba(74, 222, 128, 0.88)";
+    } else if (isFullyCleared) {
+      outer = "rgba(34, 197, 94, 0.92)";
+      inner = "rgba(74, 222, 128, 0.88)";
+    }
+    strokePointyHexOutline(ctx, cx, cy, HEX_SIZE, outer, 3.2, 18);
+    strokePointyHexOutline(ctx, cx, cy, innerVertexR, inner, 2.4, 14);
+    if (isActiveGauntlet && surgeFx) {
+      ctx.save();
+      ctx.fillStyle = "rgba(248, 250, 252, 0.92)";
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI / 2 + (Math.PI / 3) * i;
+        const x = surgeFx.safeX + Math.cos(a) * SURGE_GAUNTLET_SAFE_DRAW_R;
+        const y = surgeFx.safeY + Math.sin(a) * SURGE_GAUNTLET_SAFE_DRAW_R;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.55)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.restore();
+      const u = Math.max(
+        0,
+        Math.min(1, (surgeFx.simElapsed - surgeFx.travelStartAt) / Math.max(1e-4, surgeFx.travelDur)),
+      );
+      const pulseCx = cx + (surgeFx.safeX - cx) * u;
+      const pulseCy = cy + (surgeFx.safeY - cy) * u;
+      const pulseR = innerVertexR + (SURGE_GAUNTLET_SAFE_DRAW_R - innerVertexR) * u;
+      const pulseStroke = 2.4 + (3.2 - 2.4) * (1 - u);
+      strokePointyHexOutline(ctx, pulseCx, pulseCy, pulseR, "rgba(248, 113, 113, 0.95)", pulseStroke, 18);
+    }
   }
 }
 
