@@ -23,7 +23,11 @@ function separatedFromCollectibles(x, y, r, collectibles, minGap = 68) {
   return true;
 }
 
-function spawnLootPointClear(x, y, r, player, obstacles, collectibles) {
+function spawnLootPointClear(x, y, r, player, obstacles, collectibles, worldToHex, isLootForbiddenHex) {
+  if (isLootForbiddenHex && worldToHex) {
+    const h = worldToHex(x, y);
+    if (isLootForbiddenHex(h.q, h.r)) return false;
+  }
   if (circleHitsAnyObstacle(x, y, r, obstacles)) return false;
   if (!separatedFromCollectibles(x, y, r, collectibles)) return false;
   const rr = r + player.r + 44;
@@ -47,6 +51,8 @@ function spawnLootPointClear(x, y, r, player, obstacles, collectibles) {
  * @param {number} opts.canvasH
  * @param {number} opts.hitR
  * @param {number} [opts.attempts]
+ * @param {(x: number, y: number) => { q: number, r: number }} [opts.worldToHex]
+ * @param {(q: number, r: number) => boolean} [opts.isLootForbiddenHex] — spawn tile (0,0) and procedural event hexes (arena, surge, roulette, forge).
  * @returns {{ x: number, y: number, r: number } | null}
  */
 export function randomOpenLootPoint(opts) {
@@ -56,20 +62,24 @@ export function randomOpenLootPoint(opts) {
     collectibles,
     activeHexes,
     hexToWorld,
+    worldToHex,
     tileW,
     canvasW,
     canvasH,
     hitR,
     attempts = 96,
+    isLootForbiddenHex,
   } = opts;
 
   const dMin = 96 + hitR;
   const dMax = Math.min(canvasW, canvasH) * 0.66;
-  const sourceHexes = activeHexes.length ? activeHexes : [{ q: 0, r: 0 }];
+  const baseHexes = activeHexes.length ? activeHexes : [{ q: 0, r: 0 }];
+  const sourceHexes = isLootForbiddenHex ? baseHexes.filter((h) => !isLootForbiddenHex(h.q, h.r)) : baseHexes;
 
   for (let i = 0; i < attempts; i++) {
     let candidate;
-    if (i % 2 === 0) {
+    const useHexJitter = i % 2 === 1 && sourceHexes.length > 0;
+    if (!useHexJitter) {
       const ang = Math.random() * TAU;
       const d = randRange(dMin, dMax);
       candidate = { x: player.x + Math.cos(ang) * d, y: player.y + Math.sin(ang) * d, r: hitR };
@@ -82,7 +92,7 @@ export function randomOpenLootPoint(opts) {
         r: hitR,
       };
     }
-    if (spawnLootPointClear(candidate.x, candidate.y, candidate.r, player, obstacles, collectibles)) {
+    if (spawnLootPointClear(candidate.x, candidate.y, candidate.r, player, obstacles, collectibles, worldToHex, isLootForbiddenHex)) {
       return candidate;
     }
   }
@@ -91,23 +101,27 @@ export function randomOpenLootPoint(opts) {
     const ang = Math.random() * TAU;
     const d = randRange(dMin, dMax * 0.92);
     const candidate = { x: player.x + Math.cos(ang) * d, y: player.y + Math.sin(ang) * d, r: hitR };
-    if (!circleHitsAnyObstacle(candidate.x, candidate.y, candidate.r, obstacles)) return candidate;
+    if (spawnLootPointClear(candidate.x, candidate.y, candidate.r, player, obstacles, collectibles, worldToHex, isLootForbiddenHex)) {
+      return candidate;
+    }
   }
 
   for (let k = 0; k < 24; k++) {
     const candidate = { x: player.x + randRange(-280, 280), y: player.y + randRange(-280, 280), r: hitR };
-    if (!circleHitsAnyObstacle(candidate.x, candidate.y, candidate.r, obstacles)) return candidate;
+    if (spawnLootPointClear(candidate.x, candidate.y, candidate.r, player, obstacles, collectibles, worldToHex, isLootForbiddenHex)) {
+      return candidate;
+    }
   }
 
   for (let f = 0; f < 32; f++) {
     const p = { x: player.x + randRange(-140, 140), y: player.y + randRange(-140, 140), r: hitR };
-    if (!circleHitsAnyObstacle(p.x, p.y, p.r, obstacles)) return p;
+    if (spawnLootPointClear(p.x, p.y, p.r, player, obstacles, collectibles, worldToHex, isLootForbiddenHex)) return p;
   }
 
   for (let z = 0; z < 24; z++) {
     const p = { x: player.x + randRange(-100, 100), y: player.y + randRange(-100, 100), r: hitR };
-    return p;
+    if (spawnLootPointClear(p.x, p.y, p.r, player, obstacles, collectibles, worldToHex, isLootForbiddenHex)) return p;
   }
 
-  return { x: player.x, y: player.y, r: hitR };
+  return null;
 }

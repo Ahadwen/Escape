@@ -1,10 +1,13 @@
 import { TAU, HEAL_PICKUP_PLUS_HALF, HEAL_PICKUP_ARM_THICK } from "./constants.js";
 import {
   HEX_SIZE,
-  SURGE_SAFE_HEX_DRAW_R,
   ARENA_NEXUS_INNER_HEX_SCALE,
   ARENA_NEXUS_SIEGE_SEC,
   SURGE_GAUNTLET_SAFE_DRAW_R,
+  SAFEHOUSE_EMBED_CENTER_INSET,
+  SAFEHOUSE_EMBED_HEX_VERTEX_R_MULT,
+  SAFEHOUSE_EMBED_SITE_HIT_R,
+  SAFEHOUSE_SPENT_TILE_ANIM_MS,
 } from "./balance.js";
 
 export function drawCircle(ctx, x, y, r, color, alpha = 1) {
@@ -43,6 +46,19 @@ export function drawHealPickup(ctx, p, elapsed) {
   ctx.lineWidth = 1.5;
   ctx.strokeRect(-h, -t / 2, 2 * h, t);
   ctx.strokeRect(-t / 2, -h, t, 2 * h);
+  const lifeSpan = Math.max(1e-3, (p.expiresAt ?? elapsed) - (p.bornAt ?? elapsed - 1));
+  const rem = Math.max(0, (p.expiresAt ?? elapsed) - elapsed);
+  const frac = Math.max(0, Math.min(1, rem / lifeSpan));
+  const barW = 24;
+  const barH = 4;
+  const barY = h + 8;
+  ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
+  ctx.fillRect(-barW / 2, barY, barW, barH);
+  ctx.fillStyle = frac > 0.35 ? "rgba(110, 231, 183, 0.95)" : "rgba(251, 146, 60, 0.95)";
+  ctx.fillRect(-barW / 2, barY, barW * frac, barH);
+  ctx.strokeStyle = "rgba(236, 253, 245, 0.7)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(-barW / 2, barY, barW, barH);
   ctx.restore();
 }
 
@@ -227,6 +243,31 @@ export function drawKnightBurstAura(ctx, x, y, radius, bodyAlpha = 1) {
   ctx.restore();
 }
 
+/** REFERENCE hearts J/Q/K front arc shield draw. */
+export function drawFrontShieldArc(ctx, player, elapsed) {
+  const arcDeg = Math.max(0, Number(player.frontShieldArcDeg ?? 0));
+  if (arcDeg <= 0) return;
+  const fx = player.facing?.x ?? 1;
+  const fy = player.facing?.y ?? 0;
+  const facing = Math.atan2(fy, fx);
+  const arc = (arcDeg * Math.PI) / 180;
+  const pulse = 0.85 + 0.15 * (0.5 + 0.5 * Math.sin(elapsed * 8));
+  const r = player.r + 30;
+  ctx.save();
+  ctx.strokeStyle = `rgba(248, 113, 113, ${0.78 * pulse})`;
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, r, facing - arc / 2, facing + arc / 2);
+  ctx.stroke();
+  ctx.strokeStyle = `rgba(254, 202, 202, ${0.34 * pulse})`;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, r + 4, facing - arc / 2, facing + arc / 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 /**
  * REFERENCE `drawArenaNexusWorld` — idle / siege / reward + spent visuals.
  * @param {(q: number, r: number) => boolean} isArenaTile
@@ -408,9 +449,13 @@ export function fillPointyHexRainbowGlow(ctx, cx, cy, vertexRadius, elapsed, dra
   ctx.restore();
 }
 
-/** Safehouse: radial fill, wisps, solid core hex + soft moving “dark water” shimmer (screen sheen) inside core. */
+/**
+ * Safehouse: radial fill, wisps, solid core hex + soft moving “dark water” shimmer (screen sheen) inside core.
+ * Inner core scale matches REFERENCE `drawSafehouseHexCell`: `innerVertexR = vertexRadius * SURGE_SAFE_HEX_DRAW_R / HEX_SIZE`
+ * with `SURGE_SAFE_HEX_DRAW_R === 81` (same world ratio as `SURGE_GAUNTLET_SAFE_DRAW_R` in this build).
+ */
 export function drawSafehouseHexCell(ctx, cx, cy, vertexRadius, elapsed) {
-  const innerVertexR = (vertexRadius * SURGE_SAFE_HEX_DRAW_R) / HEX_SIZE;
+  const innerVertexR = (vertexRadius * SURGE_GAUNTLET_SAFE_DRAW_R) / HEX_SIZE;
   const coreFill = "rgba(15, 23, 42, 0.94)";
   ctx.save();
   ctx.beginPath();
@@ -529,6 +574,103 @@ export function drawSafehouseEmbeddedFacilities(ctx, opts) {
   drawForgeHexCell(ctx, forgeX, forgeY, vertexRadius, elapsed, !!embeddedForgeComplete);
 }
 
+const SQRT3_DRAW = Math.sqrt(3);
+
+/**
+ * REFERENCE `drawSafehouseHexWorld` — sanctuary cells, spent-tile overlay, optional embedded mini sites.
+ * @param {{
+ *   activeHexes: { q: number; r: number }[];
+ *   hexToWorld: (q: number, r: number) => { x: number; y: number };
+ *   simElapsed: number;
+ *   nowMs: number;
+ *   HEX_DIRS: { q: number; r: number }[];
+ *   isSafehouseHexTile: (q: number, r: number) => boolean;
+ *   isSafehouseHexActiveTile: (q: number, r: number) => boolean;
+ *   isSafehouseHexSpentTile: (q: number, r: number) => boolean;
+ *   isLunatic: () => boolean;
+ *   innerFacilitiesUnlocked: boolean;
+ *   embeddedRouletteComplete: boolean;
+ *   embeddedForgeComplete: boolean;
+ *   getPrimarySafehouseAxial: () => { q: number; r: number } | null;
+ *   spentTileAnim: { key: string; startMs: number } | null;
+ * }} o
+ */
+export function drawSafehouseHexWorld(ctx, o) {
+  /** @type {{ q: number; r: number } | null} */
+  let prim = null;
+  if (!o.isLunatic() && o.innerFacilitiesUnlocked) {
+    const p = o.getPrimarySafehouseAxial();
+    if (p && o.isSafehouseHexActiveTile(p.q, p.r)) prim = p;
+  }
+
+  for (const h of o.activeHexes) {
+    if (!o.isSafehouseHexTile(h.q, h.r)) continue;
+    const c = o.hexToWorld(h.q, h.r);
+    drawSafehouseHexCell(ctx, c.x, c.y, HEX_SIZE, o.simElapsed);
+    const kk = `${h.q},${h.r}`;
+    if (o.isSafehouseHexSpentTile(h.q, h.r)) {
+      const fx = o.spentTileAnim;
+      let u = 1;
+      if (fx && fx.key === kk) {
+        const raw = (o.nowMs - fx.startMs) / SAFEHOUSE_SPENT_TILE_ANIM_MS;
+        u = Math.max(0, Math.min(1, raw));
+        u = u * u * (3 - 2 * u);
+      }
+      const overlayA = 0.72 * u;
+      const rimA = 0.62 * Math.max(0, u - 0.12) * Math.min(1, (u - 0.12) / 0.55);
+      ctx.save();
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI / 2 + (Math.PI / 3) * i;
+        const x = c.x + Math.cos(a) * HEX_SIZE;
+        const y = c.y + Math.sin(a) * HEX_SIZE;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      if (fx && fx.key === kk && u < 0.28) {
+        const w = Math.sin((u / 0.28) * Math.PI);
+        ctx.fillStyle = `rgba(254, 243, 199, ${0.1 * w})`;
+        ctx.fill();
+      }
+      ctx.fillStyle = `rgba(15, 23, 42, ${overlayA})`;
+      ctx.fill();
+      if (rimA > 0.02) {
+        ctx.strokeStyle = `rgba(51, 65, 85, ${rimA})`;
+        ctx.lineWidth = 2.4 + 1.8 * Math.min(1, (u - 0.2) / 0.65);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    if (prim && prim.q === h.q && prim.r === h.r) {
+      const w = o.hexToWorld(h.q + o.HEX_DIRS[3].q, h.r + o.HEX_DIRS[3].r);
+      const e = o.hexToWorld(h.q + o.HEX_DIRS[0].q, h.r + o.HEX_DIRS[0].r);
+      const t = HEX_SIZE * SAFEHOUSE_EMBED_CENTER_INSET;
+      const lenW = Math.hypot(w.x - c.x, w.y - c.y) || 1;
+      const lenE = Math.hypot(e.x - c.x, e.y - c.y) || 1;
+      const rw = { x: c.x + ((w.x - c.x) / lenW) * t, y: c.y + ((w.y - c.y) / lenW) * t };
+      const fw = { x: c.x + ((e.x - c.x) / lenE) * t, y: c.y + ((e.y - c.y) / lenE) * t };
+      const vr = HEX_SIZE * SAFEHOUSE_EMBED_HEX_VERTEX_R_MULT;
+      drawSafehouseEmbeddedFacilities(ctx, {
+        rouletteX: rw.x,
+        rouletteY: rw.y,
+        forgeX: fw.x,
+        forgeY: fw.y,
+        vertexRadius: vr,
+        elapsed: o.simElapsed,
+        embeddedRouletteComplete: o.embeddedRouletteComplete,
+        embeddedForgeComplete: o.embeddedForgeComplete,
+      });
+    }
+  }
+}
+
+/** Generous hit radius for embedded mini sites (matches REFERENCE `safehouseEmbedSiteHitR`). */
+export function safehouseEmbedSiteHitRadiusWorld() {
+  const vr = HEX_SIZE * SAFEHOUSE_EMBED_HEX_VERTEX_R_MULT;
+  return Math.max(SAFEHOUSE_EMBED_SITE_HIT_R, vr * (SQRT3_DRAW / 2) * 1.08);
+}
+
 /** Small forge satellite: warm metal frame + soft ember core. */
 export function drawForgeHexCell(ctx, cx, cy, vertexRadius, elapsed, spentLook = false) {
   const t = elapsed;
@@ -612,7 +754,7 @@ function drawCardPickupMiniFace(ctx, card, w, h) {
 
 /**
  * World map card loot: soft spotlight, pulse ring, and a flipping mini card (two faces).
- * `pickup.card` is the real reward; `pickup.flipCard` is optional decor-only second face.
+ * Visuals are decoupled from the real reward card (`pickup.card`).
  */
 export function drawCardPickupWorld(ctx, pickup, elapsed) {
   const born = pickup.bornAt ?? elapsed;
@@ -622,7 +764,9 @@ export function drawCardPickupWorld(ctx, pickup, elapsed) {
   const flipT = (elapsed - born) * 2.35;
   const cos = Math.cos(flipT);
   const scaleX = Math.max(0.11, Math.abs(cos));
-  const face = cos >= 0 ? pickup.card : pickup.flipCard ?? pickup.card;
+  const faceA = pickup.visualCardA ?? pickup.flipCard ?? pickup.card;
+  const faceB = pickup.visualCardB ?? pickup.card;
+  const face = cos >= 0 ? faceA : faceB;
   const w = 28;
   const h = 38;
   const spotR = Math.max(48, (pickup.r ?? 20) * 2.6);
@@ -665,5 +809,20 @@ export function drawCardPickupWorld(ctx, pickup, elapsed) {
     drawCardPickupMiniFace(ctx, face, w, h);
   }
 
+  const lifeSpan = Math.max(1e-3, (pickup.expiresAt ?? elapsed) - (pickup.bornAt ?? elapsed - 1));
+  const rem = Math.max(0, (pickup.expiresAt ?? elapsed) - elapsed);
+  const frac = Math.max(0, Math.min(1, rem / lifeSpan));
+  const barW = 26;
+  const barH = 4;
   ctx.restore();
+
+  // Keep the despawn bar stable/readable in world-space (not card-flip space).
+  const stableBarY = cy + h * 0.6 + 7;
+  ctx.fillStyle = "rgba(15, 23, 42, 0.65)";
+  ctx.fillRect(cx - barW / 2, stableBarY, barW, barH);
+  ctx.fillStyle = frac > 0.35 ? "rgba(191, 219, 254, 0.95)" : "rgba(251, 146, 60, 0.95)";
+  ctx.fillRect(cx - barW / 2, stableBarY, barW * frac, barH);
+  ctx.strokeStyle = "rgba(248, 250, 252, 0.72)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - barW / 2, stableBarY, barW, barH);
 }

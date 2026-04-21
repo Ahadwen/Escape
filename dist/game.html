@@ -13,18 +13,98 @@
         box-sizing: border-box;
       }
 
+      html {
+        height: 100%;
+      }
+
       body {
         margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
+        height: 100%;
+        max-height: 100dvh;
+        overflow: hidden;
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
         background: #111827;
         color: #f3f4f6;
         font-family: Arial, sans-serif;
       }
 
+      /**
+       * Title + blurb + control hint live in a narrow rail; the original vertical stack (deck → canvas → abilities)
+       * stays in the main column. Body is locked to the viewport so Space / trackpad cannot scroll the page.
+       */
+      .page-with-side {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        gap: 16px 18px;
+        width: min(100%, 1400px);
+        height: 100dvh;
+        max-height: 100dvh;
+        padding: 10px 12px;
+        box-sizing: border-box;
+        overflow: hidden;
+      }
+
+      .page-side-copy {
+        flex: 0 0 clamp(168px, 18vw, 228px);
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-right: 4px;
+      }
+
+      .page-side-copy h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        line-height: 1.15;
+      }
+
+      .page-side-copy .info {
+        margin: 0 0 10px;
+        font-size: 13px;
+        line-height: 1.4;
+        color: #cbd5e1;
+      }
+
+      .page-side-copy .controls {
+        margin-top: 12px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #94a3b8;
+      }
+
+      .page-main-stack {
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
+
       .wrap {
-        width: min(96vw, 1180px);
+        width: 100%;
+        max-width: min(100%, 1320px);
+      }
+
+      @media (max-width: 820px) {
+        .page-with-side {
+          flex-direction: column;
+          overflow-y: auto;
+        }
+
+        .page-side-copy {
+          flex: 0 0 auto;
+          max-height: none;
+          overflow-y: visible;
+        }
+
+        .page-main-stack {
+          flex: 1 1 auto;
+          overflow-y: visible;
+        }
       }
 
       .player-deck-panel {
@@ -266,16 +346,6 @@
         font-size: 14px;
       }
 
-      .meta {
-        margin-top: 8px;
-        display: flex;
-        gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-        color: #94a3b8;
-        font-size: 13px;
-      }
-
       .ability-bar {
         margin-top: 10px;
         display: grid;
@@ -353,7 +423,7 @@
       }
 
       .canvas-col {
-        flex: 1 1 560px;
+        flex: 1 1 0;
         min-width: 0;
       }
 
@@ -891,6 +961,14 @@
         font-weight: 800;
       }
 
+      .card-face-name {
+        color: inherit;
+      }
+
+      .card-face-name--red {
+        color: #b91c1c;
+      }
+
       .card-face .desc {
         margin-top: 8px;
         font-size: 14px;
@@ -1386,7 +1464,10 @@
         top: 50%;
         transform: translateY(-50%);
         z-index: 65;
-        width: min(44vw, 200px);
+        width: min(48vw, 232px);
+        max-height: min(92dvh, 720px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
         padding: 10px 12px;
         border-radius: 10px;
         border: 1px solid #475569;
@@ -1481,6 +1562,37 @@
         margin-top: 8px;
       }
 
+      .run-log-collapsible {
+        margin-top: 8px;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        background: rgba(2, 6, 23, 0.35);
+      }
+
+      .run-log-collapsible summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 6px 8px;
+        font-size: 11px;
+        color: #93c5fd;
+        user-select: none;
+      }
+
+      .run-log-collapsible summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .run-log-view {
+        margin: 0;
+        padding: 8px;
+        border-top: 1px solid #334155;
+        max-height: 240px;
+        overflow: auto;
+        font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        white-space: pre-wrap;
+        color: #e2e8f0;
+      }
+
       .dev-hunters-toggle {
         display: flex;
         align-items: center;
@@ -1494,8 +1606,67 @@
       .dev-hunters-toggle input {
         cursor: pointer;
       }
+
+      .dev-death-snapshots {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid #334155;
+      }
+
+      .dev-death-snapshots > span:first-child {
+        display: block;
+        margin: 0 0 8px;
+        font-weight: 600;
+        color: #94a3b8;
+        font-size: 11px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .dev-death-snapshots #snapshot-folder-button {
+        width: 100%;
+        margin: 0 0 8px;
+        font-size: 11px;
+        padding: 7px 8px;
+      }
+
+      .dev-death-snapshots #snapshot-status {
+        display: block;
+        font-size: 10px;
+        line-height: 1.4;
+        color: #64748b;
+      }
+
+      .dev-item-dropper {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid #334155;
+      }
+
+      .dev-item-dropper > span {
+        display: block;
+        margin: 0 0 8px;
+        font-weight: 600;
+        color: #94a3b8;
+        font-size: 11px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .dev-item-dropper .dev-item-row {
+        margin-bottom: 6px;
+      }
+
+      .dev-item-dropper .dev-item-row label {
+        margin-bottom: 4px;
+      }
+
+      .dev-item-dropper .dev-item-row select,
+      .dev-item-dropper .dev-item-row button {
+        width: 100%;
+      }
     </style>
-    <script type="module" crossorigin src="/Escape-Game/assets/escape-B5SIZ5nk.js"></script>
+    <script type="module" crossorigin src="/Escape-Game/assets/escape-DR7_WRHb.js"></script>
     <link rel="modulepreload" crossorigin href="/Escape-Game/assets/modulepreload-polyfill-wMinxHhO.js">
   </head>
   <body>
@@ -1531,11 +1702,48 @@
             Hunters spawn &amp; AI
           </label>
         </div>
+        <details class="run-log-collapsible">
+          <summary>Show live log (30 lines)</summary>
+          <pre id="run-log-live" class="run-log-view"></pre>
+        </details>
+      </div>
+      <div class="dev-death-snapshots" aria-label="Death screenshots">
+        <span>Death screenshots</span>
+        <button id="snapshot-folder-button" type="button">Choose Snapshot Folder</button>
+        <span id="snapshot-status">Death screenshots: download fallback active</span>
+      </div>
+      <div class="dev-item-dropper" aria-label="Debug item dropper">
+        <span>Item dropper</span>
+        <div class="dev-item-row">
+          <label for="debug-item-suit">Suit</label>
+          <select id="debug-item-suit" autocomplete="off">
+            <option value="diamonds">Diamonds</option>
+            <option value="hearts">Hearts</option>
+            <option value="clubs">Clubs</option>
+            <option value="spades">Spades</option>
+            <option value="joker">Joker</option>
+          </select>
+        </div>
+        <div class="dev-item-row">
+          <label for="debug-item-rank">Value</label>
+          <select id="debug-item-rank" autocomplete="off"></select>
+        </div>
+        <div class="dev-item-row">
+          <label for="debug-item-effect">Effect variant</label>
+          <select id="debug-item-effect" autocomplete="off"></select>
+        </div>
+        <div class="dev-item-row">
+          <button id="debug-item-drop-button" type="button">Drop selected item</button>
+        </div>
       </div>
     </div>
-    <main class="wrap">
-      <h1>Escape</h1>
-      <p class="info">Survive hunters, use abilities, collect heals, and last as long as possible.</p>
+    <div class="page-with-side">
+      <aside class="page-side-copy" aria-label="Game summary and controls">
+        <h1>Escape</h1>
+        <p class="info">Survive hunters, use abilities, collect heals, and last as long as possible.</p>
+        <p id="game-controls-hint" class="controls"></p>
+      </aside>
+      <main class="wrap page-main-stack">
       <div id="player-deck-panel" class="player-deck-panel" aria-label="Deck and backpack">
         <div class="player-deck-label-row">
           <span class="deck-slots-label">Deck (one card per rank)</span>
@@ -1579,7 +1787,7 @@
           <canvas id="game" width="1120" height="700"></canvas>
           <div id="death-screen" class="death-screen" hidden aria-hidden="true" role="dialog" aria-labelledby="death-screen-title">
             <div class="death-screen-inner">
-              <h2 id="death-screen-title" class="death-screen-title">Run over</h2>
+              <h2 id="death-screen-title" class="death-screen-title">You Died!</h2>
               <dl class="death-screen-stats">
                 <div>
                   <dt>Survival</dt>
@@ -1655,12 +1863,8 @@
           </div>
         </div>
       </div>
-      <p id="game-controls-hint" class="controls"></p>
-      <div class="meta">
-        <button id="snapshot-folder-button" type="button">Choose Snapshot Folder</button>
-        <span id="snapshot-status">Death screenshots: download fallback active</span>
-      </div>
     </main>
+    </div>
     <div id="character-select-modal" class="character-select-modal" aria-label="Character select" aria-live="polite">
       <div class="character-select-inner">
         <h2 class="character-select-title">Choose Character</h2>
@@ -1689,7 +1893,7 @@
             </li>
             <li>
               <strong>Ultimate (R)</strong> — comes from the <strong>Ace</strong> in your rank deck: each Ace has a random suit
-              and a random ultimate (orbiting shields, push waves, timelock, or vitality). Press <strong>R</strong> when it is
+              and a random ultimate (orbiting shields, earthquake, timelock, or vitality). Press <strong>R</strong> when it is
               ready (20s cooldown after each use). After you die, press <strong>Enter</strong> to retry the run from the death
               screen, or use character select to swap heroes.
             </li>

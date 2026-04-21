@@ -47,3 +47,22 @@ export function makePickupFlipFace(realCard) {
   const altSuit = SUITS.find((s) => s !== realCard.suit) ?? "spades";
   return { suit: altSuit, rank: realCard.rank === 1 ? 2 : realCard.rank - 1 };
 }
+
+/**
+ * Two purely visual faces for world card pickups.
+ * They are intentionally decoupled from the real reward card.
+ * @param {{ suit: string, rank: number }} realCard
+ */
+export function makePickupVisualPair(realCard) {
+  const a = makePickupFlipFace(realCard);
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const b = makePickupFlipFace(realCard);
+    if (b.suit !== a.suit || b.rank !== a.rank) {
+      return { visualCardA: a, visualCardB: b };
+    }
+  }
+  return {
+    visualCardA: a,
+    visualCardB: { suit: a.suit === "spades" ? "hearts" : "spades", rank: a.rank === 13 ? 1 : a.rank + 1 },
+  };
+}

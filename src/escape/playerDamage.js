@@ -20,6 +20,8 @@ import { forEachDeckCard } from "./items/inventoryState.js";
  * @property {() => { hp: number; maxHp: number; tempHp?: number; tempHpExpiry?: number }} getPlayer
  * @property {object} inventory — may carry `clubsInvisUntil`, `heartsResistanceReadyAt`
  * @property {() => number} getCharacterInvulnUntil — e.g. Knight ult i-frames
+ * @property {() => boolean} [isDashCoolingDown]
+ * @property {(secs: number) => void} [stunNearbyEnemies]
  * @property {() => void} [onPlayerDeath]
  */
 
@@ -27,7 +29,7 @@ import { forEachDeckCard } from "./items/inventoryState.js";
  * @param {PlayerDamageDeps} deps
  */
 export function createPlayerDamage(deps) {
-  const { getSimElapsed, getPlayer, inventory, getCharacterInvulnUntil, onPlayerDeath } = deps;
+  const { getSimElapsed, getPlayer, inventory, getCharacterInvulnUntil, isDashCoolingDown, stunNearbyEnemies, onPlayerDeath } = deps;
 
   const combat = {
     playerInvulnerableUntil: 0,
@@ -53,6 +55,21 @@ export function createPlayerDamage(deps) {
       if (c?.effect?.kind === "hitResist") n += 1;
     });
     return n;
+  }
+
+  function getFrontShieldArcDeg() {
+    const player = getPlayer();
+    return Math.max(0, Number(player.frontShieldArcDeg ?? 0));
+  }
+
+  function getDodgeChanceWhenDashCd() {
+    const player = getPlayer();
+    return Math.max(0, Number(player.dodgeChanceWhenDashCd ?? 0));
+  }
+
+  function getStunOnHitSecs() {
+    const player = getPlayer();
+    return Math.max(0, Number(player.stunOnHitSecs ?? 0));
   }
 
   function getHeartsResistanceCooldown() {
@@ -87,6 +104,22 @@ export function createPlayerDamage(deps) {
       if (elapsed < invulnGate) return;
       if (elapsed < combat.playerUntargetableUntil) return;
       if (elapsed < (inventory.clubsInvisUntil ?? 0)) return;
+      if ((isDashCoolingDown?.() ?? false) && Math.random() < getDodgeChanceWhenDashCd()) return;
+
+      const arcDeg = getFrontShieldArcDeg();
+      if (arcDeg > 0 && opts.sourceX != null && opts.sourceY != null) {
+        const fx = player.facing?.x ?? 1;
+        const fy = player.facing?.y ?? 0;
+        const fl = Math.hypot(fx, fy) || 1;
+        const nx = fx / fl;
+        const ny = fy / fl;
+        const vx = opts.sourceX - player.x;
+        const vy = opts.sourceY - player.y;
+        const vl = Math.hypot(vx, vy) || 1;
+        const dot = (nx * (vx / vl) + ny * (vy / vl));
+        const halfArc = (arcDeg * Math.PI) / 360;
+        if (Math.acos(Math.max(-1, Math.min(1, dot))) <= halfArc) return;
+      }
 
       const heartsResistanceCount = getHeartsResistanceCardCount();
       if (
@@ -125,6 +158,8 @@ export function createPlayerDamage(deps) {
     combat.playerInvulnerableUntil = elapsed + DAMAGE_PLAYER_INVULN_SEC;
     combat.screenShakeUntil = elapsed + DAMAGE_SCREEN_SHAKE_SEC;
     combat.screenShakeStrength = Math.max(combat.screenShakeStrength, DAMAGE_SCREEN_SHAKE_STRENGTH);
+    const stunSecs = getStunOnHitSecs();
+    if (stunSecs > 0) stunNearbyEnemies?.(stunSecs);
 
     if (player.hp <= 0) {
       const heartsFull = countSuitInRankDeck("hearts") >= SET_BONUS_SUIT_MAX;
@@ -176,6 +211,10 @@ export function createPlayerDamage(deps) {
     combat.screenShakeStrength = Math.max(combat.screenShakeStrength, strength);
   }
 
+  function grantInvulnerabilityUntil(until) {
+    combat.playerInvulnerableUntil = Math.max(combat.playerInvulnerableUntil, until);
+  }
+
   return {
     damagePlayer,
     combat,
@@ -184,5 +223,6 @@ export function createPlayerDamage(deps) {
     isLaserSlowActive,
     resetCombatState,
     bumpScreenShake,
+    grantInvulnerabilityUntil,
   };
 }

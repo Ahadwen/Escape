@@ -7,6 +7,10 @@ export function createEmptyInventory() {
   return {
     deckByRank,
     backpackSlots: /** @type {(object | null)[]} */ ([null, null, null]),
+    heartsRegenPerSec: 0,
+    heartsRegenBank: 0,
+    spadesObstacleBoostUntil: 0,
+    aceUltimateReadyAt: 0,
   };
 }
 

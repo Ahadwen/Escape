@@ -1,10 +1,21 @@
 import { HEX_SIZE, ROULETTE_INNER_HIT_R, ROULETTE_INNER_HEX_DRAW_R } from "../balance.js";
 import { strokePointyHexOutline, fillPointyHexRainbowGlow } from "../draw.js";
 
+const SQRT3 = Math.sqrt(3);
+
+function pointInsidePointyHex(px, py, cx, cy, radius) {
+  const dx = Math.abs(px - cx);
+  const dy = Math.abs(py - cy);
+  if (dx > (SQRT3 / 2) * radius) return false;
+  return dy <= radius - dx / SQRT3;
+}
+
 /**
  * REFERENCE `updateRouletteHex` / `drawRouletteHexWorld`: outer crossing penalty, inner latch opens modal.
  */
 export function createRouletteHexFlow({ hexKey }) {
+  const OUTER_BARRIER_R = HEX_SIZE;
+  const PENALTY_RING_R = HEX_SIZE - 160;
   let phase = 0;
   let lockQ = 0;
   let lockR = 0;
@@ -12,6 +23,7 @@ export function createRouletteHexFlow({ hexKey }) {
   let innerExitLatch = false;
   /** Session flag while still inside the hex (REFERENCE `rouletteForgeComplete`). */
   let forgeComplete = false;
+  let wasInsidePenaltyRing = false;
   /** @type {Set<string>} */
   const outerDamageAppliedKeys = new Set();
   let screenFlashUntil = 0;
@@ -23,6 +35,7 @@ export function createRouletteHexFlow({ hexKey }) {
     wasInHex = false;
     lockQ = 0;
     lockR = 0;
+    wasInsidePenaltyRing = false;
   }
 
   function resetSession() {
@@ -63,23 +76,29 @@ export function createRouletteHexFlow({ hexKey }) {
     }
     const rc = o.hexToWorld(ph.q, ph.r);
     const inInner = Math.hypot(player.x - rc.x, player.y - rc.y) <= ROULETTE_INNER_HIT_R;
+    // Match the rendered pointy-hex ring geometry (not circular distance).
+    const insidePenaltyRing = pointInsidePointyHex(player.x, player.y, rc.x, rc.y, PENALTY_RING_R + player.r);
     const enteredHexThisFrame = inHex && !wasInHex;
     wasInHex = true;
 
     if (enteredHexThisFrame && phase === 0 && o.isRouletteHexInteractive(ph.q, ph.r)) {
       lockQ = ph.q;
       lockR = ph.r;
+      phase = 1;
+      screenFlashUntil = 0;
+      // Baseline on entry so damage only occurs on a real subsequent crossing.
+      wasInsidePenaltyRing = insidePenaltyRing;
+    }
+    if (phase === 1 && ph.q === lockQ && ph.r === lockR) {
       const rk = hexKey(ph.q, ph.r);
-      if (outerDamageAppliedKeys.has(rk)) {
-        phase = 1;
-        screenFlashUntil = 0;
-      } else {
-        phase = 1;
+      const crossedInnerRingInward = insidePenaltyRing && !wasInsidePenaltyRing;
+      if (!outerDamageAppliedKeys.has(rk) && crossedInnerRingInward) {
         screenFlashUntil = o.getSimElapsed() + 0.4;
         o.onOuterPenalty();
         outerDamageAppliedKeys.add(rk);
       }
     }
+    wasInsidePenaltyRing = insidePenaltyRing;
 
     if (
       phase === 1 &&
@@ -110,15 +129,20 @@ export function createRouletteHexFlow({ hexKey }) {
       const cx = c.x;
       const cy = c.y;
       const k = hexKey(h.q, h.r);
-      let cellOuter = "rgba(59, 130, 246, 0.92)";
-      if (isRouletteSpent(h.q, h.r)) {
-        cellOuter = "rgba(34, 197, 94, 0.92)";
-      } else if (isRouletteHexInteractive(h.q, h.r)) {
-        cellOuter = outerDamageAppliedKeys.has(k) ? "rgba(59, 130, 246, 0.92)" : "rgba(249, 115, 22, 0.92)";
-      }
-      strokePointyHexOutline(ctx, cx, cy, HEX_SIZE, cellOuter, 3.2, 18);
+      const isInteractive = isRouletteHexInteractive(h.q, h.r);
+      const outerYellow = "rgba(250, 204, 21, 0.96)";
+      const innerRing = outerDamageAppliedKeys.has(k) ? "rgba(250, 204, 21, 0.94)" : "rgba(249, 115, 22, 0.92)";
+      strokePointyHexOutline(ctx, cx, cy, OUTER_BARRIER_R, outerYellow, 3.4, 18);
+      if (isInteractive) strokePointyHexOutline(ctx, cx, cy, PENALTY_RING_R, innerRing, 2.6, 14);
       fillPointyHexRainbowGlow(ctx, cx, cy, ROULETTE_INNER_HEX_DRAW_R, simElapsed);
     }
+  }
+
+  function isOuterBarrierWorldPoint(px, py, worldToHex, hexToWorld, isRouletteHexInteractive) {
+    const h = worldToHex(px, py);
+    if (!isRouletteHexInteractive(h.q, h.r)) return false;
+    const c = hexToWorld(h.q, h.r);
+    return Math.hypot(px - c.x, py - c.y) <= OUTER_BARRIER_R + 1.5;
   }
 
   function getScreenFlashUntil() {
@@ -142,6 +166,7 @@ export function createRouletteHexFlow({ hexKey }) {
     setScreenFlashUntil(t) {
       screenFlashUntil = t;
     },
+    isOuterBarrierWorldPoint,
     outerDamageHas(key) {
       return outerDamageAppliedKeys.has(key);
     },

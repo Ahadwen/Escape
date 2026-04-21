@@ -96,5 +96,6 @@ export function createEventHexController(deps) {
     getArenaDrawState: () => arena.getDrawState(),
     getSurgeDrawState: () => gauntlet.getDrawState(),
     getSurgeScreenFlashUntil: () => gauntlet.getScreenFlashUntil(),
+    isSurgeLockBarrierWorldPoint: (x, y) => gauntlet.isSurgeLockBarrierWorldPoint(x, y),
   };
 }

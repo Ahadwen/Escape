@@ -8,11 +8,6 @@
 export const HEX_SIZE = 560 * 1.15;
 /** Tetris-style obstacle cell (world px); REFERENCE tileConfig. */
 export const BLOCK = 35;
-/**
- * Safehouse inner core draw radius when `vertexRadius === HEX_SIZE` in draw.js (world px).
- * ~0.65 × HEX_SIZE to match prior silhouette at this scale.
- */
-export const SURGE_SAFE_HEX_DRAW_R = 420;
 /** Player radius (world px); REFERENCE default `V.r`. */
 export const PLAYER_RADIUS = 10;
 /** Walk speed (world px / s); REFERENCE `V.speed`. */
@@ -46,8 +41,16 @@ export const CARD_RANK_SPAWN_WEIGHT_MIN = 1;
 export const SET_BONUS_SUIT_THRESHOLD = 7;
 export const SET_BONUS_SUIT_MAX = 13;
 
-/** Chance a newly generated non-spawn hex becomes a procedural special anchor (roulette / forge / arena / surge). */
-export const SPECIAL_HEX_PROCEDURAL_CHANCE = 0.07;
+/** No procedural specials (except dev west-test hex) until this many seconds of sim time. */
+export const SPECIAL_PROCEDURAL_GRACE_SEC = 15;
+/** After any procedural special spawns, none may spawn until this many seconds later. */
+export const SPECIAL_PROCEDURAL_POST_SPAWN_LOCK_SEC = 15;
+/** Procedural special spawn chance is `1 / denominator`; denominator starts here and tightens over time. */
+export const SPECIAL_PROCEDURAL_DENOM_START = 30;
+/** Minimum denominator (max chance) for procedural special rolls (`1/12`). */
+export const SPECIAL_PROCEDURAL_DENOM_MIN = 12;
+/** Every this many seconds of sim time, the denominator decreases by 1 until `SPECIAL_PROCEDURAL_DENOM_MIN`. */
+export const SPECIAL_PROCEDURAL_RAMP_STEP_SEC = 10;
 
 const _SQRT3 = Math.sqrt(3);
 /** REFERENCE arena nexus — inner hex scale vs `HEX_SIZE` circumradius. */
@@ -89,6 +92,17 @@ export const ROULETTE_OUTER_PENALTY_HP = 2;
 /** Same toll pattern as roulette for procedural forge hexes. */
 export const FORGE_OUTER_PENALTY_HP = 2;
 
+/** Sanctuary: standing in inner core opens the level-up modal (world px). */
+export const SAFEHOUSE_INNER_HIT_R = 46;
+/** Hit radius for embedded mini roulette / forge sites (world px). */
+export const SAFEHOUSE_EMBED_SITE_HIT_R = 28;
+/** Mini-site centers sit this fraction of `HEX_SIZE` along west / east neighbor chords. */
+export const SAFEHOUSE_EMBED_CENTER_INSET = 0.4;
+/** Vertex radius multiplier for embedded mini hexes vs full tile. */
+export const SAFEHOUSE_EMBED_HEX_VERTEX_R_MULT = 0.14;
+/** Full-tile darken duration when a sanctuary becomes spent (ms). */
+export const SAFEHOUSE_SPENT_TILE_ANIM_MS = 1200;
+
 // --- Hunter / wave pacing (REFERENCE `balance.js`) ---
 
 /** Seconds until first hunter wave scheduling tick. */
@@ -126,3 +140,5 @@ export const LASER_BLUE_PLAYER_SLOW_SEC = 1.5;
 export const HEARTS_13_DEATH_DEFY_CD_SEC = 30;
 /** Clubs 13: after taking real HP damage, enemies ignore the player briefly. */
 export const CLUBS_13_UNTARGETABLE_SEC = 1;
+/** Terrain-touch speed boost linger from spades cards (REFERENCE `TERRAIN_SPEED_BOOST_LINGER`). */
+export const TERRAIN_SPEED_BOOST_LINGER = 0.16;

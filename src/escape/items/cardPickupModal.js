@@ -10,8 +10,14 @@ function cardModalInventoryDragHintHtml() {
   return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Click and hold</strong> a card, then <b>drag</b> it to a slot and <b>release</b> to drop, either in the relevant card slot, or the <b>backpack</b>.</p></aside>`;
 }
 
+function cardFaceNameHtml(card) {
+  const red = card?.suit === "hearts" || card?.suit === "diamonds";
+  return `<span class="card-face-name${red ? " card-face-name--red" : ""}">${formatCardName(card)}</span>`;
+}
+
 /**
  * @param {object} opts
+ * @property {(paused: boolean) => void} [onPausedChange] — `true` when modal opens; `false` only when closing from an open state.
  */
 export function createCardPickupModal(opts) {
   const {
@@ -24,7 +30,7 @@ export function createCardPickupModal(opts) {
     inventory,
     getItemRules,
     syncDeckSlots,
-    onPausedChange = () => {},
+    onPausedChange = /** @param {boolean} _ */ () => {},
   } = opts;
 
   let inventoryModalOpen = false;
@@ -273,9 +279,9 @@ export function createCardPickupModal(opts) {
     if (showCard) {
       cardModalFace.classList.remove("compact");
       if (showFirstCardHint) {
-        cardModalFace.innerHTML = `<div class="card-face-layout"><div class="card-face-primary"><div class="big">${formatCardName(showCard)}</div><div class="desc">${itemRules.describeCardEffect(showCard)}</div></div>${cardModalInventoryDragHintHtml()}</div>`;
+        cardModalFace.innerHTML = `<div class="card-face-layout"><div class="card-face-primary"><div class="big">${cardFaceNameHtml(showCard)}</div><div class="desc">${itemRules.describeCardEffect(showCard)}</div></div>${cardModalInventoryDragHintHtml()}</div>`;
       } else {
-        cardModalFace.innerHTML = `<div class="big">${formatCardName(showCard)}</div><div class="desc">${itemRules.describeCardEffect(showCard)}</div>`;
+        cardModalFace.innerHTML = `<div class="big">${cardFaceNameHtml(showCard)}</div><div class="desc">${itemRules.describeCardEffect(showCard)}</div>`;
       }
     } else if (showFirstCardHint) {
       cardModalFace.classList.remove("compact");
@@ -342,7 +348,7 @@ export function createCardPickupModal(opts) {
     } else if (pendingCard) {
       const card = pendingCard;
       cardModalFace.classList.remove("compact");
-      cardModalFace.innerHTML = `<div class="big">${formatCardName(card)}</div><div class="desc">${itemRules.describeCardEffect(card)}</div>`;
+      cardModalFace.innerHTML = `<div class="big">${cardFaceNameHtml(card)}</div><div class="desc">${itemRules.describeCardEffect(card)}</div>`;
     } else {
       cardModalFace.classList.add("compact");
       cardModalFace.innerHTML =
@@ -395,12 +401,13 @@ export function createCardPickupModal(opts) {
   }
 
   function closeCardModal() {
+    const wasOpen = inventoryModalOpen;
     inventoryModalOpen = false;
     pendingCard = null;
     cardPickupFlowActive = false;
     pickupTargetRank = null;
     dragIntentRank = null;
-    onPausedChange(false);
+    if (wasOpen) onPausedChange(false);
     renderCardModal();
   }
 

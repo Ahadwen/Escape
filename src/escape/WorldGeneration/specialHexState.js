@@ -1,10 +1,32 @@
-import { SPECIAL_HEX_PROCEDURAL_CHANCE } from "../balance.js";
+import {
+  SPECIAL_PROCEDURAL_DENOM_MIN,
+  SPECIAL_PROCEDURAL_DENOM_START,
+  SPECIAL_PROCEDURAL_GRACE_SEC,
+  SPECIAL_PROCEDURAL_POST_SPAWN_LOCK_SEC,
+  SPECIAL_PROCEDURAL_RAMP_STEP_SEC,
+} from "../balance.js";
 
 /**
- * Tracks roulette / forge anchors (procedural rare spawns + dev west test hex),
+ * @param {number} sim
+ * @param {number} rampBaseSim
+ */
+function proceduralSpecialDenominator(sim, rampBaseSim) {
+  const elapsed = sim - rampBaseSim;
+  if (elapsed < 0) return SPECIAL_PROCEDURAL_DENOM_START;
+  const steps = Math.floor(elapsed / SPECIAL_PROCEDURAL_RAMP_STEP_SEC);
+  return Math.max(SPECIAL_PROCEDURAL_DENOM_MIN, SPECIAL_PROCEDURAL_DENOM_START - steps);
+}
+
+/**
+ * Tracks roulette / forge / arena / surge / safehouse anchors (procedural rare spawns + dev west test hex),
  * spent flags, and hooks for generated tile cache lifecycle.
  */
-export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
+export function createSpecialHexRuntime({
+  HEX_DIRS,
+  hexKey,
+  getIsLunatic = () => false,
+  getSimElapsed = () => 0,
+}) {
   const west = HEX_DIRS[3];
   const westTestQ = west.q;
   const westTestR = west.r;
@@ -18,6 +40,8 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
   /** @type {Set<string>} */
   const proceduralSurge = new Set();
   /** @type {Set<string>} */
+  const proceduralSafehouse = new Set();
+  /** @type {Set<string>} */
   const rouletteSpent = new Set();
   /** @type {Set<string>} */
   const forgeSpent = new Set();
@@ -25,13 +49,29 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
   const arenaSpent = new Set();
   /** @type {Set<string>} */
   const surgeSpent = new Set();
+  /** @type {Set<string>} */
+  const safehouseSpent = new Set();
 
-  /** @type {'na' | 'roulette' | 'forge' | 'arena' | 'surge' | string} */
+  /** @type {'na' | 'roulette' | 'forge' | 'arena' | 'surge' | 'safehouse' | string} */
   let testWestKind = "na";
+
+  /** @type {null | (() => void)} */
+  let onProceduralSafehousePlaced = null;
+
+  /** Sim time when quartet (arena / roulette / surge / forge) ramp last reset (starts at grace so first roll uses `1/30`). */
+  let quadRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
+  /** Independent safehouse ramp base (same rule as quartet). */
+  let safeRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
+  /** No procedural specials until `sim >=` this value (global lock after any procedural spawn). */
+  let spawnLockUntilSim = 0;
+
+  function setOnProceduralSafehousePlaced(fn) {
+    onProceduralSafehousePlaced = typeof fn === "function" ? fn : null;
+  }
 
   function parseWestKind(raw) {
     const v = String(raw || "").trim();
-    if (v === "roulette" || v === "forge" || v === "arena" || v === "surge") return v;
+    if (v === "roulette" || v === "forge" || v === "arena" || v === "surge" || v === "safehouse") return v;
     return "na";
   }
 
@@ -56,34 +96,76 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     if (testWestKind === "forge") return "forge";
     if (testWestKind === "arena") return "arena";
     if (testWestKind === "surge") return "surge";
+    if (testWestKind === "safehouse") return "safehouse";
     return null;
   }
 
   function tryProceduralRareSpecialHex(q, r) {
     if (isSpawnHex(q, r)) return;
-    if (isWestTestHex(q, r) && westVisualKind()) return;
+    if (isWestTestHex(q, r)) return;
     const k = key(q, r);
     if (
       proceduralRoulette.has(k) ||
       proceduralForge.has(k) ||
       proceduralArena.has(k) ||
-      proceduralSurge.has(k)
+      proceduralSurge.has(k) ||
+      proceduralSafehouse.has(k) ||
+      safehouseSpent.has(k)
     ) {
       return;
     }
     const activeSpecials =
-      proceduralRoulette.size + proceduralForge.size + proceduralArena.size + proceduralSurge.size;
+      proceduralRoulette.size +
+      proceduralForge.size +
+      proceduralArena.size +
+      proceduralSurge.size +
+      proceduralSafehouse.size;
     if (activeSpecials >= 1) return;
-    if (Math.random() >= SPECIAL_HEX_PROCEDURAL_CHANCE) return;
+
+    const sim = getSimElapsed();
+    if (sim < SPECIAL_PROCEDURAL_GRACE_SEC) return;
+    if (sim < spawnLockUntilSim) return;
+
     rouletteSpent.delete(k);
     forgeSpent.delete(k);
     arenaSpent.delete(k);
     surgeSpent.delete(k);
-    const roll = Math.random();
-    if (roll < 0.25) proceduralArena.add(k);
-    else if (roll < 0.5) proceduralRoulette.add(k);
-    else if (roll < 0.75) proceduralSurge.add(k);
-    else proceduralForge.add(k);
+    safehouseSpent.delete(k);
+
+    const lockAfterSpawn = () => {
+      spawnLockUntilSim = sim + SPECIAL_PROCEDURAL_POST_SPAWN_LOCK_SEC;
+    };
+
+    if (getIsLunatic()) {
+      const dSafe = proceduralSpecialDenominator(sim, safeRampBaseSim);
+      if (Math.random() >= 1 / dSafe) return;
+      proceduralSafehouse.add(k);
+      onProceduralSafehousePlaced?.();
+      safeRampBaseSim = sim;
+      lockAfterSpawn();
+      return;
+    }
+
+    const dQuad = proceduralSpecialDenominator(sim, quadRampBaseSim);
+    if (Math.random() < 1 / dQuad) {
+      const kindRoll = Math.random();
+      const kind =
+        kindRoll < 0.25 ? "arena" : kindRoll < 0.5 ? "roulette" : kindRoll < 0.75 ? "surge" : "forge";
+      if (kind === "arena") proceduralArena.add(k);
+      else if (kind === "roulette") proceduralRoulette.add(k);
+      else if (kind === "surge") proceduralSurge.add(k);
+      else proceduralForge.add(k);
+      quadRampBaseSim = sim;
+      lockAfterSpawn();
+      return;
+    }
+
+    const dSafe = proceduralSpecialDenominator(sim, safeRampBaseSim);
+    if (Math.random() >= 1 / dSafe) return;
+    proceduralSafehouse.add(k);
+    onProceduralSafehousePlaced?.();
+    safeRampBaseSim = sim;
+    lockAfterSpawn();
   }
 
   function purgeProceduralSpecialAnchorsOutsideWindow(neededKeys) {
@@ -99,6 +181,9 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     for (const s of proceduralSurge) {
       if (!neededKeys.has(s)) proceduralSurge.delete(s);
     }
+    for (const s of proceduralSafehouse) {
+      if (!neededKeys.has(s)) proceduralSafehouse.delete(s);
+    }
     for (const s of rouletteSpent) {
       if (!neededKeys.has(s)) rouletteSpent.delete(s);
     }
@@ -111,6 +196,9 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     for (const s of surgeSpent) {
       if (!neededKeys.has(s)) surgeSpent.delete(s);
     }
+    for (const s of safehouseSpent) {
+      if (!neededKeys.has(s)) safehouseSpent.delete(s);
+    }
   }
 
   function onTileEvicted(cacheKey) {
@@ -118,10 +206,12 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     proceduralForge.delete(cacheKey);
     proceduralArena.delete(cacheKey);
     proceduralSurge.delete(cacheKey);
+    proceduralSafehouse.delete(cacheKey);
     rouletteSpent.delete(cacheKey);
     forgeSpent.delete(cacheKey);
     arenaSpent.delete(cacheKey);
     surgeSpent.delete(cacheKey);
+    safehouseSpent.delete(cacheKey);
   }
 
   function getVisualKind(q, r) {
@@ -135,6 +225,7 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     if (proceduralForge.has(k) || forgeSpent.has(k)) return "forge";
     if (proceduralArena.has(k) || arenaSpent.has(k)) return "arena";
     if (proceduralSurge.has(k) || surgeSpent.has(k)) return "surge";
+    if (proceduralSafehouse.has(k) || safehouseSpent.has(k)) return "safehouse";
     return null;
   }
 
@@ -222,10 +313,66 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     surgeSpent.add(k);
   }
 
+  function isSafehouseHexActiveTile(q, r) {
+    const k = key(q, r);
+    if (safehouseSpent.has(k)) return false;
+    if (proceduralSafehouse.has(k)) return true;
+    if (isWestTestHex(q, r) && testWestKind === "safehouse") return true;
+    return false;
+  }
+
+  function isSafehouseHexSpentTile(q, r) {
+    return safehouseSpent.has(key(q, r));
+  }
+
+  function isSafehouseHexTile(q, r) {
+    return isSafehouseHexActiveTile(q, r) || isSafehouseHexSpentTile(q, r);
+  }
+
+  function getPrimarySafehouseAxial() {
+    if (isWestTestHex(westTestQ, westTestR) && testWestKind === "safehouse") {
+      const k = key(westTestQ, westTestR);
+      if (!safehouseSpent.has(k)) return { q: westTestQ, r: westTestR };
+    }
+    for (const k of proceduralSafehouse) {
+      const [q, r] = k.split(",").map(Number);
+      return { q, r };
+    }
+    return null;
+  }
+
+  /** Active + spent + dev west sanctuary centers (for hunter barrier clamp). */
+  function forEachSafehouseBarrierHex(cb) {
+    for (const k of proceduralSafehouse) {
+      const [q, r] = k.split(",").map(Number);
+      if (Number.isFinite(q) && Number.isFinite(r)) cb(q, r);
+    }
+    for (const k of safehouseSpent) {
+      const [q, r] = k.split(",").map(Number);
+      if (Number.isFinite(q) && Number.isFinite(r)) cb(q, r);
+    }
+    if (testWestKind === "safehouse") cb(westTestQ, westTestR);
+  }
+
+  function markProceduralSafehouseHexSpent(q, r) {
+    const k = key(q, r);
+    const isDev = isWestTestHex(q, r) && testWestKind === "safehouse";
+    if (proceduralSafehouse.has(k)) {
+      proceduralSafehouse.delete(k);
+      safehouseSpent.add(k);
+    } else if (isDev) {
+      safehouseSpent.add(k);
+    } else {
+      return;
+    }
+  }
+
   function isSpecialTile(q, r) {
     if (isSpawnHex(q, r)) return true;
     const kind = getVisualKind(q, r);
-    return kind === "roulette" || kind === "forge" || kind === "arena" || kind === "surge";
+    return (
+      kind === "roulette" || kind === "forge" || kind === "arena" || kind === "surge" || kind === "safehouse"
+    );
   }
 
   function resetSessionState() {
@@ -233,16 +380,22 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     proceduralForge.clear();
     proceduralArena.clear();
     proceduralSurge.clear();
+    proceduralSafehouse.clear();
     rouletteSpent.clear();
     forgeSpent.clear();
     arenaSpent.clear();
     surgeSpent.clear();
+    safehouseSpent.clear();
+    quadRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
+    safeRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
+    spawnLockUntilSim = 0;
   }
 
   return {
     westTestQ,
     westTestR,
     setTestWestKind,
+    setOnProceduralSafehousePlaced,
     tryProceduralRareSpecialHex,
     purgeProceduralSpecialAnchorsOutsideWindow,
     onTileEvicted,
@@ -264,6 +417,12 @@ export function createSpecialHexRuntime({ HEX_DIRS, hexKey }) {
     isSurgeHexInteractive,
     isSurgeSpent: (q, r) => surgeSpent.has(key(q, r)),
     markProceduralSurgeHexSpent,
+    isSafehouseHexTile,
+    isSafehouseHexActiveTile,
+    isSafehouseHexSpentTile,
+    getPrimarySafehouseAxial,
+    markProceduralSafehouseHexSpent,
+    forEachSafehouseBarrierHex,
     resetSessionState,
   };
 }

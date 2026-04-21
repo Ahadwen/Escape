@@ -57,8 +57,14 @@ import {
  * @property {(x: number, y: number) => { q: number; r: number }} [worldToHex]
  * @property {(q: number, r: number) => { x: number; y: number }} [hexToWorld]
  * @property {(q: number, r: number) => boolean} [isArenaHexTile]
+ * @property {(x: number, y: number) => boolean} [isWorldPointOnSurgeLockBarrierTile]
  * @property {(x: number, y: number) => boolean} [isWorldPointOnSpecialSpawnerForbiddenHex]
  * @property {(h: any) => void} [ejectSpawnerHunterFromSpecialHexFootprint]
+ * @property {() => number} [getDifficultyClockSec] — survival clock minus safehouse freeze (defaults to `getSimElapsed`).
+ * @property {() => number} [getRunLevel] — accepted sanctuary level-ups for enemy scaling (defaults to 0).
+ * @property {(x: number, y: number) => boolean} [isWorldPointOnSafehouseBarrierDisk]
+ * @property {(h: any) => void} [clampHunterOutsideSafehouseDisk]
+ * @property {(x: number, y: number) => boolean} [isWorldPointOnForgeRouletteBarrierTile]
  */
 
 export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
@@ -76,15 +82,27 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     worldToHex: worldToHexDep,
     hexToWorld: hexToWorldDep,
     isArenaHexTile: isArenaHexTileDep,
+    isWorldPointOnSurgeLockBarrierTile: surgeBarrierDep,
     isWorldPointOnSpecialSpawnerForbiddenHex: forbiddenHexDep,
     ejectSpawnerHunterFromSpecialHexFootprint: ejectSpawnerDep,
+    getDifficultyClockSec: getDifficultyClockSecDep,
+    getRunLevel: getRunLevelDep,
+    isWorldPointOnSafehouseBarrierDisk: safehouseBarrierDep,
+    clampHunterOutsideSafehouseDisk: clampSafehouseDep,
+    isWorldPointOnForgeRouletteBarrierTile: forgeRouletteBarrierDep,
   } = deps;
 
   const worldToHex = worldToHexDep ?? (() => ({ q: 0, r: 0 }));
   const hexToWorld = hexToWorldDep ?? ((q, r) => ({ x: 0, y: 0 }));
   const isArenaHexTile = isArenaHexTileDep ?? (() => false);
+  const isWorldPointOnSurgeLockBarrierTile = surgeBarrierDep ?? (() => false);
   const isWorldPointOnSpecialSpawnerForbiddenHex = forbiddenHexDep ?? (() => false);
   const ejectSpawnerHunterFromSpecialHexFootprint = ejectSpawnerDep ?? (() => {});
+  const getDifficultyClockSec = getDifficultyClockSecDep ?? getSimElapsed;
+  const getRunLevel = getRunLevelDep ?? (() => 0);
+  const isWorldPointOnSafehouseBarrierDisk = safehouseBarrierDep ?? (() => false);
+  const clampHunterOutsideSafehouseDisk = clampSafehouseDep ?? (() => {});
+  const isWorldPointOnForgeRouletteBarrierTile = forgeRouletteBarrierDep ?? (() => false);
 
   const entities = {
     /** @type {any[]} */
@@ -98,6 +116,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     /** @type {any[]} */
     bullets: [],
   };
+  let suppressRangedAttacksNow = false;
 
   const spawnState = {
     wave: 0,
@@ -107,8 +126,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     spawnScheduled: [],
   };
 
+  let spawnDifficultyAnchorSurvival = 0;
+
   function relDifficultySurvivalSec() {
-    return Math.max(0, getSimElapsed());
+    return Math.max(0, getDifficultyClockSec() - spawnDifficultyAnchorSurvival);
   }
 
   function getDangerRamp01() {
@@ -133,10 +154,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function runLevelEnemySpeedMult() {
-    return 1;
+    const lv = getRunLevel();
+    if (lv <= 0) return 1;
+    return Math.pow(1.15, lv);
   }
   function runLevelEnemyAccelMult() {
-    return 1;
+    const lv = getRunLevel();
+    if (lv <= 0) return 1;
+    return Math.pow(1.1, lv);
   }
   function spades13AuraEnemyDtMult() {
     return 1;
@@ -151,6 +176,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
   function hasLineOfSight(from, target, opts = {}) {
     const ignoreObstacles = !!opts.ignoreObstacles;
+    for (let s = 0; s <= 20; s++) {
+      const u = s / 20;
+      const sx = from.x + (target.x - from.x) * u;
+      const sy = from.y + (target.y - from.y) * u;
+      if (isWorldPointOnSurgeLockBarrierTile(sx, sy)) return false;
+      if (isWorldPointOnSafehouseBarrierDisk(sx, sy)) return false;
+      if (isWorldPointOnForgeRouletteBarrierTile(sx, sy)) return false;
+    }
     if (!ignoreObstacles) {
       for (const obstacle of getObstacles()) {
         if (lineIntersectsRect(from.x, from.y, target.x, target.y, obstacle)) return false;
@@ -169,6 +202,15 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     for (let d = 8; d <= maxLen; d += 8) {
       const px = x + ux * d;
       const py = y + uy * d;
+      if (isWorldPointOnSurgeLockBarrierTile(px, py)) {
+        return { x: lastX, y: lastY };
+      }
+      if (isWorldPointOnSafehouseBarrierDisk(px, py)) {
+        return { x: lastX, y: lastY };
+      }
+      if (isWorldPointOnForgeRouletteBarrierTile(px, py)) {
+        return { x: lastX, y: lastY };
+      }
       if (!throughObstacles) {
         for (const obstacle of getObstacles()) {
           if (px >= obstacle.x && px <= obstacle.x + obstacle.w && py >= obstacle.y && py <= obstacle.y + obstacle.h) {
@@ -186,11 +228,17 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const ignoreObstacles = !!opts.ignoreObstacles;
     let touchedObstacle = false;
     const nx = { x: entity.x + vx * dt, y: entity.y, r: entity.r };
-    const nxBlocked = outOfBoundsCircle(nx) || (!ignoreObstacles && collidesAnyObstacle(nx));
+    const nxBlocked =
+      outOfBoundsCircle(nx) ||
+      isWorldPointOnForgeRouletteBarrierTile(nx.x, nx.y) ||
+      (!ignoreObstacles && collidesAnyObstacle(nx));
     if (!nxBlocked) entity.x = nx.x;
     else if (!ignoreObstacles) touchedObstacle = true;
     const ny = { x: entity.x, y: entity.y + vy * dt, r: entity.r };
-    const nyBlocked = outOfBoundsCircle(ny) || (!ignoreObstacles && collidesAnyObstacle(ny));
+    const nyBlocked =
+      outOfBoundsCircle(ny) ||
+      isWorldPointOnForgeRouletteBarrierTile(ny.x, ny.y) ||
+      (!ignoreObstacles && collidesAnyObstacle(ny));
     if (!nyBlocked) entity.y = ny.y;
     else if (!ignoreObstacles) touchedObstacle = true;
     return { touchedObstacle };
@@ -421,6 +469,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.dieAt = Math.max(h.dieAt, elapsed + ARENA_NEXUS_SIEGE_SEC + 2.5);
     }
 
+    const relocateIfForbidden = () => {
+      if (!isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y)) return;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const a = Math.random() * Math.PI * 2;
+        const dist = rand(280, 780);
+        h.x = player.x + Math.cos(a) * dist;
+        h.y = player.y + Math.sin(a) * dist;
+        const circ = { x: h.x, y: h.y, r: h.r };
+        if (!isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y) && !collidesAnyObstacle(circ) && !outOfBoundsCircle(circ)) return;
+      }
+    };
+
     if (customX != null && customY != null) {
       h.x = customX;
       h.y = customY;
@@ -435,6 +495,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           h.y = player.y + Math.sin(a) * dist;
         }
       }
+      relocateIfForbidden();
       entities.hunters.push(h);
       return;
     }
@@ -458,6 +519,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     h.x = player.x + Math.cos(ang) * d;
     h.y = player.y + Math.sin(ang) * d;
     if (type === "spawner" || type === "airSpawner") ejectSpawnerHunterFromSpecialHexFootprint(h);
+    relocateIfForbidden();
     entities.hunters.push(h);
   }
 
@@ -501,11 +563,21 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     scheduleWaveSpawns();
   }
 
-  function sniperArtillerySuppressedByRoulette() {
+  function sniperArtillerySuppressedByRoulette(sniperX, sniperY, aimX, aimY) {
+    if (isWorldPointOnSurgeLockBarrierTile(aimX, aimY)) return true;
+    if (isWorldPointOnSafehouseBarrierDisk(aimX, aimY)) return true;
+    for (let s = 0; s <= 28; s++) {
+      const u = s / 28;
+      const sx = sniperX + (aimX - sniperX) * u;
+      const sy = sniperY + (aimY - sniperY) * u;
+      if (isWorldPointOnSurgeLockBarrierTile(sx, sy)) return true;
+      if (isWorldPointOnSafehouseBarrierDisk(sx, sy)) return true;
+    }
     return false;
   }
 
   function updateSnipers() {
+    if (suppressRangedAttacksNow) return;
     const elapsed = getSimElapsed();
     const player = getPlayer();
     const { w: VIEW_W, h: VIEW_H } = getViewSize();
@@ -530,7 +602,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       let aimY = target.y + tvy * leadT + rand(-12, 12);
       aimX = clamp(aimX, player.x - VIEW_W * 0.9, player.x + VIEW_W * 0.9);
       aimY = clamp(aimY, player.y - VIEW_H * 0.9, player.y + VIEW_H * 0.9);
-      if (sniperArtillerySuppressedByRoulette()) {
+      if (sniperArtillerySuppressedByRoulette(h.x, h.y, aimX, aimY)) {
         h.lastShotAt = elapsed;
         continue;
       }
@@ -568,7 +640,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const u = s / 16;
         const sx = b.x + (b.tx - b.x) * u;
         const sy = b.y + (b.ty - b.y) * u;
-        if (collidesAnyObstacle({ x: sx, y: sy, r: 2 })) {
+        if (isWorldPointOnSurgeLockBarrierTile(sx, sy) || collidesAnyObstacle({ x: sx, y: sy, r: 2 })) {
           hitBarrier = true;
           break;
         }
@@ -585,7 +657,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         zone.exploded = true;
         if (!hitDecoyIfAny(zone, zone.r)) {
           const rr = zone.r + player.r;
-          if (distSq(zone, player) <= rr * rr) damagePlayer(2);
+          if (distSq(zone, player) <= rr * rr) damagePlayer(2, { sourceX: zone.x, sourceY: zone.y });
         }
       }
       if (
@@ -596,7 +668,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         zone.nextTickAt += zone.tickInterval ?? 0.3;
         if (!hitDecoyIfAny(zone, zone.r * 0.92)) {
           const rr = zone.r * 0.92 + player.r;
-          if (distSq(zone, player) <= rr * rr) damagePlayer(1);
+          if (distSq(zone, player) <= rr * rr) damagePlayer(1, { sourceX: zone.x, sourceY: zone.y });
         }
       }
       const zu = zone.windup != null ? zone.windup : 0.8;
@@ -680,6 +752,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const isBlue = h.type === "laserBlue";
         const target = pickTargetForHunter(h);
         const los = isBlue ? hasLineOfSight(h, target, { ignoreObstacles: true }) : hasLineOfSight(h, target);
+        if (suppressRangedAttacksNow) {
+          h.laserState = "move";
+          h.laserAim = null;
+          continue;
+        }
 
         if (h.laserState === "aim") {
           if (elapsed >= h.aimStartedAt + h.laserWarning) {
@@ -702,7 +779,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
             });
             if (!hitDecoyAlongSegment(aim.x1, aim.y1, aim.x2, aim.y2, 5)) {
               const hitDist = pointToSegmentDistance(player.x, player.y, aim.x1, aim.y1, aim.x2, aim.y2);
-              if (hitDist <= player.r + 5) damagePlayer(2, isBlue ? { laserBlueSlow: true } : {});
+              if (hitDist <= player.r + 5) {
+                damagePlayer(
+                  2,
+                  isBlue
+                    ? { laserBlueSlow: true, sourceX: aim.x1, sourceY: aim.y1 }
+                    : { sourceX: aim.x1, sourceY: aim.y1 },
+                );
+              }
             }
             h.laserState = "move";
             h.laserAim = null;
@@ -797,9 +881,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.dir.y /= dlen;
       moveCircleWithCollisions(h, h.dir.x * speed, h.dir.y * speed, spDt, {});
     }
+    for (const h of entities.hunters) {
+      clampHunterOutsideSafehouseDisk(h);
+    }
   }
 
   function updateRangedAttackers(dt) {
+    if (suppressRangedAttacksNow) return;
     const elapsed = getSimElapsed();
     const player = getPlayer();
     for (const h of entities.hunters) {
@@ -835,6 +923,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const u = s / 5;
         const sx = prevX + (p.x - prevX) * u;
         const sy = prevY + (p.y - prevY) * u;
+        if (isWorldPointOnSurgeLockBarrierTile(sx, sy)) {
+          hitBarrier = true;
+          break;
+        }
+        if (isWorldPointOnSafehouseBarrierDisk(sx, sy)) {
+          hitBarrier = true;
+          break;
+        }
+        if (isWorldPointOnForgeRouletteBarrierTile(sx, sy)) {
+          hitBarrier = true;
+          break;
+        }
         if (hitDecoyIfAny({ x: sx, y: sy }, p.r)) {
           hitBarrier = true;
           break;
@@ -858,7 +958,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
       const rr = p.r + player.r;
       if (distSq(p, player) <= rr * rr) {
-        damagePlayer(p.damage || 1);
+        damagePlayer(p.damage || 1, { sourceX: p.x, sourceY: p.y });
         entities.projectiles.splice(i, 1);
       }
     }
@@ -893,13 +993,67 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
+  /** REFERENCE hearts J/Q/K front arc shield: repel nearby hostiles and clear projectiles in facing cone. */
+  function applyFrontShieldArc() {
+    const player = getPlayer();
+    const arcDeg = Math.max(0, Number(player.frontShieldArcDeg ?? 0));
+    if (arcDeg <= 0) return;
+
+    const facingAngle = Math.atan2(player.facing?.y ?? 0, player.facing?.x ?? 1);
+    const halfArc = (arcDeg * Math.PI) / 360;
+    const shieldR = player.r + 30;
+
+    for (const h of entities.hunters) {
+      if (h.type === "spawner" || h.type === "airSpawner") continue;
+      const dx = h.x - player.x;
+      const dy = h.y - player.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d > shieldR + h.r) continue;
+      const ang = Math.atan2(dy, dx);
+      let delta = ang - facingAngle;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      if (Math.abs(delta) > halfArc) continue;
+
+      const away = vectorToTarget(player, h);
+      const test = { x: h.x + away.x * 34, y: h.y + away.y * 34, r: h.r };
+      if (!outOfBoundsCircle(test) && !collidesAnyObstacle(test)) {
+        h.x = test.x;
+        h.y = test.y;
+      }
+      h.dir.x = away.x;
+      h.dir.y = away.y;
+    }
+
+    for (let i = entities.projectiles.length - 1; i >= 0; i--) {
+      const p = entities.projectiles[i];
+      const dx = p.x - player.x;
+      const dy = p.y - player.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d > shieldR + p.r) continue;
+      const ang = Math.atan2(dy, dx);
+      let delta = ang - facingAngle;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      if (Math.abs(delta) > halfArc) continue;
+      entities.projectiles.splice(i, 1);
+    }
+  }
+
   function updateLaserHazards() {
     const player = getPlayer();
     for (const beam of entities.laserBeams) {
       if (beam.warning || !beam.active) continue;
       if (!hitDecoyAlongSegment(beam.x1, beam.y1, beam.x2, beam.y2, 5)) {
         const hitDist = pointToSegmentDistance(player.x, player.y, beam.x1, beam.y1, beam.x2, beam.y2);
-        if (hitDist <= player.r + 5) damagePlayer(2, beam.blueLaser ? { laserBlueSlow: true } : {});
+        if (hitDist <= player.r + 5) {
+          damagePlayer(
+            2,
+            beam.blueLaser
+              ? { laserBlueSlow: true, sourceX: beam.x1, sourceY: beam.y1 }
+              : { sourceX: beam.x1, sourceY: beam.y1 },
+          );
+        }
       }
     }
   }
@@ -915,7 +1069,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
       const rr = h.r + player.r;
       if (distSq(h, player) <= rr * rr) {
-        damagePlayer(1);
+        damagePlayer(1, { sourceX: h.x, sourceY: h.y });
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
       }
     }
@@ -940,9 +1094,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
-  function tick(dt) {
+  function tick(dt, opts = {}) {
+    suppressRangedAttacksNow = !!opts.suppressRangedAttacks;
     tickSpawnWavesAndLifetime();
     moveHunters(dt);
+    applyFrontShieldArc();
     updateSnipers();
     updateRangedAttackers(dt);
     updateSpawners();
@@ -1027,8 +1183,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     spawnState.wave = 0;
     spawnState.spawnInterval = SPAWN_INTERVAL_START;
     spawnState.spawnScheduled.length = 0;
+    spawnDifficultyAnchorSurvival = 0;
     const elapsed = getSimElapsed();
     spawnState.nextSpawnAt = elapsed + HUNTER_FIRST_WAVE_AT_SEC;
+  }
+
+  /** REFERENCE `applySafehouseLevelUp` spawn pacing reset. */
+  function softResetSpawnPacingAfterSafehouseLevel(anchorEffectiveSurvivalSec) {
+    spawnDifficultyAnchorSurvival = Math.max(0, anchorEffectiveSurvivalSec);
+    spawnState.spawnScheduled.length = 0;
+    spawnState.spawnInterval = getSpawnIntervalFromRunTime();
+    const elapsed = getSimElapsed();
+    spawnState.nextSpawnAt = elapsed + spawnState.spawnInterval;
   }
 
   function draw(ctx) {
@@ -1055,6 +1221,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     tick,
     draw,
     reset,
+    softResetSpawnPacingAfterSafehouseLevel,
     spawnHunter,
     hunterRadiusForType,
     cleanupArenaNexusSiegeCombat,

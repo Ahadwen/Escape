@@ -47,7 +47,7 @@ export function describeDefaultCardEffect(card, helpers) {
   if (e.kind === "ultimate") {
     const names = {
       shield: "Orbiting shields",
-      burst: "Push waves",
+      burst: "Earthquake",
       timelock: "Timelock",
       heal: "Vitality (temp HP)",
     };

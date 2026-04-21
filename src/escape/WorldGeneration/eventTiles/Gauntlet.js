@@ -5,7 +5,6 @@ import {
   HEX_SIZE,
   ARENA_NEXUS_INNER_ENTER_R,
   ARENA_NEXUS_INNER_APOTHEM,
-  ARENA_NEXUS_REWARD_MODAL_DELAY_SEC,
   SURGE_HEX_WAVES,
   SURGE_TRAVEL_DUR_FIRST,
   SURGE_TRAVEL_DUR_DECREMENT_PER_WAVE,
@@ -18,6 +17,17 @@ import {
 import { TAU } from "../../constants.js";
 
 const SQRT3 = Math.sqrt(3);
+
+function pointInsidePointyHex(px, py, cx, cy, vertexRadius) {
+  const dx = Math.abs(px - cx);
+  const dy = Math.abs(py - cy);
+  if (dx > (SQRT3 / 2) * vertexRadius) return false;
+  return dy <= vertexRadius - dx / SQRT3;
+}
+
+function vertexRadiusFromApothem(apothem) {
+  return (2 * apothem) / SQRT3;
+}
 
 /**
  * @typedef {object} GauntletHexEventDeps
@@ -74,7 +84,8 @@ export function createGauntletHexEvent(deps) {
   let prevSafeY = 0;
   let hasPrevSafeBubble = false;
   let eligibleForInnerExitReward = false;
-  let cardRewardAt = 0;
+  let rewardPendingOnUnpause = false;
+  let wasInsideSafeRewardZone = false;
   let screenFlashUntil = 0;
 
   function reset() {
@@ -93,7 +104,8 @@ export function createGauntletHexEvent(deps) {
     prevSafeY = 0;
     hasPrevSafeBubble = false;
     eligibleForInnerExitReward = false;
-    cardRewardAt = 0;
+    rewardPendingOnUnpause = false;
+    wasInsideSafeRewardZone = false;
     screenFlashUntil = 0;
   }
 
@@ -221,7 +233,8 @@ export function createGauntletHexEvent(deps) {
     wave = 1;
     hasPrevSafeBubble = false;
     eligibleForInnerExitReward = false;
-    cardRewardAt = 0;
+    rewardPendingOnUnpause = false;
+    wasInsideSafeRewardZone = false;
     killHuntersOnSurgeHex(q, r);
     awaitMode = "idle";
     screenFlashUntil = 0;
@@ -233,7 +246,8 @@ export function createGauntletHexEvent(deps) {
     wave = 1;
     hasPrevSafeBubble = false;
     eligibleForInnerExitReward = false;
-    cardRewardAt = 0;
+    rewardPendingOnUnpause = false;
+    wasInsideSafeRewardZone = false;
     clampPlayerToLockHex();
     beginTravelWave();
   }
@@ -267,8 +281,8 @@ export function createGauntletHexEvent(deps) {
     const player = getPlayer();
     const cardPaused = isCardPickupPaused();
 
-    if (!cardPaused && phase === 3 && cardRewardAt > 0 && elapsed >= cardRewardAt) {
-      cardRewardAt = 0;
+    if (!cardPaused && phase === 3 && rewardPendingOnUnpause) {
+      rewardPendingOnUnpause = false;
       dropSpecialEventJokerReward();
       phase = 4;
     }
@@ -280,16 +294,14 @@ export function createGauntletHexEvent(deps) {
       if (phase === 4) {
         phase = 0;
       } else if (phase === 3) {
-        if (cardRewardAt > 0 && !cardPaused) {
-          dropSpecialEventJokerReward();
-          cardRewardAt = 0;
-        }
+        rewardPendingOnUnpause = false;
         phase = 0;
         awaitMode = "travel";
         wave = 1;
         screenFlashUntil = 0;
         hasPrevSafeBubble = false;
         eligibleForInnerExitReward = false;
+        wasInsideSafeRewardZone = false;
       } else if (phase === 1 || phase === 2) {
         phase = 0;
         awaitMode = "travel";
@@ -297,7 +309,8 @@ export function createGauntletHexEvent(deps) {
         screenFlashUntil = 0;
         hasPrevSafeBubble = false;
         eligibleForInnerExitReward = false;
-        cardRewardAt = 0;
+        rewardPendingOnUnpause = false;
+        wasInsideSafeRewardZone = false;
       }
       return;
     }
@@ -308,16 +321,23 @@ export function createGauntletHexEvent(deps) {
     }
     if (phase === 1 && ph.q === lockQ && ph.r === lockR) {
       const c = hexToWorld(lockQ, lockR);
-      if (Math.hypot(player.x - c.x, player.y - c.y) <= ARENA_NEXUS_INNER_ENTER_R) {
+      const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
+      if (pointInsidePointyHex(player.x, player.y, c.x, c.y, innerVertexR)) {
         beginGauntletActive();
       }
     }
     if (phase === 3 && ph.q === lockQ && ph.r === lockR) {
-      const c = hexToWorld(lockQ, lockR);
-      const d = Math.hypot(player.x - c.x, player.y - c.y);
-      if (eligibleForInnerExitReward && d > ARENA_NEXUS_INNER_ENTER_R && cardRewardAt <= 0) {
+      const inSafe = Math.hypot(player.x - safeX, player.y - safeY) <= SURGE_GAUNTLET_SAFE_HIT_R;
+      if (!wasInsideSafeRewardZone) wasInsideSafeRewardZone = inSafe;
+      if (eligibleForInnerExitReward && wasInsideSafeRewardZone && !inSafe) {
         eligibleForInnerExitReward = false;
-        cardRewardAt = elapsed + ARENA_NEXUS_REWARD_MODAL_DELAY_SEC;
+        wasInsideSafeRewardZone = false;
+        if (cardPaused) {
+          rewardPendingOnUnpause = true;
+        } else {
+          dropSpecialEventJokerReward();
+          phase = 4;
+        }
       }
     }
     if (phase !== 2) return;
@@ -336,7 +356,8 @@ export function createGauntletHexEvent(deps) {
         phase = 3;
         awaitMode = "idle";
         eligibleForInnerExitReward = true;
-        cardRewardAt = 0;
+        rewardPendingOnUnpause = false;
+        wasInsideSafeRewardZone = Math.hypot(player.x - safeX, player.y - safeY) <= SURGE_GAUNTLET_SAFE_HIT_R;
         markProceduralSurgeHexSpent(lockQ, lockR);
       } else {
         beginTravelWave();
@@ -370,6 +391,15 @@ export function createGauntletHexEvent(deps) {
     return phase;
   }
 
+  /** Active during outer lock / gauntlet / reward linger — blocks ordnance into the locked hex (REFERENCE `isWorldPointOnSurgeLockBarrierTile`). */
+  function isSurgeLockBarrierWorldPoint(px, py) {
+    if (phase !== 1 && phase !== 2 && phase !== 3) return false;
+    const h = worldToHex(px, py);
+    if (h.q !== lockQ || h.r !== lockR) return false;
+    const c = hexToWorld(h.q, h.r);
+    return Math.hypot(px - c.x, py - c.y) <= HEX_SIZE + 4;
+  }
+
   return {
     reset,
     tick,
@@ -379,5 +409,6 @@ export function createGauntletHexEvent(deps) {
     getDrawState,
     getScreenFlashUntil,
     getPhase,
+    isSurgeLockBarrierWorldPoint,
   };
 }

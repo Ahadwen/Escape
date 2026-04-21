@@ -29,6 +29,10 @@ export function attachArrowKeyState(win = window) {
     isDown(key) {
       return !!down[key];
     },
+    /** Clear held movement keys (REFERENCE `state.keys.clear()` on manual pause). */
+    clearHeld() {
+      for (const k of ARROWS) down[k] = false;
+    },
     dispose() {
       win.removeEventListener("keydown", onDown);
       win.removeEventListener("keyup", onUp);

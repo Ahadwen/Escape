@@ -14,6 +14,19 @@ import {
 } from "../../balance.js";
 import { TAU } from "../../constants.js";
 
+const SQRT3 = Math.sqrt(3);
+
+function pointInsidePointyHex(px, py, cx, cy, vertexRadius) {
+  const dx = Math.abs(px - cx);
+  const dy = Math.abs(py - cy);
+  if (dx > (SQRT3 / 2) * vertexRadius) return false;
+  return dy <= vertexRadius - dx / SQRT3;
+}
+
+function vertexRadiusFromApothem(apothem) {
+  return (2 * apothem) / SQRT3;
+}
+
 /**
  * @typedef {object} ArenaHexEventDeps
  * @property {() => number} getSimElapsed
@@ -152,10 +165,17 @@ export function createArenaHexEvent(deps) {
     const elapsed = getSimElapsed();
     const player = getPlayer();
     const cardPaused = isCardPickupPaused();
+    const ph = worldToHex(player.x, player.y);
 
     if (phase === 2 && cardRewardAt > 0 && elapsed >= cardRewardAt && !cardPaused) {
       cardRewardAt = 0;
       dropSpecialEventJokerReward();
+    }
+    if (phase === 2 && (ph.q !== siegeQ || ph.r !== siegeR)) {
+      // Once the completed arena despawns from active play, reset event state
+      // so future arena tiles start fresh instead of inheriting a spent phase.
+      reset();
+      return;
     }
 
     if (phase === 1) {
@@ -171,11 +191,10 @@ export function createArenaHexEvent(deps) {
     }
 
     if (phase !== 0) return;
-    const ph = worldToHex(player.x, player.y);
     if (!isArenaHexInteractive(ph.q, ph.r)) return;
     const c = hexToWorld(ph.q, ph.r);
-    const dist = Math.hypot(player.x - c.x, player.y - c.y);
-    if (dist <= ARENA_NEXUS_INNER_ENTER_R) beginSiege();
+    const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
+    if (pointInsidePointyHex(player.x, player.y, c.x, c.y, innerVertexR)) beginSiege();
   }
 
   function postHunterTick() {

@@ -6,11 +6,11 @@ export const SNIPER_ARTILLERY_LEAD = 0.82;
 export const SNIPER_ARTILLERY_BANG_DURATION = 0.34;
 
 /** Heal crystal / cross: collision radius (world px); REFERENCE `HEAL_PICKUP_HIT_R`. */
-export const HEAL_PICKUP_HIT_R = 24;
+export const HEAL_PICKUP_HIT_R = 26;
 /** Map card pickup: collision radius (world px); REFERENCE `CARD_PICKUP_HIT_R`. */
-export const CARD_PICKUP_HIT_R = 20;
+export const CARD_PICKUP_HIT_R = 22;
 /** Extra pickup reach beyond `card.r + player.r` (REFERENCE `CARD_PICKUP_REACH_EXTRA`). */
-export const CARD_PICKUP_REACH_EXTRA = 10;
+export const CARD_PICKUP_REACH_EXTRA = 12;
 
 /** Default heal pickup cross half-arm length (world px); REFERENCE `HEAL_PICKUP_PLUS_HALF`. */
 export const HEAL_PICKUP_PLUS_HALF = 13;
