@@ -2,7 +2,7 @@ import {
   SPECIAL_PROCEDURAL_DENOM_MIN,
   SPECIAL_PROCEDURAL_DENOM_START,
   SPECIAL_PROCEDURAL_GRACE_SEC,
-  SPECIAL_PROCEDURAL_POST_SPAWN_LOCK_SEC,
+  SPECIAL_PROCEDURAL_POST_DESPAWN_LOCK_SEC,
   SPECIAL_PROCEDURAL_RAMP_STEP_SEC,
 } from "../balance.js";
 
@@ -62,8 +62,13 @@ export function createSpecialHexRuntime({
   let quadRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
   /** Independent safehouse ramp base (same rule as quartet). */
   let safeRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
-  /** No procedural specials until `sim >=` this value (global lock after any procedural spawn). */
+  /** No new procedural specials until `sim >=` this value (set when an active procedural tile despawns). */
   let spawnLockUntilSim = 0;
+
+  function bumpProceduralSpecialDespawnLock() {
+    const t = getSimElapsed();
+    spawnLockUntilSim = Math.max(spawnLockUntilSim, t + SPECIAL_PROCEDURAL_POST_DESPAWN_LOCK_SEC);
+  }
 
   function setOnProceduralSafehousePlaced(fn) {
     onProceduralSafehousePlaced = typeof fn === "function" ? fn : null;
@@ -125,6 +130,11 @@ export function createSpecialHexRuntime({
     const sim = getSimElapsed();
     if (sim < SPECIAL_PROCEDURAL_GRACE_SEC) return;
     if (sim < spawnLockUntilSim) return;
+    // Block touching any special-touched cell (active, spent, or dev west) so e.g. safehouse
+    // cannot appear adjacent the moment an arena becomes "spent" and leaves procedural sets.
+    for (const d of HEX_DIRS) {
+      if (getVisualKind(q + d.q, r + d.r) !== null) return;
+    }
 
     rouletteSpent.delete(k);
     forgeSpent.delete(k);
@@ -132,17 +142,12 @@ export function createSpecialHexRuntime({
     surgeSpent.delete(k);
     safehouseSpent.delete(k);
 
-    const lockAfterSpawn = () => {
-      spawnLockUntilSim = sim + SPECIAL_PROCEDURAL_POST_SPAWN_LOCK_SEC;
-    };
-
     if (getIsLunatic()) {
       const dSafe = proceduralSpecialDenominator(sim, safeRampBaseSim);
       if (Math.random() >= 1 / dSafe) return;
       proceduralSafehouse.add(k);
       onProceduralSafehousePlaced?.();
       safeRampBaseSim = sim;
-      lockAfterSpawn();
       return;
     }
 
@@ -156,7 +161,6 @@ export function createSpecialHexRuntime({
       else if (kind === "surge") proceduralSurge.add(k);
       else proceduralForge.add(k);
       quadRampBaseSim = sim;
-      lockAfterSpawn();
       return;
     }
 
@@ -165,24 +169,23 @@ export function createSpecialHexRuntime({
     proceduralSafehouse.add(k);
     onProceduralSafehousePlaced?.();
     safeRampBaseSim = sim;
-    lockAfterSpawn();
   }
 
   function purgeProceduralSpecialAnchorsOutsideWindow(neededKeys) {
     for (const s of proceduralRoulette) {
-      if (!neededKeys.has(s)) proceduralRoulette.delete(s);
+      if (!neededKeys.has(s) && proceduralRoulette.delete(s)) bumpProceduralSpecialDespawnLock();
     }
     for (const s of proceduralForge) {
-      if (!neededKeys.has(s)) proceduralForge.delete(s);
+      if (!neededKeys.has(s) && proceduralForge.delete(s)) bumpProceduralSpecialDespawnLock();
     }
     for (const s of proceduralArena) {
-      if (!neededKeys.has(s)) proceduralArena.delete(s);
+      if (!neededKeys.has(s) && proceduralArena.delete(s)) bumpProceduralSpecialDespawnLock();
     }
     for (const s of proceduralSurge) {
-      if (!neededKeys.has(s)) proceduralSurge.delete(s);
+      if (!neededKeys.has(s) && proceduralSurge.delete(s)) bumpProceduralSpecialDespawnLock();
     }
     for (const s of proceduralSafehouse) {
-      if (!neededKeys.has(s)) proceduralSafehouse.delete(s);
+      if (!neededKeys.has(s) && proceduralSafehouse.delete(s)) bumpProceduralSpecialDespawnLock();
     }
     for (const s of rouletteSpent) {
       if (!neededKeys.has(s)) rouletteSpent.delete(s);
@@ -202,11 +205,13 @@ export function createSpecialHexRuntime({
   }
 
   function onTileEvicted(cacheKey) {
-    proceduralRoulette.delete(cacheKey);
-    proceduralForge.delete(cacheKey);
-    proceduralArena.delete(cacheKey);
-    proceduralSurge.delete(cacheKey);
-    proceduralSafehouse.delete(cacheKey);
+    let removedActive = false;
+    if (proceduralRoulette.delete(cacheKey)) removedActive = true;
+    if (proceduralForge.delete(cacheKey)) removedActive = true;
+    if (proceduralArena.delete(cacheKey)) removedActive = true;
+    if (proceduralSurge.delete(cacheKey)) removedActive = true;
+    if (proceduralSafehouse.delete(cacheKey)) removedActive = true;
+    if (removedActive) bumpProceduralSpecialDespawnLock();
     rouletteSpent.delete(cacheKey);
     forgeSpent.delete(cacheKey);
     arenaSpent.delete(cacheKey);
@@ -248,6 +253,7 @@ export function createSpecialHexRuntime({
     if (!proceduralRoulette.has(k)) return;
     proceduralRoulette.delete(k);
     rouletteSpent.add(k);
+    bumpProceduralSpecialDespawnLock();
   }
 
   function isForgeHexTile(q, r) {
@@ -269,6 +275,7 @@ export function createSpecialHexRuntime({
     if (!proceduralForge.has(k)) return;
     proceduralForge.delete(k);
     forgeSpent.add(k);
+    bumpProceduralSpecialDespawnLock();
   }
 
   function isArenaHexTile(q, r) {
@@ -290,6 +297,7 @@ export function createSpecialHexRuntime({
     if (!proceduralArena.has(k)) return;
     proceduralArena.delete(k);
     arenaSpent.add(k);
+    bumpProceduralSpecialDespawnLock();
   }
 
   function isSurgeHexTile(q, r) {
@@ -311,6 +319,7 @@ export function createSpecialHexRuntime({
     if (!proceduralSurge.has(k)) return;
     proceduralSurge.delete(k);
     surgeSpent.add(k);
+    bumpProceduralSpecialDespawnLock();
   }
 
   function isSafehouseHexActiveTile(q, r) {
@@ -360,8 +369,10 @@ export function createSpecialHexRuntime({
     if (proceduralSafehouse.has(k)) {
       proceduralSafehouse.delete(k);
       safehouseSpent.add(k);
+      bumpProceduralSpecialDespawnLock();
     } else if (isDev) {
       safehouseSpent.add(k);
+      bumpProceduralSpecialDespawnLock();
     } else {
       return;
     }

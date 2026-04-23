@@ -23,13 +23,33 @@ import { forEachDeckCard } from "./items/inventoryState.js";
  * @property {() => boolean} [isDashCoolingDown]
  * @property {(secs: number) => void} [stunNearbyEnemies]
  * @property {() => void} [onPlayerDeath]
+ * @property {() => boolean} [rogueStealthBlocksDamage] — REFERENCE rogue `shouldIgnoreDamage`
+ * @property {() => boolean} [getLunaticSprintDamageImmune] — sprint/decel damage immunity (still takes `lunaticCrash` / `lunaticRoarTerrain`)
+ * @property {() => boolean} [getIsValiant]
+ * @property {(amount: number, opts?: object) => void} [applyValiantIncomingDamage] — rabbits / Will; skips normal HP
+ * @property {() => boolean} [getBulwarkParryActive] — true during Bulwark W: block damage from all directions
+ * @property {() => number | null} [getPostHitInvulnerabilitySec] — override default i-frame duration (Bulwark)
  */
 
 /**
  * @param {PlayerDamageDeps} deps
  */
 export function createPlayerDamage(deps) {
-  const { getSimElapsed, getPlayer, inventory, getCharacterInvulnUntil, isDashCoolingDown, stunNearbyEnemies, onPlayerDeath } = deps;
+  const {
+    getSimElapsed,
+    getPlayer,
+    inventory,
+    getCharacterInvulnUntil,
+    isDashCoolingDown,
+    stunNearbyEnemies,
+    onPlayerDeath,
+    rogueStealthBlocksDamage,
+    getLunaticSprintDamageImmune,
+    getIsValiant,
+    applyValiantIncomingDamage,
+    getBulwarkParryActive,
+    getPostHitInvulnerabilitySec,
+  } = deps;
 
   const combat = {
     playerInvulnerableUntil: 0,
@@ -103,8 +123,11 @@ export function createPlayerDamage(deps) {
       const invulnGate = Math.max(combat.playerInvulnerableUntil, getCharacterInvulnUntil());
       if (elapsed < invulnGate) return;
       if (elapsed < combat.playerUntargetableUntil) return;
+      if (rogueStealthBlocksDamage?.()) return;
+      if (getLunaticSprintDamageImmune?.() && !opts.lunaticCrash && !opts.lunaticRoarTerrain) return;
       if (elapsed < (inventory.clubsInvisUntil ?? 0)) return;
       if ((isDashCoolingDown?.() ?? false) && Math.random() < getDodgeChanceWhenDashCd()) return;
+      if (getBulwarkParryActive?.()) return;
 
       const arcDeg = getFrontShieldArcDeg();
       if (arcDeg > 0 && opts.sourceX != null && opts.sourceY != null) {
@@ -136,6 +159,11 @@ export function createPlayerDamage(deps) {
 
     if (amount <= 0) return;
 
+    if (getIsValiant?.()) {
+      applyValiantIncomingDamage?.(amount, opts);
+      return;
+    }
+
     let rem = amount;
     const temp = player.tempHp ?? 0;
     if (temp > 0) {
@@ -155,7 +183,10 @@ export function createPlayerDamage(deps) {
     }
 
     combat.hurtFlashRemain = DAMAGE_HURT_FLASH_SEC;
-    combat.playerInvulnerableUntil = elapsed + DAMAGE_PLAYER_INVULN_SEC;
+    const invulnSec = getPostHitInvulnerabilitySec?.();
+    const invulnDur =
+      typeof invulnSec === "number" && Number.isFinite(invulnSec) && invulnSec > 0 ? invulnSec : DAMAGE_PLAYER_INVULN_SEC;
+    combat.playerInvulnerableUntil = elapsed + invulnDur;
     combat.screenShakeUntil = elapsed + DAMAGE_SCREEN_SHAKE_SEC;
     combat.screenShakeStrength = Math.max(combat.screenShakeStrength, DAMAGE_SCREEN_SHAKE_STRENGTH);
     const stunSecs = getStunOnHitSecs();
@@ -215,8 +246,17 @@ export function createPlayerDamage(deps) {
     combat.playerInvulnerableUntil = Math.max(combat.playerInvulnerableUntil, until);
   }
 
+  /** Hunger / script deaths — bypasses i-frames, dodge, and hearts death-defy. */
+  function killPlayerImmediate() {
+    const player = getPlayer();
+    if (player.hp <= 0) return;
+    player.hp = 0;
+    onPlayerDeath?.();
+  }
+
   return {
     damagePlayer,
+    killPlayerImmediate,
     combat,
     tickCombatPresentation,
     getShakeOffset,

@@ -7,10 +7,16 @@ export function createEmptyInventory() {
   return {
     deckByRank,
     backpackSlots: /** @type {(object | null)[]} */ ([null, null, null]),
+    diamondEmpower: null,
+    valiantElectricBoxChargeBonus: 0,
     heartsRegenPerSec: 0,
     heartsRegenBank: 0,
     spadesObstacleBoostUntil: 0,
     aceUltimateReadyAt: 0,
+    /** Seven diamonds in rank deck — larger dash range and smoke radius (rogue). */
+    rogueDiamondRangeBoost: false,
+    /** Lunatic passive fractional HP bank (whole HP granted when bank ≥ 1). */
+    lunaticRegenBank: 0,
   };
 }
 

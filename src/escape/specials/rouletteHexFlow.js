@@ -24,6 +24,8 @@ export function createRouletteHexFlow({ hexKey }) {
   /** Session flag while still inside the hex (REFERENCE `rouletteForgeComplete`). */
   let forgeComplete = false;
   let wasInsidePenaltyRing = false;
+  /** True until the first inner-hex crossing after lock; used to gate barrier/projectile shielding window. */
+  let preInnerCrossLockActive = false;
   /** @type {Set<string>} */
   const outerDamageAppliedKeys = new Set();
   let screenFlashUntil = 0;
@@ -36,6 +38,7 @@ export function createRouletteHexFlow({ hexKey }) {
     lockQ = 0;
     lockR = 0;
     wasInsidePenaltyRing = false;
+    preInnerCrossLockActive = false;
   }
 
   function resetSession() {
@@ -85,6 +88,7 @@ export function createRouletteHexFlow({ hexKey }) {
       lockQ = ph.q;
       lockR = ph.r;
       phase = 1;
+      preInnerCrossLockActive = true;
       screenFlashUntil = 0;
       // Baseline on entry so damage only occurs on a real subsequent crossing.
       wasInsidePenaltyRing = insidePenaltyRing;
@@ -108,6 +112,8 @@ export function createRouletteHexFlow({ hexKey }) {
       !forgeComplete &&
       !innerExitLatch
     ) {
+      // User-facing lock window ends on first inner crossing.
+      preInnerCrossLockActive = false;
       innerExitLatch = true;
       o.openRouletteModal();
     }
@@ -139,7 +145,10 @@ export function createRouletteHexFlow({ hexKey }) {
   }
 
   function isOuterBarrierWorldPoint(px, py, worldToHex, hexToWorld, isRouletteHexInteractive) {
+    // Hot path: avoid per-sample hex checks unless the event is actively in pre-inner lock.
+    if (phase !== 1 || !preInnerCrossLockActive) return false;
     const h = worldToHex(px, py);
+    if (h.q !== lockQ || h.r !== lockR) return false;
     if (!isRouletteHexInteractive(h.q, h.r)) return false;
     const c = hexToWorld(h.q, h.r);
     return Math.hypot(px - c.x, py - c.y) <= OUTER_BARRIER_R + 1.5;

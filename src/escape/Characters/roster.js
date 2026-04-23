@@ -15,19 +15,26 @@ export const HERO_ROSTER = [
     id: "rogue",
     title: "Hungry Rogue",
     meta: "High risk · hunger · stealth & smoke",
-    implemented: false,
+    implemented: true,
   },
   {
     id: "lunatic",
     title: "The Lunatic",
-    meta: "No cards · sprint charge · roar through walls",
-    implemented: false,
+    meta: "No cards · sprint charge · roar through walls · 18 HP · crystals +max HP",
+    implemented: true,
   },
   {
     id: "valiant",
     title: "The Valiant",
     meta: "Will meter · find and protect rabbits · shock fields",
-    implemented: false,
+    implemented: true,
+  },
+  {
+    id: "bulwark",
+    title: "Bulwark",
+    /** Keep HP line in sync with `BULWARK_MAX_HP` in `balance.js` / `Bulwark.js`. */
+    meta: "Mostly unstoppable · 15 HP · charge / parry / rally flag",
+    implemented: true,
   },
 ];
 

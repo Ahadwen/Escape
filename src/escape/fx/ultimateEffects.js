@@ -177,33 +177,19 @@ export function drawUltimateEffects(ctx, effects, shields, elapsed, player) {
     const pop = 0.2 + 0.8 * (1 - Math.pow(1 - spawnAge, 2.4));
     const pulse = 0.9 + 0.1 * Math.sin(elapsed * 8 + shield.angle * 2.2);
     const drawR = shield.r * pop * pulse;
-    const travelAng = Math.atan2(shield.y - player.y, shield.x - player.x);
-    const tailLen = 8 + drawR * 0.8;
-    const tx = shield.x - Math.cos(travelAng) * tailLen;
-    const ty = shield.y - Math.sin(travelAng) * tailLen;
-    ctx.strokeStyle = "rgba(125, 211, 252, 0.55)";
-    ctx.lineWidth = 2;
+    const tx = -Math.sin(shield.angle);
+    const ty = Math.cos(shield.angle);
+    ctx.strokeStyle = "rgba(147, 197, 253, 0.35)";
+    ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.moveTo(shield.x, shield.y);
-    ctx.lineTo(tx, ty);
+    ctx.moveTo(shield.x - tx * (drawR + 6), shield.y - ty * (drawR + 6));
+    ctx.lineTo(shield.x + tx * (drawR + 14), shield.y + ty * (drawR + 14));
     ctx.stroke();
-    drawCircle(ctx, shield.x, shield.y, drawR + 4, "#e0f2fe", 0.48);
+    drawCircle(ctx, shield.x, shield.y, drawR + 9, "#bfdbfe", 0.28);
+    drawCircle(ctx, shield.x, shield.y, drawR + 4, "#e0f2fe", 0.45);
     drawCircle(ctx, shield.x, shield.y, drawR, "#38bdf8", 0.95);
-    drawCircle(ctx, shield.x, shield.y, Math.max(2, drawR * 0.42), "#ffffff", 0.8);
-    ctx.strokeStyle = "rgba(186, 230, 253, 0.8)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    const facets = 6;
-    for (let i = 0; i <= facets; i++) {
-      const a = (i / facets) * TAU + elapsed * 1.8;
-      const px = shield.x + Math.cos(a) * (drawR + 2);
-      const py = shield.y + Math.sin(a) * (drawR + 2);
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(255,255,255,0.88)";
-    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(shield.x, shield.y, drawR + 1.2, 0, TAU);
     ctx.stroke();
@@ -211,18 +197,13 @@ export function drawUltimateEffects(ctx, effects, shields, elapsed, player) {
 
   if (shields.length) {
     const orbitR = shields[0].radius;
-    ctx.strokeStyle = "rgba(147, 197, 253, 0.35)";
-    ctx.lineWidth = 2.5;
-    ctx.setLineDash([7, 9]);
+    ctx.strokeStyle = "rgba(147, 197, 253, 0.2)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 10]);
     ctx.lineDashOffset = -elapsed * 40;
     ctx.beginPath();
     ctx.arc(player.x, player.y, orbitR, 0, TAU);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.strokeStyle = "rgba(219, 234, 254, 0.25)";
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, orbitR + 7, 0, TAU);
-    ctx.stroke();
   }
 }

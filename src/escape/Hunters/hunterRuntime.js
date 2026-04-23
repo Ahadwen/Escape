@@ -21,6 +21,9 @@ import {
   LASER_BLUE_WARN_SEC,
   HUNTER_SPEED_AGE_COEFF,
   ENEMY_HIT_COOLDOWN_SEC,
+  BULWARK_CHARGE_WALL_STUN_SEC,
+  BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN,
+  BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC,
 } from "../balance.js";
 import { SNIPER_ARTILLERY_WINDUP, SNIPER_ARTILLERY_LEAD, SNIPER_ARTILLERY_BANG_DURATION } from "../constants.js";
 import {
@@ -52,8 +55,8 @@ import {
  * @property {(a: number, b: number) => number} rand
  * @property {() => { w: number; h: number }} getViewSize
  * @property {(amount: number, opts?: object) => void} damagePlayer
- * @property {(source: { x: number; y: number }, range: number) => boolean} hitDecoyIfAny
- * @property {(x1: number, y1: number, x2: number, y2: number, extra: number) => boolean} hitDecoyAlongSegment
+ * @property {(source: { x: number; y: number }, range: number, opts?: { artilleryKind?: "detonation" | "linger"; damage?: number }) => boolean} hitDecoyIfAny
+ * @property {(x1: number, y1: number, x2: number, y2: number, extra: number, opts?: { laserOneShotId?: number; damage?: number }) => boolean} hitDecoyAlongSegment
  * @property {(x: number, y: number) => { q: number; r: number }} [worldToHex]
  * @property {(q: number, r: number) => { x: number; y: number }} [hexToWorld]
  * @property {(q: number, r: number) => boolean} [isArenaHexTile]
@@ -65,6 +68,11 @@ import {
  * @property {(x: number, y: number) => boolean} [isWorldPointOnSafehouseBarrierDisk]
  * @property {(h: any) => void} [clampHunterOutsideSafehouseDisk]
  * @property {(x: number, y: number) => boolean} [isWorldPointOnForgeRouletteBarrierTile]
+ * @property {() => object} [getInventory] — for `clubsInvisUntil` / rogue stealth windows
+ * @property {() => number} [getPlayerUntargetableUntil]
+ * @property {(hunter: any, player: any, nearestDecoy: (h: any) => any, hasLOS: (a: any, b: any) => boolean, fallback: { x: number; y: number }, elapsed: number) => any} [pickRogueHunterTarget]
+ * @property {(circle: { x: number; y: number; r: number }, elapsed: number) => boolean} [collidesValiantEnemyShockField] — hunter-only shock rects (Valiant W)
+ * @property {() => { x: number; y: number; r: number; lureR: number } | null} [getBulwarkPlantedFlag] — planted Bulwark flag lures hunters in radius
  */
 
 export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
@@ -90,6 +98,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     isWorldPointOnSafehouseBarrierDisk: safehouseBarrierDep,
     clampHunterOutsideSafehouseDisk: clampSafehouseDep,
     isWorldPointOnForgeRouletteBarrierTile: forgeRouletteBarrierDep,
+    getInventory: getInventoryDep,
+    getPlayerUntargetableUntil: getPlayerUntargetableUntilDep,
+    pickRogueHunterTarget: pickRogueHunterTargetDep,
+    collidesValiantEnemyShockField: collidesValiantEnemyShockFieldDep,
+    getBulwarkPlantedFlag: getBulwarkPlantedFlagDep,
   } = deps;
 
   const worldToHex = worldToHexDep ?? (() => ({ q: 0, r: 0 }));
@@ -103,6 +116,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const isWorldPointOnSafehouseBarrierDisk = safehouseBarrierDep ?? (() => false);
   const clampHunterOutsideSafehouseDisk = clampSafehouseDep ?? (() => {});
   const isWorldPointOnForgeRouletteBarrierTile = forgeRouletteBarrierDep ?? (() => false);
+  const getInventory = getInventoryDep ?? (() => ({}));
+  const getPlayerUntargetableUntil = getPlayerUntargetableUntilDep ?? (() => 0);
+  const pickRogueHunterTarget = pickRogueHunterTargetDep ?? null;
+  const getBulwarkPlantedFlag = getBulwarkPlantedFlagDep ?? (() => null);
 
   const entities = {
     /** @type {any[]} */
@@ -117,6 +134,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     bullets: [],
   };
   let suppressRangedAttacksNow = false;
+  /** Unique id per damaging laser beam — Bulwark flag takes at most 1 HP per beam from the segment. */
+  let nextLaserBeamDamageId = 1;
 
   const spawnState = {
     wave: 0,
@@ -226,19 +245,23 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
   function moveCircleWithCollisions(entity, vx, vy, dt, opts = {}) {
     const ignoreObstacles = !!opts.ignoreObstacles;
+    const blockValiantShock = !!opts.blockValiantEnemyShockFields;
+    const elapsed = getSimElapsed();
     let touchedObstacle = false;
     const nx = { x: entity.x + vx * dt, y: entity.y, r: entity.r };
     const nxBlocked =
       outOfBoundsCircle(nx) ||
       isWorldPointOnForgeRouletteBarrierTile(nx.x, nx.y) ||
-      (!ignoreObstacles && collidesAnyObstacle(nx));
+      (!ignoreObstacles && collidesAnyObstacle(nx)) ||
+      (blockValiantShock && !!collidesValiantEnemyShockFieldDep?.(nx, elapsed));
     if (!nxBlocked) entity.x = nx.x;
     else if (!ignoreObstacles) touchedObstacle = true;
     const ny = { x: entity.x, y: entity.y + vy * dt, r: entity.r };
     const nyBlocked =
       outOfBoundsCircle(ny) ||
       isWorldPointOnForgeRouletteBarrierTile(ny.x, ny.y) ||
-      (!ignoreObstacles && collidesAnyObstacle(ny));
+      (!ignoreObstacles && collidesAnyObstacle(ny)) ||
+      (blockValiantShock && !!collidesValiantEnemyShockFieldDep?.(ny, elapsed));
     if (!nyBlocked) entity.y = ny.y;
     else if (!ignoreObstacles) touchedObstacle = true;
     return { touchedObstacle };
@@ -261,6 +284,33 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
   function pickTargetForHunter(hunter) {
     const player = getPlayer();
+    const elapsed = getSimElapsed();
+    const fallback = { x: hunter.x + hunter.dir.x * 40, y: hunter.y + hunter.dir.y * 40 };
+
+    if (elapsed < getPlayerUntargetableUntil()) {
+      return nearestDecoy(hunter) || fallback;
+    }
+
+    const bFlag = getBulwarkPlantedFlag();
+    if (bFlag) {
+      const lr = bFlag.lureR ?? 300;
+      if (distSq(hunter, bFlag) <= lr * lr) {
+        return { x: bFlag.x, y: bFlag.y, r: bFlag.r ?? 26 };
+      }
+    }
+
+    const inv = getInventory();
+    if (getCharacterId() === "rogue" && pickRogueHunterTarget) {
+      return pickRogueHunterTarget(hunter, player, inv, nearestDecoy, hasLineOfSight, fallback, elapsed);
+    }
+
+    if (elapsed < (inv.clubsInvisUntil ?? 0)) {
+      return nearestDecoy(hunter) || fallback;
+    }
+    if (getCharacterId() === "rogue" && elapsed < (inv.spadesLandingStealthUntil ?? 0)) {
+      return nearestDecoy(hunter) || fallback;
+    }
+
     const target = player;
     if (!getDecoys().length) return target;
     if (hunter.type === "chaser" || hunter.type === "fast") {
@@ -566,12 +616,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function sniperArtillerySuppressedByRoulette(sniperX, sniperY, aimX, aimY) {
     if (isWorldPointOnSurgeLockBarrierTile(aimX, aimY)) return true;
     if (isWorldPointOnSafehouseBarrierDisk(aimX, aimY)) return true;
+    if (isWorldPointOnForgeRouletteBarrierTile(aimX, aimY)) return true;
     for (let s = 0; s <= 28; s++) {
       const u = s / 28;
       const sx = sniperX + (aimX - sniperX) * u;
       const sy = sniperY + (aimY - sniperY) * u;
       if (isWorldPointOnSurgeLockBarrierTile(sx, sy)) return true;
       if (isWorldPointOnSafehouseBarrierDisk(sx, sy)) return true;
+      if (isWorldPointOnForgeRouletteBarrierTile(sx, sy)) return true;
     }
     return false;
   }
@@ -640,7 +692,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const u = s / 16;
         const sx = b.x + (b.tx - b.x) * u;
         const sy = b.y + (b.ty - b.y) * u;
-        if (isWorldPointOnSurgeLockBarrierTile(sx, sy) || collidesAnyObstacle({ x: sx, y: sy, r: 2 })) {
+        if (
+          isWorldPointOnSurgeLockBarrierTile(sx, sy) ||
+          isWorldPointOnSafehouseBarrierDisk(sx, sy) ||
+          isWorldPointOnForgeRouletteBarrierTile(sx, sy) ||
+          collidesAnyObstacle({ x: sx, y: sy, r: 2 })
+        ) {
           hitBarrier = true;
           break;
         }
@@ -655,7 +712,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const zone = entities.dangerZones[i];
       if (!zone.exploded && elapsed >= zone.detonateAt) {
         zone.exploded = true;
-        if (!hitDecoyIfAny(zone, zone.r)) {
+        if (!hitDecoyIfAny(zone, zone.r, { artilleryKind: "detonation", damage: 1 })) {
           const rr = zone.r + player.r;
           if (distSq(zone, player) <= rr * rr) damagePlayer(2, { sourceX: zone.x, sourceY: zone.y });
         }
@@ -666,7 +723,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         elapsed >= (zone.nextTickAt ?? Infinity)
       ) {
         zone.nextTickAt += zone.tickInterval ?? 0.3;
-        if (!hitDecoyIfAny(zone, zone.r * 0.92)) {
+        if (!hitDecoyIfAny(zone, zone.r * 0.92, { artilleryKind: "linger" })) {
           const rr = zone.r * 0.92 + player.r;
           if (distSq(zone, player) <= rr * rr) damagePlayer(1, { sourceX: zone.x, sourceY: zone.y });
         }
@@ -766,6 +823,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
               h.nextLaserReadyAt = elapsed + h.laserCooldown;
               continue;
             }
+            const laserDamageId = nextLaserBeamDamageId++;
             entities.laserBeams.push({
               x1: aim.x1,
               y1: aim.y1,
@@ -776,8 +834,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
               warning: false,
               active: true,
               blueLaser: isBlue,
+              damageId: laserDamageId,
             });
-            if (!hitDecoyAlongSegment(aim.x1, aim.y1, aim.x2, aim.y2, 5)) {
+            if (!hitDecoyAlongSegment(aim.x1, aim.y1, aim.x2, aim.y2, 5, { laserOneShotId: laserDamageId })) {
               const hitDist = pointToSegmentDistance(player.x, player.y, aim.x1, aim.y1, aim.x2, aim.y2);
               if (hitDist <= player.r + 5) {
                 damagePlayer(
@@ -845,7 +904,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           const nx = h.x + h.chaserDashDir.x * stepLen;
           const ny = h.y + h.chaserDashDir.y * stepLen;
           const test = { x: nx, y: ny, r: h.r };
-          if (outOfBoundsCircle(test) || collidesAnyObstacle(test)) {
+          if (
+            outOfBoundsCircle(test) ||
+            collidesAnyObstacle(test) ||
+            !!collidesValiantEnemyShockFieldDep?.(test, elapsed)
+          ) {
             h.chaserDashPhase = "chase";
             h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
           } else {
@@ -879,7 +942,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const dlen = Math.hypot(h.dir.x, h.dir.y) || 1;
       h.dir.x /= dlen;
       h.dir.y /= dlen;
-      moveCircleWithCollisions(h, h.dir.x * speed, h.dir.y * speed, spDt, {});
+      moveCircleWithCollisions(h, h.dir.x * speed, h.dir.y * speed, spDt, { blockValiantEnemyShockFields: true });
     }
     for (const h of entities.hunters) {
       clampHunterOutsideSafehouseDisk(h);
@@ -1044,7 +1107,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const player = getPlayer();
     for (const beam of entities.laserBeams) {
       if (beam.warning || !beam.active) continue;
-      if (!hitDecoyAlongSegment(beam.x1, beam.y1, beam.x2, beam.y2, 5)) {
+      const laserOpts =
+        typeof beam.damageId === "number" ? { laserOneShotId: beam.damageId, damage: 1 } : { damage: 1 };
+      if (!hitDecoyAlongSegment(beam.x1, beam.y1, beam.x2, beam.y2, 5, laserOpts)) {
         const hitDist = pointToSegmentDistance(player.x, player.y, beam.x1, beam.y1, beam.x2, beam.y2);
         if (hitDist <= player.r + 5) {
           damagePlayer(
@@ -1159,7 +1224,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function ejectHuntersFromSurgeLockHex(lockQ, lockR, surgePhase) {
-    if (surgePhase !== 1 && surgePhase !== 2 && surgePhase !== 3) return;
+    if (surgePhase !== 1 && surgePhase !== 2) return;
     const { x: cx, y: cy } = hexToWorld(lockQ, lockR);
     const edgeR = HEX_SIZE + 14;
     for (const h of entities.hunters) {
@@ -1214,10 +1279,70 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
+  function hasEnemyLineOfSightToPlayer(hunter) {
+    return hasLineOfSight(hunter, getPlayer());
+  }
+
+  /** Bulwark W: radial knockback (Earthquake-style displacement on hunters in radius). */
+  function bulwarkParryPushHunters(px, py, radius, pushDist) {
+    for (const h of entities.hunters) {
+      if (h.type === "spawner" || h.type === "airSpawner") continue;
+      const dx = h.x - px;
+      const dy = h.y - py;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d > radius) continue;
+      const nx = dx / d;
+      const ny = dy / d;
+      h.x += nx * pushDist;
+      h.y += ny * pushDist;
+      h.dir = { x: nx, y: ny };
+      const c = { x: h.x, y: h.y, r: h.r };
+      if (collidesAnyObstacle(c)) {
+        h.x -= nx * pushDist * 0.5;
+        h.y -= ny * pushDist * 0.5;
+      }
+    }
+  }
+
+  /**
+   * Bulwark Q: shove hunters with the charge segment; optional `pushedOut` collects shoved hunters for terrain-end stun.
+   * @param {Set<object> | null} [pushedOut]
+   */
+  function bulwarkChargePushHunters(prevX, prevY, nextX, nextY, playerR, elapsed, pushedOut = null) {
+    const dx = nextX - prevX;
+    const dy = nextY - prevY;
+    if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) return;
+    for (const h of entities.hunters) {
+      if (h.type === "spawner" || h.type === "airSpawner") continue;
+      const dist = pointToSegmentDistance(h.x, h.y, prevX, prevY, nextX, nextY);
+      if (dist > playerR + h.r + BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN) continue;
+      h.x += dx;
+      h.y += dy;
+      pushedOut?.add(h);
+      const c = { x: h.x, y: h.y, r: h.r };
+      if (collidesAnyObstacle(c) || outOfBoundsCircle(c)) {
+        h.x -= dx * 0.4;
+        h.y -= dy * 0.4;
+        h.stunnedUntil = Math.max(h.stunnedUntil || 0, elapsed + BULWARK_CHARGE_WALL_STUN_SEC);
+      }
+    }
+  }
+
+  /** Stun everyone Bulwark shoved during a charge when that charge ends on terrain. */
+  function bulwarkChargeApplyTerrainGroupStun(pushedSet, elapsed) {
+    if (!pushedSet || pushedSet.size === 0) return;
+    const until = elapsed + BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC;
+    for (const h of pushedSet) {
+      if (!h || h.type === "spawner" || h.type === "airSpawner") continue;
+      h.stunnedUntil = Math.max(h.stunnedUntil || 0, until);
+    }
+  }
+
   return {
     entities,
     spawnState,
     getDangerRamp01,
+    hasEnemyLineOfSightToPlayer,
     tick,
     draw,
     reset,
@@ -1229,5 +1354,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     ejectHuntersFromArenaNexusDuringSiege,
     clampArenaNexusDefendersOnRing,
     ejectHuntersFromSurgeLockHex,
+    bulwarkChargePushHunters,
+    bulwarkChargeApplyTerrainGroupStun,
+    bulwarkParryPushHunters,
   };
 }

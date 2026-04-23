@@ -1,6 +1,6 @@
 import { getEquippedUltimateType, buildEquippedUltimateHud } from "../items/ultimateSlot.js";
 import { forEachDeckCard } from "../items/inventoryState.js";
-import { SET_BONUS_SUIT_THRESHOLD } from "../balance.js";
+import { SET_BONUS_SUIT_THRESHOLD, SET_BONUS_SUIT_MAX } from "../balance.js";
 
 /** HUD + shell copy (single source for this hero’s player-facing names). */
 const LABEL_Q = "Dash";
@@ -13,7 +13,8 @@ export const KNIGHT_MAX_HP = 10;
 
 /** Cooldowns / tuning aligned with REFERENCE knight kit (seconds). */
 const DASH_COOLDOWN = 2.2;
-const DASH_DISTANCE = 230;
+const DASH_DISTANCE = 120;
+const DASH_DISTANCE_EMPOWERED = 240;
 const BURST_COOLDOWN = 5;
 const BURST_DURATION = 3;
 /** REFERENCE move path uses `wBurstMult = 2` while burst is active (without diamond speed empower). */
@@ -118,6 +119,12 @@ export function createKnight() {
     return passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD && inventory.diamondEmpower === "speedPassive";
   }
 
+  function dashDistanceForState(passive, inventory) {
+    const omniEmpower = passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
+    const dash2xEmpower = inventory?.diamondEmpower === "dash2x";
+    return dash2xEmpower || omniEmpower ? DASH_DISTANCE_EMPOWERED : DASH_DISTANCE;
+  }
+
   function tryDash(ctx) {
     const { player, elapsed, resolvePlayer, spawnAttackRing, circleHitsObstacle, inventory } = ctx;
     const passive = collectPassive(inventory);
@@ -129,6 +136,7 @@ export function createKnight() {
       dashNextRechargeAt = elapsed + dashCd;
       dashReadyAt = dashNextRechargeAt;
     }
+    const dashDistance = dashDistanceForState(passive, inventory);
     const len = Math.hypot(player.facing.x, player.facing.y) || 1;
     const fx = player.facing.x / len;
     const fy = player.facing.y / len;
@@ -139,7 +147,7 @@ export function createKnight() {
     let ty = player.y;
     let progressed = false;
     if (typeof circleHitsObstacle === "function") {
-      for (let d = step; d <= DASH_DISTANCE; d += step) {
+      for (let d = step; d <= dashDistance; d += step) {
         const nx = player.x + fx * d;
         const ny = player.y + fy * d;
         if (circleHitsObstacle(nx, ny, player.r)) continue;
@@ -148,8 +156,8 @@ export function createKnight() {
         progressed = true;
       }
     } else {
-      tx = player.x + fx * DASH_DISTANCE;
-      ty = player.y + fy * DASH_DISTANCE;
+      tx = player.x + fx * dashDistance;
+      ty = player.y + fy * dashDistance;
       progressed = true;
     }
 

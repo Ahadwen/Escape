@@ -43,8 +43,8 @@ export const SET_BONUS_SUIT_MAX = 13;
 
 /** No procedural specials (except dev west-test hex) until this many seconds of sim time. */
 export const SPECIAL_PROCEDURAL_GRACE_SEC = 15;
-/** After any procedural special spawns, none may spawn until this many seconds later. */
-export const SPECIAL_PROCEDURAL_POST_SPAWN_LOCK_SEC = 15;
+/** Minimum sim-time after a procedural special tile despawns (spent or leaves the tile cache) before another may spawn. */
+export const SPECIAL_PROCEDURAL_POST_DESPAWN_LOCK_SEC = 10;
 /** Procedural special spawn chance is `1 / denominator`; denominator starts here and tightens over time. */
 export const SPECIAL_PROCEDURAL_DENOM_START = 30;
 /** Minimum denominator (max chance) for procedural special rolls (`1/12`). */
@@ -132,6 +132,53 @@ export const ENEMY_HIT_COOLDOWN_SEC = 0.52;
 
 export const DAMAGE_HURT_FLASH_SEC = 0.16;
 export const DAMAGE_PLAYER_INVULN_SEC = 0.35;
+/** Bulwark: longer post-hit invulnerability than `DAMAGE_PLAYER_INVULN_SEC`. */
+export const BULWARK_POST_HIT_INVULN_SEC = 0.52;
+
+/** --- Bulwark (flag + death lock) --- */
+export const BULWARK_FLAG_MAX_HP = 10;
+/** Planted flag ignores decoy damage briefly (avoids same-frame hunter pile + eases plant read). */
+export const BULWARK_FLAG_PLANT_INVULN_SEC = 0.55;
+/** While planted, one charge stacks this often (pickup heal = charge count × `BULWARK_FLAG_PICKUP_HEAL_PER_CHARGE`). */
+export const BULWARK_FLAG_PLANT_CHARGE_INTERVAL_SEC = 0.5;
+/** Hero HP restored per charge when picking up the planted flag. */
+export const BULWARK_FLAG_PICKUP_HEAL_PER_CHARGE = 1;
+export const BULWARK_FLAG_PICKUP_R = 22;
+/** Hunters within this range of a planted flag treat the flag as their chase target. */
+export const BULWARK_FLAG_LURE_RADIUS = 320;
+/** Carried flag HP/sec (fractional; UI uses floor until the next whole). */
+export const BULWARK_FLAG_RECHARGE_PER_SEC = 0.6;
+/** Player within this range of planted flag gets short Q/W cooldowns. */
+export const BULWARK_NEAR_FLAG_CD_RADIUS = 200;
+export const BULWARK_DEATH_LOCK_RADIUS = 220;
+export const BULWARK_DEATH_LOCK_SEC = 8;
+export const BULWARK_FLAG_RESPAWN_HP = 1;
+
+export const BULWARK_MAX_HP = 15;
+export const BULWARK_CHARGE_COOLDOWN_SEC = 8;
+export const BULWARK_CHARGE_COOLDOWN_NEAR_FLAG_SEC = 1.5;
+export const BULWARK_PARRY_COOLDOWN_SEC = 8;
+export const BULWARK_PARRY_COOLDOWN_NEAR_FLAG_SEC = 1.5;
+export const BULWARK_PARRY_DURATION_SEC = 0.2;
+/** Total forward travel for one Q (world px). */
+export const BULWARK_CHARGE_DISTANCE = 236;
+/** Forward speed during Q hold (world px/s). */
+export const BULWARK_CHARGE_SPEED = 410;
+/**
+ * Wider charge “corridor”: hunters within `playerR + h.r + margin` of the charge segment get carried.
+ * (Previously a fixed +8; larger margin = wider shove.)
+ */
+export const BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN = 30;
+/** Always-on narrow front block arc (stacks with hearts `frontShield` card arc). */
+export const BULWARK_PASSIVE_FRONT_SHIELD_DEG = 52;
+export const BULWARK_CHARGE_FRONT_SHIELD_DEG = 148;
+/** Parry AoE; Earthquake wave uses 250 — slightly smaller defensive circle. */
+export const BULWARK_PARRY_PUSH_RADIUS = 200;
+/** Same radial displacement as one Earthquake wave (`ultimateSlot` / `entry` burst ticks). */
+export const BULWARK_PARRY_PUSH_DIST = 95;
+export const BULWARK_CHARGE_WALL_STUN_SEC = 0.95;
+/** When Q stops on terrain, every hunter shoved during that charge gets this stun (sec). */
+export const BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC = 0.6;
 export const DAMAGE_SCREEN_SHAKE_SEC = 0.18;
 export const DAMAGE_SCREEN_SHAKE_STRENGTH = 8;
 export const LASER_BLUE_PLAYER_SLOW_MULT = 0.8;
@@ -142,3 +189,70 @@ export const HEARTS_13_DEATH_DEFY_CD_SEC = 30;
 export const CLUBS_13_UNTARGETABLE_SEC = 1;
 /** Terrain-touch speed boost linger from spades cards (REFERENCE `TERRAIN_SPEED_BOOST_LINGER`). */
 export const TERRAIN_SPEED_BOOST_LINGER = 0.16;
+
+// --- Rogue (REFERENCE `balance.js` / `rogue/module.js`) ---
+
+export const ROGUE_STEALTH_AFTER_LOS_BREAK = 0.35;
+export const ROGUE_STEALTH_OPEN_GRACE = 0.4;
+export const ROGUE_FOOD_HUNGER_RESTORE = 30;
+export const ROGUE_FOOD_LIFETIME = 21;
+export const ROGUE_FOOD_SENSE_DURATION = 2.35;
+export const ROGUE_FOOD_ARROW_CLOSE_PLATEAU = 96;
+export const ROGUE_FOOD_ARROW_FAR_LEN = 440;
+export const ROGUE_DESPERATION_SPEED_MAX = 0.2;
+/** Hunger timer max / starting value (REFERENCE `state.rogueHungerMax`). */
+export const ROGUE_HUNGER_MAX = 60;
+/** Seconds until first rogue food spawn after a reset (REFERENCE run init). */
+export const ROGUE_FIRST_FOOD_AT_SEC = 6;
+
+// --- Lunatic (REFERENCE `standalone.js` tuning) ---
+
+export const LUNATIC_PASSIVE_HP_PER_SEC = 0.28;
+export const LUNATIC_STUMBLE_MOVE_MULT = 0.66;
+export const LUNATIC_W_TOGGLE_COOLDOWN_SEC = 4;
+export const LUNATIC_SPRINT_MOMENTUM_RAMP_SEC = 8;
+export const LUNATIC_SPRINT_PEAK_SPEED_MULT = 1.845;
+export const LUNATIC_DECEL_SEC = 0.3;
+export const LUNATIC_DECEL_SPRINT_REF_SEC = 5;
+export const LUNATIC_CRASH_STUN_SEC = 0.3;
+export const LUNATIC_CRASH_DAMAGE_BRACKET_1_SEC = 2;
+export const LUNATIC_CRASH_DAMAGE_BRACKET_2_SEC = 4;
+export const LUNATIC_CRASH_DAMAGE_TIER_1 = 1;
+export const LUNATIC_CRASH_DAMAGE_TIER_2 = 2;
+export const LUNATIC_CRASH_DAMAGE_TIER_3 = 3;
+export const LUNATIC_TURN_RADIUS_PX = 168;
+export const LUNATIC_STEER_MAX_RAD_PER_SEC = 2.35;
+export const LUNATIC_ROAR_COOLDOWN_SEC = 30;
+export const LUNATIC_ROAR_DURATION_SEC = 1;
+export const LUNATIC_ROAR_SPEED_MULT = 1.12;
+export const LUNATIC_ROAR_TERRAIN_DAMAGE_INTERVAL_SEC = 0.1;
+export const LUNATIC_ROAR_TERRAIN_DAMAGE = 3;
+export const LUNATIC_SPRINT_TIER_FX_DUR_T2 = 0.38;
+export const LUNATIC_SPRINT_TIER_FX_DUR_T4 = 0.52;
+
+// --- Valiant (REFERENCE `standalone.js` tuning) ---
+
+export const VALIANT_RABBIT_BASE_HP = 4;
+export const VALIANT_RESCUE_COOLDOWN_SEC = 25;
+export const VALIANT_RESCUE_WILL_RESTORE = 0.4;
+export const VALIANT_WILL_RABBIT_DEATH_COST = 0.25;
+export const VALIANT_WILL_DECAY_PER_EMPTY_SLOT = 7e-3;
+export const VALIANT_WILL_REGEN_PER_SEC_THREE_RABBITS = 3e-3;
+export const VALIANT_SHOCK_BOX_W = 168;
+export const VALIANT_SHOCK_BOX_H = 120;
+export const VALIANT_SHOCK_BOX_DURATION_SEC = 4.6;
+export const VALIANT_BUNNY_PICKUP_R = 12;
+export const VALIANT_BUNNY_SPAWN_INTERVAL = 7.2;
+export const VALIANT_BUNNY_LIFETIME_SEC = 18;
+export const VALIANT_DIAMOND_RESCUE_WILL_BONUS = 0.12;
+export const VALIANT_DIAMOND_BOX_SCALE = 1.32;
+/** Q — REFERENCE `abilities.dash` for valiant. */
+export const VALIANT_SURGE_COOLDOWN_SEC = 5;
+export const VALIANT_SURGE_MIN_COOLDOWN_SEC = 0.45;
+export const VALIANT_SURGE_DURATION_SEC = 3;
+export const VALIANT_SURGE_SPEED_MULT = 2;
+export const VALIANT_SURGE_SPEED_MULT_DIAMOND = 2.6;
+export const VALIANT_SURGE_DURATION_DIAMOND_BONUS_SEC = 1.5;
+/** W shock placement — REFERENCE `abilities.burst.cooldown`. */
+export const VALIANT_SHOCK_ABILITY_COOLDOWN_SEC = 6.5;
+export const VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC = 0.5;

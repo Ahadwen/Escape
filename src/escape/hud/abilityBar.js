@@ -1,6 +1,6 @@
 /**
  * @typedef {{ remaining: number; duration: number; color: string }} AbilityCooldownFill
- * @typedef {{ label: string; value: string; fill?: AbilityCooldownFill }} AbilityHudCell
+ * @typedef {{ label: string; value: string; fill?: AbilityCooldownFill; valueClass?: string }} AbilityHudCell
  * @typedef {Record<"q" | "w" | "e" | "r", AbilityHudCell>} AbilityHudSnapshot
  */
 
@@ -19,7 +19,11 @@ export function syncAbilityBarDocument(doc, hud) {
     const labelEl = root.querySelector(".ability-label");
     const valueEl = root.querySelector(".ability-value");
     if (labelEl) labelEl.textContent = cell.label;
-    if (valueEl) valueEl.textContent = cell.value;
+    if (valueEl) {
+      valueEl.textContent = cell.value;
+      valueEl.classList.remove("ability-value--lunatic-w", "ability-value--bulwark-e");
+      if (cell.valueClass) valueEl.classList.add(cell.valueClass);
+    }
 
     if (fillEl) {
       const f = cell.fill;

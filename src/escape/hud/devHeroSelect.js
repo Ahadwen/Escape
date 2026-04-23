@@ -39,6 +39,7 @@ export function mountDevActiveHeroSelect(doc, { initialId, onSelect }) {
     const hero = roster.find((x) => x.id === id);
     if (!hero?.implemented) return;
     onSelect(id);
+    sel.blur();
   }
 
   sel.addEventListener("change", onChange);

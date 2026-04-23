@@ -23,6 +23,8 @@ export function createForgeHexFlow({ hexKey }) {
   let innerExitLatch = false;
   let forgeComplete = false;
   let wasInsidePenaltyRing = false;
+  /** True until first inner-hex crossing; barrier blocks hunters/projectiles only in this window. */
+  let preInnerCrossLockActive = false;
   /** @type {Set<string>} */
   const outerDamageAppliedKeys = new Set();
   let screenFlashUntil = 0;
@@ -35,6 +37,7 @@ export function createForgeHexFlow({ hexKey }) {
     lockQ = 0;
     lockR = 0;
     wasInsidePenaltyRing = false;
+    preInnerCrossLockActive = false;
   }
 
   function resetSession() {
@@ -68,6 +71,7 @@ export function createForgeHexFlow({ hexKey }) {
       lockQ = ph.q;
       lockR = ph.r;
       phase = 1;
+      preInnerCrossLockActive = true;
       screenFlashUntil = 0;
       // Baseline on entry so damage only occurs on a real subsequent crossing.
       wasInsidePenaltyRing = insidePenaltyRing;
@@ -91,6 +95,7 @@ export function createForgeHexFlow({ hexKey }) {
       !forgeComplete &&
       !innerExitLatch
     ) {
+      preInnerCrossLockActive = false;
       innerExitLatch = true;
       o.openForgeModal();
     }
@@ -122,7 +127,9 @@ export function createForgeHexFlow({ hexKey }) {
   }
 
   function isOuterBarrierWorldPoint(px, py, worldToHex, hexToWorld, isForgeHexInteractive) {
+    if (phase !== 1 || !preInnerCrossLockActive) return false;
     const h = worldToHex(px, py);
+    if (h.q !== lockQ || h.r !== lockR) return false;
     if (!isForgeHexInteractive(h.q, h.r)) return false;
     const c = hexToWorld(h.q, h.r);
     return Math.hypot(px - c.x, py - c.y) <= OUTER_BARRIER_R + 1.5;

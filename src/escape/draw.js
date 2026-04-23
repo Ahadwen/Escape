@@ -10,6 +10,25 @@ import {
   SAFEHOUSE_SPENT_TILE_ANIM_MS,
 } from "./balance.js";
 
+const POINTY_HEX_PATH_CACHE = new Map();
+
+function pointyHexPathAtOrigin(vertexRadius) {
+  const key = Math.round(vertexRadius * 100) / 100;
+  const hit = POINTY_HEX_PATH_CACHE.get(key);
+  if (hit) return hit;
+  const path = new Path2D();
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (Math.PI / 3) * i;
+    const x = Math.cos(a) * key;
+    const y = Math.sin(a) * key;
+    if (i === 0) path.moveTo(x, y);
+    else path.lineTo(x, y);
+  }
+  path.closePath();
+  POINTY_HEX_PATH_CACHE.set(key, path);
+  return path;
+}
+
 export function drawCircle(ctx, x, y, r, color, alpha = 1) {
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -20,29 +39,53 @@ export function drawCircle(ctx, x, y, r, color, alpha = 1) {
   ctx.restore();
 }
 
-export function drawHealPickup(ctx, p, elapsed) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.lunaticMaxHpCrystal] — amber “growth” crystal (Lunatic: pickup grants +max HP).
+ */
+export function drawHealPickup(ctx, p, elapsed, opts = {}) {
+  const maxHpCrystal = !!opts.lunaticMaxHpCrystal;
   const pulse = 0.94 + 0.06 * (0.5 + 0.5 * Math.sin(elapsed * 5));
   const h = (p.plusHalf ?? HEAL_PICKUP_PLUS_HALF) * pulse;
   const t = p.plusThick ?? HEAL_PICKUP_ARM_THICK;
   const { x, y } = p;
   ctx.save();
   ctx.translate(x, y);
-  ctx.shadowColor = "rgba(52, 211, 153, 0.95)";
-  ctx.shadowBlur = 20;
-  ctx.fillStyle = "#047857";
-  ctx.fillRect(-h, -t / 2, 2 * h, t);
-  ctx.fillRect(-t / 2, -h, t, 2 * h);
-  ctx.shadowBlur = 12;
-  ctx.fillStyle = "#10b981";
-  ctx.fillRect(-h + 0.8, -t / 2 + 0.5, 2 * h - 1.6, t - 1);
-  ctx.fillRect(-t / 2 + 0.5, -h + 0.8, t - 1, 2 * h - 1.6);
-  ctx.shadowBlur = 0;
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = "#d1fae5";
-  ctx.fillRect(-h * 0.52, -t * 0.32, h * 1.04, t * 0.64);
-  ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
-  ctx.globalAlpha = 1;
-  ctx.strokeStyle = "rgba(236, 253, 245, 0.55)";
+  if (maxHpCrystal) {
+    ctx.shadowColor = "rgba(251, 191, 36, 0.9)";
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = "#92400e";
+    ctx.fillRect(-h, -t / 2, 2 * h, t);
+    ctx.fillRect(-t / 2, -h, t, 2 * h);
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = "#d97706";
+    ctx.fillRect(-h + 0.8, -t / 2 + 0.5, 2 * h - 1.6, t - 1);
+    ctx.fillRect(-t / 2 + 0.5, -h + 0.8, t - 1, 2 * h - 1.6);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.92;
+    ctx.fillStyle = "#fde68a";
+    ctx.fillRect(-h * 0.52, -t * 0.32, h * 1.04, t * 0.64);
+    ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(254, 243, 199, 0.65)";
+  } else {
+    ctx.shadowColor = "rgba(52, 211, 153, 0.95)";
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = "#047857";
+    ctx.fillRect(-h, -t / 2, 2 * h, t);
+    ctx.fillRect(-t / 2, -h, t, 2 * h);
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = "#10b981";
+    ctx.fillRect(-h + 0.8, -t / 2 + 0.5, 2 * h - 1.6, t - 1);
+    ctx.fillRect(-t / 2 + 0.5, -h + 0.8, t - 1, 2 * h - 1.6);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "#d1fae5";
+    ctx.fillRect(-h * 0.52, -t * 0.32, h * 1.04, t * 0.64);
+    ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(236, 253, 245, 0.55)";
+  }
   ctx.lineWidth = 1.5;
   ctx.strokeRect(-h, -t / 2, 2 * h, t);
   ctx.strokeRect(-t / 2, -h, t, 2 * h);
@@ -54,9 +97,15 @@ export function drawHealPickup(ctx, p, elapsed) {
   const barY = h + 8;
   ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
   ctx.fillRect(-barW / 2, barY, barW, barH);
-  ctx.fillStyle = frac > 0.35 ? "rgba(110, 231, 183, 0.95)" : "rgba(251, 146, 60, 0.95)";
+  ctx.fillStyle = maxHpCrystal
+    ? frac > 0.35
+      ? "rgba(251, 191, 36, 0.95)"
+      : "rgba(248, 113, 113, 0.95)"
+    : frac > 0.35
+      ? "rgba(110, 231, 183, 0.95)"
+      : "rgba(251, 146, 60, 0.95)";
   ctx.fillRect(-barW / 2, barY, barW * frac, barH);
-  ctx.strokeStyle = "rgba(236, 253, 245, 0.7)";
+  ctx.strokeStyle = maxHpCrystal ? "rgba(254, 243, 199, 0.75)" : "rgba(236, 253, 245, 0.7)";
   ctx.lineWidth = 1;
   ctx.strokeRect(-barW / 2, barY, barW, barH);
   ctx.restore();
@@ -398,53 +447,35 @@ export function drawSurgeHexWorld(ctx, activeHexes, hexToWorld, isSurgeTile, isS
 }
 
 export function strokePointyHexOutline(ctx, cx, cy, vertexRadius, strokeStyle, lineWidth, glowBlur) {
+  const path = pointyHexPathAtOrigin(vertexRadius);
+  const blur = Math.max(0, Math.min(6, Number(glowBlur) || 0));
   ctx.save();
-  ctx.shadowColor = strokeStyle;
-  ctx.shadowBlur = glowBlur;
+  if (blur > 0) {
+    ctx.shadowColor = strokeStyle;
+    ctx.shadowBlur = blur;
+  }
   ctx.strokeStyle = strokeStyle;
   ctx.lineWidth = lineWidth;
-  ctx.beginPath();
-  for (let i = 0; i < 6; i++) {
-    const a = -Math.PI / 2 + (Math.PI / 3) * i;
-    const x = cx + Math.cos(a) * vertexRadius;
-    const y = cy + Math.sin(a) * vertexRadius;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-  ctx.stroke();
+  ctx.translate(cx, cy);
+  ctx.stroke(path);
   ctx.restore();
 }
 
 /** Rainbow fill for roulette hex; `elapsed` drives spin (game seconds). */
 export function fillPointyHexRainbowGlow(ctx, cx, cy, vertexRadius, elapsed, drawOutline = true, fillAlphaScale = 1) {
+  const path = pointyHexPathAtOrigin(vertexRadius);
   ctx.save();
-  ctx.beginPath();
-  for (let i = 0; i < 6; i++) {
-    const a = -Math.PI / 2 + (Math.PI / 3) * i;
-    const x = cx + Math.cos(a) * vertexRadius;
-    const y = cy + Math.sin(a) * vertexRadius;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
+  ctx.translate(cx, cy);
   const spin = elapsed * 2.8;
-  if (typeof ctx.createConicGradient === "function") {
-    const g = ctx.createConicGradient(spin, cx, cy);
-    for (let k = 0; k <= 7; k++) g.addColorStop(k / 7, `hsl(${(k / 7) * 360} 92% 58%)`);
-    ctx.fillStyle = g;
-  } else {
-    ctx.fillStyle = `hsla(${(elapsed * 110) % 360}, 92%, 58%, 0.55)`;
-  }
+  // Cheaper than per-frame conic gradients and still communicates “roulette/rainbow”.
+  ctx.fillStyle = `hsla(${(spin * 57) % 360}, 92%, 58%, 0.55)`;
   ctx.globalAlpha = 0.52 * fillAlphaScale;
-  ctx.fill();
+  ctx.fill(path);
   ctx.globalAlpha = 1;
   if (drawOutline) {
     ctx.strokeStyle = `rgba(255,255,255,${0.35 * fillAlphaScale})`;
     ctx.lineWidth = 1.5;
-    ctx.stroke();
+    ctx.stroke(path);
   }
   ctx.restore();
 }
@@ -483,7 +514,7 @@ export function drawSafehouseHexCell(ctx, cx, cy, vertexRadius, elapsed) {
   g.addColorStop(1, "rgba(255, 255, 255, 0.99)");
   ctx.fillStyle = g;
   ctx.fill();
-  const nWisps = 14;
+  const nWisps = 6;
   for (let w = 0; w < nWisps; w++) {
     const drift = elapsed * 0.48 + w * (TAU / nWisps) + w * 0.31;
     const radial = 0.72 + 0.12 * Math.sin(elapsed * 0.9 + w * 0.7) + (w % 4) * 0.018;

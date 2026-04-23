@@ -15,14 +15,23 @@ import {
   LASER_BLUE_PLAYER_SLOW_MULT,
   SURGE_TILE_FLASH_SEC,
   TERRAIN_SPEED_BOOST_LINGER,
+  LUNATIC_SPRINT_TIER_FX_DUR_T2,
+  LUNATIC_SPRINT_TIER_FX_DUR_T4,
+  SET_BONUS_SUIT_THRESHOLD,
+  VALIANT_BUNNY_PICKUP_R,
+  BULWARK_POST_HIT_INVULN_SEC,
+  BULWARK_FLAG_MAX_HP,
 } from "./balance.js";
 import { referenceTileGridFromCanvasHeight } from "./WorldGeneration/tileGenerator.js";
-import { attachArrowKeyState } from "./gameControls.js";
-import { attachAbilityKeyPresses } from "./controls/abilityKeys.js";
+import { attachArrowKeyState, attachHeldLetterKeys } from "./gameControls.js";
+import { attachAbilityKeyPresses, isDomShellTypingTarget } from "./controls/abilityKeys.js";
 import {
   createCharacterController,
   resolveImplementedHeroId,
+  createBulwarkWorld,
 } from "./Characters/index.js";
+import { createRogueWorld } from "./Characters/rogueWorld.js";
+import { createValiantWorld } from "./Characters/valiantWorld.js";
 import { tryUseEquippedUltimate } from "./items/ultimateSlot.js";
 import { syncAbilityBarDocument } from "./hud/abilityBar.js";
 import { applyShellUiFromCharacter } from "./hud/shellUi.js";
@@ -53,6 +62,15 @@ import {
   drawCardPickupWorld,
 } from "./draw.js";
 import {
+  drawValiantShockFields,
+  drawValiantBunnies,
+  drawValiantRabbitOrbiters,
+  drawValiantRabbitFx,
+  drawValiantWillTextAbovePlayer,
+  drawValiantScreenHud,
+  drawValiantFloatPopups,
+} from "./fx/valiantDraw.js";
+import {
   HEAL_PICKUP_HIT_R,
   CARD_PICKUP_HIT_R,
   HEAL_PICKUP_PLUS_HALF,
@@ -79,6 +97,19 @@ import { dropJokerRewardFromSpecialEvent } from "./items/jokerEventReward.js";
 import { createHunterRuntime } from "./Hunters/hunterRuntime.js";
 import { clamp, pointToSegmentDistance } from "./Hunters/hunterGeometry.js";
 import { tickAttackRings, drawAttackRings, pushAttackRing } from "./fx/attackRings.js";
+import {
+  tickLunaticSprintTierFx,
+  drawLunaticSprintTierSpeedFx,
+  drawLunaticSprintDirectionArrow,
+  drawLunaticRoarFx,
+  drawLunaticRoarTimerBar,
+} from "./fx/lunaticDraw.js";
+import {
+  drawBulwarkParry,
+  drawBulwarkFlagCarried,
+  drawBulwarkFlagPlanted,
+  drawBulwarkFrontShieldArc,
+} from "./fx/bulwarkDraw.js";
 import { drawUltimateEffects } from "./fx/ultimateEffects.js";
 import { createPlayerDamage } from "./playerDamage.js";
 import { createRunLogger, instrumentObjectMethods } from "./debug/runLogger.js";
@@ -260,6 +291,11 @@ function boot() {
   }
 
   const keys = attachArrowKeyState(window);
+  const steerKeys = attachHeldLetterKeys(window, ["q", "e"]);
+  function clearMovementKeys() {
+    keys.clearHeld();
+    steerKeys.clearHeld();
+  }
   const player = {
     x: 0,
     y: 0,
@@ -296,9 +332,55 @@ function boot() {
   }));
 
   activeCharacterId = resolveImplementedHeroId(activeCharacterId);
-  let character = instrumentObjectMethods(createCharacterController(activeCharacterId), "character", runLogger, {
-    skip: ["getAbilityHud"],
-  });
+
+  const inventory = createEmptyInventory();
+  inventory.clubsInvisUntil = 0;
+  inventory.spadesLandingStealthUntil = 0;
+  inventory.spadesObstacleBoostUntil = 0;
+  inventory.heartsResistanceReadyAt = 0;
+  inventory.heartsRegenPerSec = 0;
+  inventory.heartsRegenBank = 0;
+
+  const rogueWorld = createRogueWorld();
+  rogueWorld.reset(0, player);
+
+  const valiantWorld = createValiantWorld();
+  const bulwarkWorld = createBulwarkWorld();
+
+  let character = instrumentObjectMethods(
+    createCharacterController(activeCharacterId, rogueWorld, valiantWorld, bulwarkWorld),
+    "character",
+    runLogger,
+    {
+      skip: ["getAbilityHud"],
+    },
+  );
+
+  function obstaclesForPlayerCollision() {
+    if (
+      activeCharacterId === "rogue" &&
+      rogueWorld.clubsPhaseThroughObstacles(inventory, player.x, player.y, simElapsed)
+    ) {
+      return [];
+    }
+    if (
+      activeCharacterId === "valiant" &&
+      countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD &&
+      typeof character.getValiantSurgeUntil === "function" &&
+      simElapsed < character.getValiantSurgeUntil()
+    ) {
+      return [];
+    }
+    if (
+      activeCharacterId === "knight" &&
+      countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD &&
+      typeof character.getBurstVisualUntil === "function" &&
+      character.getBurstVisualUntil(simElapsed) > simElapsed
+    ) {
+      return [];
+    }
+    return obstacles;
+  }
   applyShellUiFromCharacter(document, character);
 
   function applyCombatFromCharacter() {
@@ -315,11 +397,20 @@ function boot() {
     player.tempHpExpiry = 0;
   }
   applyCombatFromCharacter();
+  if (typeof character.resetRunState === "function") {
+    character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
+  }
+  if (activeCharacterId === "valiant") {
+    valiantWorld.reset(simElapsed);
+  }
+  bulwarkWorld.reset();
 
   /** @type {Array<{ kind: string, x: number, y: number, r: number, expiresAt: number } & Record<string, unknown>>} */
   const collectibles = [];
   /** REFERENCE `entities.attackRings` — ability impact rings. */
   const attackRings = [];
+  /** REFERENCE `entities.lunaticSprintTierFx` — speed streak bursts while sprinting. */
+  const lunaticSprintTierFx = /** @type {{ bornAt: number; expiresAt: number; tier: 2 | 4 }[]} */ ([]);
   /** Ace-ultimate world VFX. */
   const ultimateEffects = [];
   /** Orbiting shield state from Ace shield ultimate. */
@@ -336,14 +427,6 @@ function boot() {
   let nextCardSpawnAt = 10;
   const MAX_HEAL_CRYSTALS = 6;
   const MAX_CARD_PICKUPS = 4;
-
-  const inventory = createEmptyInventory();
-  inventory.clubsInvisUntil = 0;
-  inventory.spadesLandingStealthUntil = 0;
-  inventory.spadesObstacleBoostUntil = 0;
-  inventory.heartsResistanceReadyAt = 0;
-  inventory.heartsRegenPerSec = 0;
-  inventory.heartsRegenBank = 0;
 
   /** When true, movement, pickups, specials, and hunters stop (REFERENCE `state.running === false`). */
   let runDead = false;
@@ -385,12 +468,48 @@ function boot() {
     }
   }
 
-  const playerDamage = createPlayerDamage({
+  /** @type {ReturnType<typeof createPlayerDamage>} */
+  let playerDamage;
+  playerDamage = createPlayerDamage({
     getSimElapsed: () => simElapsed,
     getPlayer: () => player,
     inventory,
     getCharacterInvulnUntil: () => character.getInvulnUntil(),
+    rogueStealthBlocksDamage: () =>
+      activeCharacterId === "rogue" && rogueWorld.stealthBlocksDamage(simElapsed, inventory),
+    getLunaticSprintDamageImmune: () =>
+      activeCharacterId === "lunatic" &&
+      typeof character.getLunaticSprintDamageImmune === "function" &&
+      character.getLunaticSprintDamageImmune(),
+    getIsValiant: () => activeCharacterId === "valiant",
+    applyValiantIncomingDamage: (amount, opts) => {
+      valiantWorld.applyDamage(amount, opts, {
+        getSimElapsed: () => simElapsed,
+        getPlayer: () => player,
+        inventory,
+        get combat() {
+          return playerDamage.combat;
+        },
+        bumpScreenShake: (strength, sec) => playerDamage.bumpScreenShake(strength, sec),
+        grantInvulnerabilityUntil: (until) => playerDamage.grantInvulnerabilityUntil(until),
+        stunNearbyEnemies: (secs) => {
+          if (!hunterRuntime) return;
+          for (const h of hunterRuntime.entities.hunters) {
+            const dx = h.x - player.x;
+            const dy = h.y - player.y;
+            if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + secs);
+          }
+        },
+        onWillDeath: () => playerDamage.killPlayerImmediate(),
+      });
+    },
     isDashCoolingDown: () => (typeof character.isDashCoolingDown === "function" ? character.isDashCoolingDown(simElapsed) : false),
+    getBulwarkParryActive: () =>
+      activeCharacterId === "bulwark" &&
+      typeof character.getBulwarkParryUntil === "function" &&
+      simElapsed < character.getBulwarkParryUntil(),
+    getPostHitInvulnerabilitySec: () =>
+      activeCharacterId === "bulwark" ? BULWARK_POST_HIT_INVULN_SEC : null,
     stunNearbyEnemies: (secs) => {
       if (!hunterRuntime) return;
       for (const h of hunterRuntime.entities.hunters) {
@@ -420,6 +539,7 @@ function boot() {
         best: bestSurvivalSec,
       });
       attackRings.length = 0;
+      lunaticSprintTierFx.length = 0;
     },
   });
 
@@ -464,7 +584,18 @@ function boot() {
     if (id === activeCharacterId) return;
     hideDeathScreen();
     activeCharacterId = id;
-    character = instrumentObjectMethods(createCharacterController(id), "character", runLogger, {
+    if (id === "lunatic") {
+      for (let r = 1; r <= 13; r++) {
+        inventory.deckByRank[r] = null;
+      }
+      inventory.backpackSlots[0] = null;
+      inventory.backpackSlots[1] = null;
+      inventory.backpackSlots[2] = null;
+      inventory.lunaticRegenBank = 0;
+      inventory.diamondEmpower = null;
+      inventory.valiantElectricBoxChargeBonus = 0;
+    }
+    character = instrumentObjectMethods(createCharacterController(id, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
       skip: ["getAbilityHud"],
     });
     applyShellUiFromCharacter(document, character);
@@ -506,9 +637,11 @@ function boot() {
       activeHexes,
       lastPlayerHexKey,
     }));
+    rogueWorld.reset(simElapsed, player);
     snapCameraToPlayer();
     collectibles.length = 0;
     attackRings.length = 0;
+    lunaticSprintTierFx.length = 0;
     nextHealSpawnAt = simElapsed + 2;
     nextCardSpawnAt = simElapsed + 4;
     cardPickup?.resetAll();
@@ -518,6 +651,11 @@ function boot() {
     forgeWorldModal?.closeUi();
     hunterRuntime.reset();
     hexEventRuntime?.reset();
+    if (typeof character.resetRunState === "function") {
+      character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
+    }
+    valiantWorld.reset(simElapsed);
+    bulwarkWorld.reset();
     syncDeckHud();
   }
 
@@ -543,7 +681,7 @@ function boot() {
       }
       if (runDead) return;
       handsResetPause = true;
-      keys.clearHeld();
+      clearMovementKeys();
     },
   }), "cardModal", runLogger);
   syncDeckHud();
@@ -573,7 +711,7 @@ function boot() {
   const safehouseLevelNoBtn = document.getElementById("safehouse-level-no");
   if (safehouseLevelYesBtn) {
     safehouseLevelYesBtn.addEventListener("click", () => {
-      safehouseHexFlow.closeLevelModal(safehouseLevelModalEl, () => keys.clearHeld());
+      safehouseHexFlow.closeLevelModal(safehouseLevelModalEl, () => clearMovementKeys());
       safehouseHexFlow.applyLevelUpAccepted({
         onRunLevelIncrement: () => {
           runLevel += 1;
@@ -582,7 +720,11 @@ function boot() {
           hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
         },
         healPlayerToMax: () => {
-          player.hp = player.maxHp;
+          if (activeCharacterId === "valiant" && typeof character.applySafehouseFullHeal === "function") {
+            character.applySafehouseFullHeal();
+          } else {
+            player.hp = player.maxHp;
+          }
         },
         getIsLunatic: () => activeCharacterId === "lunatic",
         getPrimarySafehouseAxial: () => specials.getPrimarySafehouseAxial(),
@@ -592,7 +734,7 @@ function boot() {
   }
   if (safehouseLevelNoBtn) {
     safehouseLevelNoBtn.addEventListener("click", () => {
-      safehouseHexFlow.closeLevelModal(safehouseLevelModalEl, () => keys.clearHeld());
+      safehouseHexFlow.closeLevelModal(safehouseLevelModalEl, () => clearMovementKeys());
     });
   }
 
@@ -675,33 +817,60 @@ function boot() {
     );
   }
 
-  function hitDecoyIfAny(source, range) {
+  /**
+   * @param {{ x: number; y: number }} source
+   * @param {number} range
+   * @param {{ artilleryKind?: "detonation" | "linger"; damage?: number }} [opts]
+   *   Sniper artillery: `detonation` = one 1-HP hit to planted Bulwark flag; `linger` = no HP to flag (area ticks).
+   */
+  function hitDecoyIfAny(source, range, opts = {}) {
     const ds = character.getDecoys();
     const now = simElapsed;
+    const artilleryKind = opts.artilleryKind;
+    const dmg = typeof opts.damage === "number" && opts.damage > 0 ? opts.damage : 1;
     for (let i = ds.length - 1; i >= 0; i--) {
       const d = ds[i];
       const rr = range + d.r;
       const dx = source.x - d.x;
       const dy = source.y - d.y;
       if (dx * dx + dy * dy <= rr * rr) {
+        if (d.kind === "bulwarkFlag" && artilleryKind === "linger") {
+          return true;
+        }
         if (now < (d.invulnerableUntil ?? 0)) return true;
-        d.hp = Math.max(0, (d.hp ?? 1) - 1);
-        if (d.hp <= 0) ds.splice(i, 1);
+        d.hp = Math.max(0, (d.hp ?? 1) - dmg);
+        if (d.kind === "bulwarkFlag") d.invulnerableUntil = now + BULWARK_POST_HIT_INVULN_SEC;
+        if (d.hp <= 0 && d.kind !== "bulwarkFlag") ds.splice(i, 1);
         return true;
       }
     }
     return false;
   }
 
-  function hitDecoyAlongSegment(x1, y1, x2, y2, extraRadius) {
+  /**
+   * @param {{ laserOneShotId?: number; damage?: number }} [opts]
+   *   Lasers: pass `laserOneShotId` (per beam) so planted Bulwark flag takes at most one `damage` per beam, not per tick.
+   */
+  function hitDecoyAlongSegment(x1, y1, x2, y2, extraRadius, opts = {}) {
     const ds = character.getDecoys();
     const now = simElapsed;
+    const dmg = typeof opts.damage === "number" && opts.damage > 0 ? opts.damage : 1;
+    const laserOneShotId = opts.laserOneShotId;
     for (let i = ds.length - 1; i >= 0; i--) {
       const d = ds[i];
       if (pointToSegmentDistance(d.x, d.y, x1, y1, x2, y2) <= d.r + extraRadius) {
+        if (d.kind === "bulwarkFlag" && typeof laserOneShotId === "number") {
+          if ((d.lastLaserBeamHitId ?? 0) === laserOneShotId) return true;
+          if (now < (d.invulnerableUntil ?? 0)) return true;
+          d.lastLaserBeamHitId = laserOneShotId;
+          d.hp = Math.max(0, (d.hp ?? 1) - dmg);
+          d.invulnerableUntil = now + BULWARK_POST_HIT_INVULN_SEC;
+          return true;
+        }
         if (now < (d.invulnerableUntil ?? 0)) return true;
-        d.hp = Math.max(0, (d.hp ?? 1) - 1);
-        if (d.hp <= 0) ds.splice(i, 1);
+        d.hp = Math.max(0, (d.hp ?? 1) - dmg);
+        if (d.kind === "bulwarkFlag") d.invulnerableUntil = now + BULWARK_POST_HIT_INVULN_SEC;
+        if (d.hp <= 0 && d.kind !== "bulwarkFlag") ds.splice(i, 1);
         return true;
       }
     }
@@ -714,9 +883,18 @@ function boot() {
     getObstacles: () => obstacles,
     getDecoys: () => character.getDecoys(),
     getCharacterId: () => activeCharacterId,
+    getInventory: () => inventory,
+    getPlayerUntargetableUntil: () => playerDamage.combat.playerUntargetableUntil,
+    pickRogueHunterTarget: (hunter, playerRef, inv, nearestDecoy, hasLOS, fallback, elapsed) =>
+      rogueWorld.pickRogueHunterTarget(hunter, playerRef, inv, nearestDecoy, hasLOS, fallback, elapsed),
     rand: randRange,
     getViewSize: () => ({ w: canvas.width, h: canvas.height }),
     damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+    collidesValiantEnemyShockField: (circle, elapsed) => valiantWorld.collidesEnemyShockField(circle, elapsed),
+    getBulwarkPlantedFlag: () =>
+      activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function"
+        ? character.getBulwarkWorld().getPlantedFlagForAi()
+        : null,
     hitDecoyIfAny,
     hitDecoyAlongSegment,
     worldToHex,
@@ -784,11 +962,13 @@ function boot() {
     manualPause = false;
     handsResetPause = false;
     simElapsed = 0;
-    character = instrumentObjectMethods(createCharacterController(activeCharacterId), "character", runLogger, {
+    character = instrumentObjectMethods(createCharacterController(activeCharacterId, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
       skip: ["getAbilityHud"],
     });
     applyShellUiFromCharacter(document, character);
     applyCombatFromCharacter();
+    valiantWorld.reset(simElapsed);
+    bulwarkWorld.reset();
     playerDamage.resetCombatState();
     player.x = 0;
     player.y = 0;
@@ -809,6 +989,9 @@ function boot() {
     inventory.heartsResistanceReadyAt = 0;
     inventory.heartsRegenPerSec = 0;
     inventory.heartsRegenBank = 0;
+    inventory.diamondEmpower = null;
+    inventory.valiantElectricBoxChargeBonus = 0;
+    inventory.lunaticRegenBank = 0;
     inventory.aceUltimateReadyAt = 0;
     ultimateEffects.length = 0;
     ultimateShields.length = 0;
@@ -837,8 +1020,10 @@ function boot() {
       activeHexes,
       lastPlayerHexKey,
     }));
+    rogueWorld.reset(simElapsed, player);
     collectibles.length = 0;
     attackRings.length = 0;
+    lunaticSprintTierFx.length = 0;
     nextHealSpawnAt = simElapsed + 2;
     nextCardSpawnAt = simElapsed + 4;
     cardPickup?.resetAll();
@@ -848,6 +1033,9 @@ function boot() {
     forgeWorldModal?.closeUi();
     hunterRuntime.reset();
     hexEventRuntime?.reset();
+    if (typeof character.resetRunState === "function") {
+      character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
+    }
     syncDeckHud();
     snapCameraToPlayer();
   }
@@ -870,7 +1058,7 @@ function boot() {
 
   function pauseKeyRoutingBlocked(ev) {
     const t = ev.target;
-    if (t instanceof Element && t.closest("input, textarea, select, button, [contenteditable=true]")) return true;
+    if (isDomShellTypingTarget(t)) return true;
     if (isCharacterSelectModalOpen()) return true;
     return false;
   }
@@ -888,13 +1076,13 @@ function boot() {
       }
       manualPause = false;
       handsResetPause = false;
-      keys.clearHeld();
+      clearMovementKeys();
       return;
     }
 
     if (key === " " && !runDead && !modalChromePausesWorld()) {
       manualPause = true;
-      keys.clearHeld();
+      clearMovementKeys();
       ev.preventDefault();
       ev.stopImmediatePropagation();
     }
@@ -1066,8 +1254,8 @@ function boot() {
       dt,
       obstacles,
       inventory,
-      resolvePlayer: (x, y, r) => resolvePlayerAgainstRects(x, y, r, obstacles),
-      circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstacles),
+      resolvePlayer: (x, y, r) => resolvePlayerAgainstRects(x, y, r, obstaclesForPlayerCollision()),
+      circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstaclesForPlayerCollision()),
       spawnAttackRing: (x, y, r, color, durationSec) => {
         pushAttackRing(attackRings, x, y, r, color, simElapsed, durationSec);
       },
@@ -1122,17 +1310,43 @@ function boot() {
       countActiveSuits: () => countSuitsInActiveSlots(inventory),
       bumpScreenShake: (strength, sec) => playerDamage.bumpScreenShake(strength, sec),
       grantInvulnerabilityUntil: (until) => playerDamage.grantInvulnerabilityUntil(until),
+      onValiantWillDeath: () => playerDamage.killPlayerImmediate(),
       hunterEntities: hunterRuntime?.entities ?? null,
+      bulwarkChargePushHunters: (px, py, nx, ny, pr, at, pushedOut) =>
+        hunterRuntime?.bulwarkChargePushHunters?.(px, py, nx, ny, pr, at, pushedOut),
+      bulwarkChargeApplyTerrainGroupStun: (set, at) =>
+        hunterRuntime?.bulwarkChargeApplyTerrainGroupStun?.(set, at),
+      bulwarkParryPushHunters: (px, py, rad, dist) => hunterRuntime?.bulwarkParryPushHunters?.(px, py, rad, dist),
     };
   }
 
-  const abilityKeys = attachAbilityKeyPresses(window, (slot) => {
-    if (runDead || isWorldPaused()) return;
-    if (simElapsed < playerTimelockUntil) return;
-    const ctx = buildAbilityContext(0);
-    if (slot === "r" && tryUseEquippedUltimate(ctx)) return;
-    character.onAbilityPress(slot, ctx);
-  });
+  const abilityKeys = attachAbilityKeyPresses(
+    window,
+    (slot) => {
+      if (runDead || isWorldPaused()) return;
+      if (simElapsed < playerTimelockUntil) return;
+      const ctx = buildAbilityContext(0);
+      if (slot === "r" && tryUseEquippedUltimate(ctx)) return;
+      character.onAbilityPress(slot, ctx);
+    },
+    undefined,
+    (slot) => {
+      if (runDead || isWorldPaused()) return;
+      if (simElapsed < playerTimelockUntil) return;
+      if (typeof character.onAbilityRelease !== "function") return;
+      const ctx = buildAbilityContext(0);
+      character.onAbilityRelease(slot, ctx);
+    },
+  );
+
+  function isLootForbiddenForSpawns(q, r) {
+    if (specials.isSpecialTile(q, r)) return true;
+    if (activeCharacterId === "lunatic" && typeof character.getHealExcludeHexKey === "function") {
+      const ex = character.getHealExcludeHexKey();
+      if (ex && hexKey(q, r) === ex) return true;
+    }
+    return false;
+  }
 
   /** Viewport top-left in world space (same convention as legacy `game.js`). */
   let cameraX = 0;
@@ -1175,37 +1389,102 @@ function boot() {
       simElapsed += rawDt;
       character.tick(buildAbilityContext(dt));
       player.hp = Math.max(0, Math.min(player.maxHp, player.hp));
+      if (activeCharacterId === "valiant") {
+        const lootPlacementOpts = () => ({
+          player,
+          obstacles,
+          collectibles,
+          activeHexes,
+          hexToWorld,
+          worldToHex,
+          isLootForbiddenHex: isLootForbiddenForSpawns,
+          tileW: REFERENCE_TILE_W,
+          canvasW: canvas.width,
+          canvasH: canvas.height,
+        });
+        valiantWorld.trySpawnWildBunny(simElapsed, () =>
+          randomOpenLootPoint({ ...lootPlacementOpts(), hitR: VALIANT_BUNNY_PICKUP_R }),
+        );
+      }
     }
 
     if (!paused && !runDead) {
       let vx = 0;
       let vy = 0;
+      let rogueMovementIntent = false;
       if (simElapsed < playerTimelockUntil) {
         player.velX = 0;
         player.velY = 0;
         player._px = player.x;
         player._py = player.y;
       } else {
-      if (keys.isDown("ArrowLeft")) vx -= 1;
-      if (keys.isDown("ArrowRight")) vx += 1;
-      if (keys.isDown("ArrowUp")) vy -= 1;
-      if (keys.isDown("ArrowDown")) vy += 1;
-      const len = Math.hypot(vx, vy);
-      if (len > 1e-6) {
-        player.facing = { x: vx / len, y: vy / len };
-        let sp = PLAYER_SPEED * (player.speedBurstMult ?? 1);
-        if (simElapsed < ultimateSpeedUntil) sp *= 1.75;
-        sp *= player.speedPassiveMult ?? 1;
-        if (simElapsed < (inventory.spadesObstacleBoostUntil ?? 0)) {
-          sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
-        }
-        if (playerDamage.isLaserSlowActive()) sp *= LASER_BLUE_PLAYER_SLOW_MULT;
-        vx = (vx / len) * sp * dt;
-        vy = (vy / len) * sp * dt;
-      }
+      const lunaticMove =
+        activeCharacterId === "lunatic" && typeof character.applyMovementFrame === "function"
+          ? character.applyMovementFrame({
+              dt,
+              simElapsed,
+              player,
+              keys,
+              steerLeft: () => steerKeys.isDown("q"),
+              steerRight: () => steerKeys.isDown("e"),
+              inventory,
+              PLAYER_SPEED,
+              ultimateSpeedUntil,
+              laserSlowMult: playerDamage.isLaserSlowActive() ? LASER_BLUE_PLAYER_SLOW_MULT : 1,
+              getObsForCollision: () => obstaclesForPlayerCollision(),
+              resolvePlayerAgainstRects,
+              circleOverlapsAnyRect,
+              damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+              spawnAttackRing: (x, y, r, color, durationSec) => {
+                pushAttackRing(attackRings, x, y, r, color, simElapsed, durationSec);
+              },
+              onLunaticSprintTierFx: (tier) => {
+                const dur = tier === 4 ? LUNATIC_SPRINT_TIER_FX_DUR_T4 : LUNATIC_SPRINT_TIER_FX_DUR_T2;
+                lunaticSprintTierFx.push({
+                  bornAt: simElapsed,
+                  expiresAt: simElapsed + dur,
+                  tier: /** @type {2 | 4} */ (tier),
+                });
+              },
+            })
+          : null;
 
-      player.x += vx;
-      player.y += vy;
+      const bulwarkCharging =
+        activeCharacterId === "bulwark" &&
+        typeof character.isBulwarkCharging === "function" &&
+        character.isBulwarkCharging();
+
+      if (!lunaticMove && !bulwarkCharging) {
+        if (keys.isDown("ArrowLeft")) vx -= 1;
+        if (keys.isDown("ArrowRight")) vx += 1;
+        if (keys.isDown("ArrowUp")) vy -= 1;
+        if (keys.isDown("ArrowDown")) vy += 1;
+        const len = Math.hypot(vx, vy);
+        const rogueDashHold = activeCharacterId === "rogue" && rogueWorld.getDashAiming();
+        if (len > 1e-6) {
+          rogueMovementIntent = !rogueDashHold;
+          player.facing = { x: vx / len, y: vy / len };
+          if (!rogueDashHold) {
+            let sp = PLAYER_SPEED * (player.speedBurstMult ?? 1);
+            if (simElapsed < ultimateSpeedUntil) sp *= 1.75;
+            sp *= player.speedPassiveMult ?? 1;
+            if (simElapsed < (inventory.spadesObstacleBoostUntil ?? 0)) {
+              sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
+            }
+            if (playerDamage.isLaserSlowActive()) sp *= LASER_BLUE_PLAYER_SLOW_MULT;
+            vx = (vx / len) * sp * dt;
+            vy = (vy / len) * sp * dt;
+          } else {
+            vx = 0;
+            vy = 0;
+          }
+        }
+
+        player.x += vx;
+        player.y += vy;
+      } else if (lunaticMove) {
+        rogueMovementIntent = lunaticMove.rogueMovementIntent;
+      }
 
       ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
         player,
@@ -1215,12 +1494,37 @@ function boot() {
         lastPlayerHexKey,
       }));
 
-      const resolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obstacles);
-      const touchedObstacle = Math.abs(resolved.x - player.x) > 1e-6 || Math.abs(resolved.y - player.y) > 1e-6;
-      player.x = resolved.x;
-      player.y = resolved.y;
+      let touchedObstacle = false;
+      if (!lunaticMove) {
+        const obsForPlayer = obstaclesForPlayerCollision();
+        const resolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForPlayer);
+        touchedObstacle = Math.abs(resolved.x - player.x) > 1e-6 || Math.abs(resolved.y - player.y) > 1e-6;
+        player.x = resolved.x;
+        player.y = resolved.y;
+        if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
+          character.getBulwarkWorld().clampPlayerInDeathLock(player);
+        }
+      } else {
+        touchedObstacle = lunaticMove.touchedObstacle;
+      }
       if (touchedObstacle && (player.terrainTouchMult ?? 1) > 1) {
         inventory.spadesObstacleBoostUntil = simElapsed + TERRAIN_SPEED_BOOST_LINGER;
+      }
+
+      if (lunaticMove && typeof character.tickLunaticRoarTerrain === "function") {
+        character.tickLunaticRoarTerrain({
+          simDt: dt,
+          simElapsed,
+          player,
+          obstacles,
+          damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+        });
+      }
+      if (lunaticMove && typeof character.ejectFromObstaclesIfStuck === "function") {
+        character.ejectFromObstaclesIfStuck({
+          player,
+          circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstacles),
+        });
       }
 
       if (!runDead && specialsSimUnpaused()) {
@@ -1232,6 +1536,46 @@ function boot() {
       player.velY = (player.y - player._py) / pdt;
       player._px = player.x;
       player._py = player.y;
+
+      if (!simPaused && activeCharacterId === "rogue") {
+        rogueWorld.tickNeeds(
+          {
+            simDt: dt,
+            simElapsed,
+            player,
+            inventory,
+            obstacles,
+            moving: rogueMovementIntent,
+            touchedObstacle,
+            rand: randRange,
+            randomFoodPoint: () =>
+              randomOpenLootPoint({
+                player,
+                obstacles,
+                collectibles,
+                activeHexes,
+                hexToWorld,
+                worldToHex,
+                isLootForbiddenHex: isLootForbiddenForSpawns,
+                tileW: REFERENCE_TILE_W,
+                canvasW: canvas.width,
+                canvasH: canvas.height,
+                hitR: 13,
+              }),
+            spawnWorldPopup: (wx, wy, text, color) => {
+              rogueWorld.spawnPopup(wx, wy, text, color, simElapsed);
+            },
+          },
+          () => {
+            playerDamage.killPlayerImmediate();
+          },
+        );
+        if (hunterRuntime) {
+          rogueWorld.updateEnemyLos(hunterRuntime.entities, simElapsed, player, (h) =>
+            hunterRuntime.hasEnemyLineOfSightToPlayer(h),
+          );
+        }
+      }
       }
     }
 
@@ -1243,7 +1587,7 @@ function boot() {
         activeHexes,
         hexToWorld,
         worldToHex,
-        isLootForbiddenHex: (q, r) => specials.isSpecialTile(q, r),
+        isLootForbiddenHex: isLootForbiddenForSpawns,
         tileW: REFERENCE_TILE_W,
         canvasW: canvas.width,
         canvasH: canvas.height,
@@ -1275,7 +1619,7 @@ function boot() {
       }
 
       if (simElapsed >= nextCardSpawnAt) {
-        if (!runDead) {
+        if (!runDead && activeCharacterId !== "lunatic") {
           if (collectibles.filter((c) => c.kind === "card").length < MAX_CARD_PICKUPS) {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: CARD_PICKUP_HIT_R });
             if (pt) {
@@ -1310,7 +1654,14 @@ function boot() {
           const dy = player.y - c.y;
           if (dx * dx + dy * dy > rr * rr) continue;
           if (c.kind === "heal") {
-            player.hp = Math.min(player.maxHp, player.hp + (c.heal ?? HEAL_CRYSTAL_HP));
+            if (activeCharacterId === "lunatic") {
+              player.maxHp += 1;
+              player.hp = Math.min(player.maxHp, player.hp + 1);
+            } else if (activeCharacterId === "valiant" && typeof character.onHealCrystalPickup === "function") {
+              character.onHealCrystalPickup(buildAbilityContext(0), c.heal ?? HEAL_CRYSTAL_HP);
+            } else {
+              player.hp = Math.min(player.maxHp, player.hp + (c.heal ?? HEAL_CRYSTAL_HP));
+            }
           } else if (c.kind === "card" && cardPickup) {
             cardPickup.openCardPickup(c.card);
           }
@@ -1500,11 +1851,32 @@ function boot() {
       }
 
       tickAttackRings(attackRings, simElapsed);
-      if ((inventory.heartsRegenPerSec ?? 0) > 0 && player.hp > 0 && player.hp < player.maxHp) {
-        inventory.heartsRegenBank = (inventory.heartsRegenBank ?? 0) + inventory.heartsRegenPerSec * dt;
-        while (inventory.heartsRegenBank >= 1 && player.hp < player.maxHp) {
-          player.hp += 1;
-          inventory.heartsRegenBank -= 1;
+      tickLunaticSprintTierFx(lunaticSprintTierFx, simElapsed);
+      if ((inventory.heartsRegenPerSec ?? 0) > 0 && player.hp > 0) {
+        if (activeCharacterId === "valiant") {
+          inventory.heartsRegenBank = (inventory.heartsRegenBank ?? 0) + inventory.heartsRegenPerSec * dt;
+          while (inventory.heartsRegenBank >= 1) {
+            const hurt = [];
+            for (let j = 0; j < 3; j++) {
+              const s = valiantWorld.getRabbitSlots()[j];
+              if (s && s.hp < s.maxHp) hurt.push(j);
+            }
+            if (!hurt.length) {
+              inventory.heartsRegenBank = 0;
+              break;
+            }
+            const ri = hurt[Math.floor(Math.random() * hurt.length)];
+            const rb = valiantWorld.getRabbitSlots()[ri];
+            if (!rb) break;
+            inventory.heartsRegenBank -= 1;
+            rb.hp = Math.min(rb.maxHp, rb.hp + 1);
+          }
+        } else if (player.hp < player.maxHp) {
+          inventory.heartsRegenBank = (inventory.heartsRegenBank ?? 0) + inventory.heartsRegenPerSec * dt;
+          while (inventory.heartsRegenBank >= 1 && player.hp < player.maxHp) {
+            player.hp += 1;
+            inventory.heartsRegenBank -= 1;
+          }
         }
       }
     }
@@ -1525,7 +1897,7 @@ function boot() {
       isSafehouseHexActiveTile: (q, r) => specials.isSafehouseHexActiveTile(q, r),
       isSafehouseHexSpentTile: (q, r) => specials.isSafehouseHexSpentTile(q, r),
       safehouseModalEl: document.getElementById("safehouse-level-modal"),
-      clearKeys: () => keys.clearHeld(),
+      clearKeys: () => clearMovementKeys(),
       openRouletteEmbedded: () => {
         pendingRouletteOutcomeIsEmbedded = true;
         rouletteModal?.open(() => {
@@ -1600,6 +1972,23 @@ function boot() {
     }
     /** REFERENCE `render`: obstacles, sanctuary, arena nexus, roulette, surge (specials above tetris footprint). */
     drawObstacles(ctx, obstacles);
+    if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
+      const lock = character.getBulwarkWorld().getDeathLock();
+      if (lock) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(248, 113, 113, 0.5)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([10, 7]);
+        ctx.beginPath();
+        ctx.arc(lock.cx, lock.cy, lock.r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
+    if (activeCharacterId === "rogue") {
+      rogueWorld.drawSmokeAndFood(ctx, simElapsed);
+    }
     drawSafehouseHexWorld(ctx, {
       activeHexes,
       hexToWorld,
@@ -1655,21 +2044,43 @@ function boot() {
     }
     for (const c of collectibles) {
       if (c.kind === "heal") {
-        drawHealPickup(ctx, c, simElapsed);
+        drawHealPickup(ctx, c, simElapsed, { lunaticMaxHpCrystal: activeCharacterId === "lunatic" });
       } else if (c.kind === "card") {
         drawCardPickupWorld(ctx, c, simElapsed);
       }
     }
     for (const d of character.getDecoys()) {
-      drawDecoy(ctx, d);
+      if (activeCharacterId === "bulwark" && d.kind === "bulwarkFlag") {
+        drawBulwarkFlagPlanted(
+          ctx,
+          d,
+          simElapsed,
+          typeof character.getBulwarkWorld === "function" ? character.getBulwarkWorld().getPlantedChargeCount() : 0,
+        );
+      } else {
+        drawDecoy(ctx, d);
+      }
     }
     drawAttackRings(ctx, attackRings, simElapsed);
+    if (activeCharacterId === "lunatic") {
+      drawLunaticSprintTierSpeedFx(ctx, lunaticSprintTierFx, player, simElapsed);
+    }
     drawUltimateEffects(ctx, ultimateEffects, ultimateShields, simElapsed, player);
+    if (activeCharacterId === "rogue") {
+      rogueWorld.drawFoodSenseArrows(ctx, simElapsed, player);
+      const dashPreview =
+        typeof character.getDashPreviewRange === "function" ? character.getDashPreviewRange() : 120;
+      rogueWorld.drawDashAim(ctx, player, dashPreview);
+      rogueWorld.drawStealthAid(ctx, player, obstacles);
+      rogueWorld.drawWorldPopups(ctx, simElapsed);
+    }
 
     const hurt01 =
-      player.maxHp > 0
-        ? Math.min(1, 1 - player.hp / player.maxHp + (playerDamage.combat.hurtFlashRemain > 0 ? 0.22 : 0))
-        : 0;
+      activeCharacterId === "valiant"
+        ? Math.min(1, 1 - valiantWorld.getWill() + (playerDamage.combat.hurtFlashRemain > 0 ? 0.22 : 0))
+        : player.maxHp > 0
+          ? Math.min(1, 1 - player.hp / player.maxHp + (playerDamage.combat.hurtFlashRemain > 0 ? 0.22 : 0))
+          : 0;
 
     const invulnGate = Math.max(character.getInvulnUntil(), playerDamage.combat.playerInvulnerableUntil);
     let bodyAlpha = 1;
@@ -1681,6 +2092,11 @@ function boot() {
       const ghostAlpha = clamp(0.34 + 0.16 * pulse, 0.28, 0.52);
       bodyAlpha = Math.min(bodyAlpha, ghostAlpha);
     }
+    if (activeCharacterId === "rogue" && rogueWorld.stealthBlocksDamage(simElapsed, inventory)) {
+      const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 12);
+      const ghostAlpha = clamp(0.34 + 0.16 * pulse, 0.28, 0.52);
+      bodyAlpha = Math.min(bodyAlpha, ghostAlpha);
+    }
 
     if (
       typeof character.getBurstVisualUntil === "function" &&
@@ -1688,13 +2104,56 @@ function boot() {
     ) {
       drawKnightBurstAura(ctx, player.x, player.y, player.r, bodyAlpha);
     }
-    drawFrontShieldArc(ctx, player, simElapsed);
+    if (activeCharacterId === "bulwark") {
+      drawBulwarkFrontShieldArc(ctx, player, simElapsed);
+    } else {
+      drawFrontShieldArc(ctx, player, simElapsed);
+    }
 
-    drawPlayerHpHud(ctx, player, {
-      tempHp: player.tempHp,
-      extraHudYOffset: typeof character.getHpHudYOffset === "function" ? character.getHpHudYOffset() : 0,
-    });
+    if (activeCharacterId === "valiant") {
+      drawValiantShockFields(ctx, valiantWorld.getElectricBoxes(), simElapsed);
+      drawValiantBunnies(ctx, valiantWorld.getBunnies(), simElapsed);
+    }
+    if (activeCharacterId === "valiant") {
+      drawValiantWillTextAbovePlayer(
+        ctx,
+        player,
+        valiantWorld.getWill(),
+        typeof character.getHpHudYOffset === "function" ? character.getHpHudYOffset() : 0,
+      );
+    } else {
+      drawPlayerHpHud(ctx, player, {
+        tempHp: player.tempHp,
+        extraHudYOffset: typeof character.getHpHudYOffset === "function" ? character.getHpHudYOffset() : 0,
+      });
+    }
+    if (activeCharacterId === "rogue") {
+      rogueWorld.drawSurvivalHudArcs(ctx, player, simElapsed);
+    }
     drawPlayerBody(ctx, player.x, player.y, player.r, player.facing, hurt01, bodyAlpha);
+    if (activeCharacterId === "bulwark" && typeof character.getBulwarkParryUntil === "function") {
+      drawBulwarkParry(ctx, player, simElapsed, character.getBulwarkParryUntil());
+    }
+    if (
+      activeCharacterId === "bulwark" &&
+      typeof character.getBulwarkWorld === "function" &&
+      character.getBulwarkWorld().isFlagCarried()
+    ) {
+      const bw = character.getBulwarkWorld();
+      drawBulwarkFlagCarried(ctx, player, bw.getCarriedHp(), BULWARK_FLAG_MAX_HP, simElapsed);
+    }
+    if (activeCharacterId === "valiant") {
+      drawValiantRabbitOrbiters(ctx, valiantWorld, player, simElapsed, bodyAlpha);
+      drawValiantRabbitFx(ctx, valiantWorld, simElapsed);
+      drawValiantFloatPopups(ctx, valiantWorld.getFloatPopups(), simElapsed);
+    }
+    if (activeCharacterId === "lunatic") {
+      const phase = typeof character.getLunaticPhase === "function" ? character.getLunaticPhase() : "stumble";
+      const roarUntil = typeof character.getLunaticRoarUntil === "function" ? character.getLunaticRoarUntil() : 0;
+      drawLunaticSprintDirectionArrow(ctx, player, phase);
+      drawLunaticRoarFx(ctx, player, simElapsed, roarUntil, bodyAlpha);
+      drawLunaticRoarTimerBar(ctx, player, simElapsed, roarUntil, bodyAlpha);
+    }
 
     ctx.restore();
 
@@ -1705,6 +2164,19 @@ function boot() {
       wave: hunterRuntime?.spawnState?.wave ?? 0,
       hunterCount: hunterRuntime?.entities?.hunters?.length ?? 0,
     });
+
+    if (activeCharacterId === "valiant" && !runDead) {
+      drawValiantScreenHud(ctx, {
+        will01: valiantWorld.getWill(),
+        occupiedRabbitCount: valiantWorld.occupiedRabbitCount(),
+        netWillPerSec: valiantWorld.getWillNetChangePerSec(),
+        rabbitSlots: valiantWorld.getRabbitSlots(),
+      });
+    }
+
+    if (activeCharacterId === "rogue" && !runDead) {
+      rogueWorld.drawScreenHud(ctx, simElapsed, viewW, viewH);
+    }
 
     const rFlash = rouletteHexFlow.getScreenFlashUntil();
     const fFlash = forgeHexFlow.getScreenFlashUntil();
@@ -1769,6 +2241,7 @@ function boot() {
       window.removeEventListener("keydown", onDeathRetryKeydown);
       window.removeEventListener("keydown", onManualPauseKeydown);
       keys.dispose();
+      steerKeys.dispose();
       abilityKeys.dispose();
       devHeroSelect.dispose();
       cardPickup?.dispose();
