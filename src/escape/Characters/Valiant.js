@@ -163,7 +163,7 @@ export function createValiant(valiantWorld) {
 
     getShellUi() {
       return {
-        controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q) Surge · ${LABEL_W} (W) shock · ${LABEL_E} (E) Rescue · ${LABEL_R} (R) | Pause: Space`,
+        controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q) Surge · ${LABEL_W} (W) shock · ${LABEL_E} (E) Rescue · ${LABEL_R} (R) | Pause: Space | After death: Enter or Choose hero → character select`,
       };
     },
 

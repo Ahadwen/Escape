@@ -181,7 +181,7 @@ export function createLunatic() {
 
     getShellUi() {
       return {
-        controlsHintLine: `Move: Arrows · Sprint: W · Roar: R (while sprinting) · Steer sprint: Q / E or Left / Right | Pause: Space | After death: Enter retry`,
+        controlsHintLine: `Move: Arrows · Sprint: W · Roar: R (while sprinting) · Steer sprint: Q / E or Left / Right | Pause: Space | After death: Enter or Choose hero → character select`,
       };
     },
 

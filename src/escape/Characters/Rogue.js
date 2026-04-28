@@ -187,7 +187,7 @@ export function createRogue(rogueWorld) {
     getShellUi() {
       return {
         controlsHintLine:
-          "Move: Arrows | Q hold aim / release dash, W Smoke, E Food sense, R Ultimate | Pause: Space | After death: Enter retry",
+          "Move: Arrows | Q hold aim / release dash, W Smoke, E Food sense, R Ultimate | Pause: Space | After death: Enter or Choose hero → character select",
       };
     },
 

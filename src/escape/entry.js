@@ -267,6 +267,13 @@ function boot() {
   runLogger.log("entry", "boot");
   const mobileUiEnabled = shouldUseMobileUi(window);
   document.body.classList.toggle("is-mobile-ui", mobileUiEnabled);
+  const characterSelectModalEl = document.getElementById("character-select-modal");
+  const mobileUnpauseBtn = document.getElementById("mobile-unpause-btn");
+
+  /** Until the modal confirms a hero, picking the defaulted id must still refresh (often knight on touch). */
+  let hasLockedInitialHeroFromModal = !mobileUiEnabled;
+  /** After death, next pick must re-apply loadout even if the same hero stays selected. */
+  let expectingCharacterPickAfterDeath = false;
 
   /** Declared early so west-test `change` / death callbacks never hit the TDZ on these bindings. */
   let hunterRuntime = /** @type {ReturnType<typeof createHunterRuntime> | null} */ (null);
@@ -542,6 +549,7 @@ function boot() {
   const deathStatBestEl = document.getElementById("death-stat-best");
   const deathStatWaveEl = document.getElementById("death-stat-wave");
   const deathStatHuntersEl = document.getElementById("death-stat-hunters");
+  const deathScreenChooseHeroBtn = document.getElementById("death-screen-choose-hero-btn");
 
   function hideDeathScreen() {
     if (!deathScreenEl) return;
@@ -692,8 +700,12 @@ function boot() {
     cardPickup.openSetBonusChoice("diamonds");
   }
 
-  function switchActiveCharacter(id) {
-    if (id === activeCharacterId) return;
+  /** @param {object} [opts]
+   *  @property {boolean} [forceReselect] — allow re-applying loadout while id matches (first modal confirm, retry same hero).
+   */
+  function switchActiveCharacter(id, opts = {}) {
+    const forceReselect = !!(opts && opts.forceReselect);
+    if (!forceReselect && id === activeCharacterId) return;
     hideDeathScreen();
     activeCharacterId = id;
     if (id === "lunatic") {
@@ -1067,7 +1079,7 @@ function boot() {
     isCardPickupPaused: () => cardPickup?.isPaused() ?? false,
   }), "events", runLogger, { skip: ["tick", "postHunterTick", "getArenaDrawState", "getSurgeDrawState"] });
 
-  function restartRunAfterDeath() {
+  function performFullRunResetAfterDeath() {
     if (!runDead || !hunterRuntime) return;
     hideDeathScreen();
     runDead = false;
@@ -1152,20 +1164,56 @@ function boot() {
     snapCameraToPlayer();
   }
 
+  function goToCharacterSelectAfterDeath() {
+    if (!runDead || !hunterRuntime) return;
+    performFullRunResetAfterDeath();
+    manualPause = true;
+    clearMovementKeys();
+    expectingCharacterPickAfterDeath = true;
+    characterSelectModalEl?.classList.add("open");
+  }
+
   /** @param {KeyboardEvent} e */
   function onDeathRetryKeydown(e) {
     if (!runDead) return;
     if (e.key !== "Enter") return;
     if (e.repeat) return;
     e.preventDefault();
-    restartRunAfterDeath();
+    goToCharacterSelectAfterDeath();
   }
   window.addEventListener("keydown", onDeathRetryKeydown);
+
+  function onDeathScreenChooseHeroClick() {
+    if (!runDead) return;
+    goToCharacterSelectAfterDeath();
+  }
+  deathScreenChooseHeroBtn?.addEventListener("click", onDeathScreenChooseHeroClick);
+  mobileControlDisposers.push(() => deathScreenChooseHeroBtn?.removeEventListener("click", onDeathScreenChooseHeroClick));
+
+  /** Single handler for `#character-select-pick` (touch + desktop / post-death). */
+  function onHeroPickFromModal(ev) {
+    const btn = ev.target instanceof Element ? ev.target.closest("button[data-character-id]") : null;
+    if (!btn || btn.hasAttribute("disabled")) return;
+    const nextId = btn.dataset.characterId;
+    if (!nextId) return;
+    const forceReselect = expectingCharacterPickAfterDeath || !hasLockedInitialHeroFromModal;
+    switchActiveCharacter(nextId, { forceReselect });
+    hasLockedInitialHeroFromModal = true;
+    expectingCharacterPickAfterDeath = false;
+    characterSelectModalEl?.classList.remove("open");
+    manualPause = false;
+    handsResetPause = false;
+  }
+  const characterPickHostEl = document.getElementById("character-select-pick");
+  if (characterPickHostEl) {
+    characterPickHostEl.addEventListener("click", onHeroPickFromModal);
+    mobileControlDisposers.push(() => characterPickHostEl.removeEventListener("click", onHeroPickFromModal));
+  }
 
   const RESUME_KEYS = new Set(["q", "w", "e", "r", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
 
   function isCharacterSelectModalOpen() {
-    return document.getElementById("character-select-modal")?.classList.contains("open") ?? false;
+    return characterSelectModalEl?.classList.contains("open") ?? false;
   }
 
   function pauseKeyRoutingBlocked(ev) {
@@ -1453,24 +1501,20 @@ function boot() {
   const abilityKeys = attachAbilityKeyPresses(window, handleAbilityPress, undefined, handleAbilityRelease);
 
   if (mobileUiEnabled) {
-    const characterSelectModalEl = document.getElementById("character-select-modal");
-    const characterPickHostEl = document.getElementById("character-select-pick");
-    if (characterSelectModalEl && characterPickHostEl) {
+    if (characterSelectModalEl) {
       characterSelectModalEl.classList.add("open");
       manualPause = true;
       clearMovementKeys();
-      const onMobileCharacterPick = (ev) => {
-        const btn = ev.target instanceof Element ? ev.target.closest("button[data-character-id]") : null;
-        if (!btn || btn.hasAttribute("disabled")) return;
-        const nextId = btn.dataset.characterId;
-        if (!nextId) return;
-        switchActiveCharacter(nextId);
-        characterSelectModalEl.classList.remove("open");
+    }
+
+    if (mobileUnpauseBtn) {
+      const onMobileUnpause = () => {
+        if (runDead) return;
         manualPause = false;
         handsResetPause = false;
       };
-      characterPickHostEl.addEventListener("click", onMobileCharacterPick);
-      mobileControlDisposers.push(() => characterPickHostEl.removeEventListener("click", onMobileCharacterPick));
+      mobileUnpauseBtn.addEventListener("click", onMobileUnpause);
+      mobileControlDisposers.push(() => mobileUnpauseBtn.removeEventListener("click", onMobileUnpause));
     }
 
     const stickZoneEl = document.getElementById("mobile-stick-zone");
@@ -1606,6 +1650,12 @@ function boot() {
 
     const simPaused = simClockPaused();
     const paused = isWorldPaused();
+
+    if (mobileUiEnabled && mobileUnpauseBtn) {
+      const showMbUnpause =
+        (manualPause || handsResetPause) && !runDead && !(characterSelectModalEl?.classList.contains("open") ?? false);
+      mobileUnpauseBtn.hidden = !showMbUnpause;
+    }
 
     if (!paused) {
       playerDamage.tickCombatPresentation(rawDt);
@@ -2465,7 +2515,11 @@ function boot() {
       ctx.fillText("Paused", viewW / 2, viewH / 2 - 10);
       ctx.font = "16px Arial";
       ctx.fillStyle = "#cbd5e1";
-      ctx.fillText("Press movement or ability keys to resume", viewW / 2, viewH / 2 + 24);
+      ctx.fillText(
+        mobileUiEnabled ? "Tap Unpause (or stick / abilities) to resume" : "Press movement or ability keys to resume",
+        viewW / 2,
+        viewH / 2 + 24,
+      );
       ctx.restore();
     }
 
@@ -2498,4 +2552,31 @@ function boot() {
   );
 }
 
-boot();
+function startBootWhenGameCanvasMounted() {
+  const canvas = document.getElementById("game");
+  if (canvas instanceof HTMLCanvasElement) {
+    boot();
+    return;
+  }
+  /** Build output may execute before body subtree is observable in some hosts; defer until `#game` exists. */
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startBootWhenGameCanvasMounted, { once: true });
+    return;
+  }
+  let frames = 0;
+  function tick() {
+    frames += 1;
+    if (document.getElementById("game") instanceof HTMLCanvasElement) {
+      boot();
+      return;
+    }
+    if (frames > 120) {
+      boot();
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+startBootWhenGameCanvasMounted();

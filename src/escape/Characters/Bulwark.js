@@ -254,7 +254,7 @@ export function createBulwark(bulwarkWorld) {
 
     getShellUi() {
       return {
-        controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q), ${LABEL_W} (W), ${LABEL_E} (E) plant/pick flag | ${LABEL_R} (R) | Pause: Space`,
+        controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q), ${LABEL_W} (W), ${LABEL_E} (E) plant/pick flag | ${LABEL_R} (R) | Pause: Space | After death: Enter or Choose hero → character select`,
       };
     },
 

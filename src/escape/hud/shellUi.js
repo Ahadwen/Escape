@@ -1,6 +1,6 @@
 /** Shown if a character does not expose `getShellUi()`. */
 export const GENERIC_CONTROLS_HINT =
-  "Move: Arrows | Abilities: Q, W, E, R (labels from your hero) | Pause: Space | After death: Enter retry";
+  "Move: Arrows | Abilities: Q, W, E, R (labels from your hero) | Pause: Space | After death: Enter or Choose hero → character select";
 
 /**
  * Apply static shell copy that depends on the active hero (character module owns the strings).
