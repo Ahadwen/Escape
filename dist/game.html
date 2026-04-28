@@ -53,6 +53,7 @@
         overflow-y: auto;
         overscroll-behavior: contain;
         padding-right: 4px;
+        display: none;
       }
 
       .page-side-copy h1 {
@@ -443,6 +444,393 @@
 
       .canvas-stage {
         position: relative;
+      }
+
+      .mobile-touch-ui {
+        display: none;
+      }
+
+      body.is-mobile-ui {
+        overflow-x: hidden;
+        display: block;
+        width: 100%;
+        /* Fits touch column; used to scale action buttons (~23.46% of 324px reference). */
+        --mobile-actions-available: calc(100vw - 52px - min(45vw, 210px));
+        --mob-btn-col-cap: min(324px, var(--mobile-actions-available));
+        --mob-btn: max(54px, min(76px, calc(0.2346 * var(--mob-btn-col-cap))));
+      }
+
+      body.is-mobile-ui .page-with-side {
+        display: block;
+        width: 100%;
+        max-width: none;
+        padding: 6px 0 0;
+        margin: 0;
+        box-sizing: border-box;
+      }
+
+      body.is-mobile-ui .wrap.page-main-stack {
+        width: 100%;
+        max-width: none;
+        padding: 0 clamp(4px, 1.8vw, 10px)
+          clamp(230px, 38vh + env(safe-area-inset-bottom, 0px), 320px);
+        margin: 0;
+      }
+
+      /* Sim speed sidebar sits beside the canvas on desktop and steals width — hide on mobile. */
+      body.is-mobile-ui .sim-panel {
+        display: none !important;
+      }
+
+      body.is-mobile-ui .play-row {
+        display: block;
+        width: 100%;
+        gap: 0;
+      }
+
+      body.is-mobile-ui .canvas-col,
+      body.is-mobile-ui .canvas-stage {
+        width: 100%;
+      }
+
+      body.is-mobile-ui canvas#game {
+        width: 100% !important;
+        max-width: 100%;
+        height: auto !important;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+      }
+
+      body.is-mobile-ui .ability-bar {
+        display: none !important;
+      }
+
+      body.is-mobile-ui .player-deck-panel,
+      body.is-mobile-ui .danger-ramp-wrap,
+      body.is-mobile-ui .set-bonus-status {
+        margin-top: clamp(6px, 1.8vw, 10px);
+      }
+
+      body.is-mobile-ui .player-deck-panel {
+        margin-bottom: clamp(8px, 2vw, 14px);
+        padding: 0 clamp(6px, 2vw, 12px);
+        box-sizing: border-box;
+      }
+
+      body.is-mobile-ui .player-deck-label-row .deck-slots-label,
+      body.is-mobile-ui .deck-slots-label--sub {
+        font-size: clamp(10px, 3vw, 12px);
+      }
+
+      body.is-mobile-ui .player-deck-grid {
+        grid-template-columns:
+          clamp(44px, 14vw, 78px)
+          minmax(0, 1fr)
+          clamp(52px, 22vw, 96px);
+        gap: clamp(4px, 1.8vw, 10px);
+        align-items: stretch;
+      }
+
+      body.is-mobile-ui .deck-middle-twelve {
+        gap: clamp(3px, 1vw, 7px);
+      }
+
+      body.is-mobile-ui .deck-middle-twelve .card-slot.deck-slot {
+        min-height: clamp(42px, 12vw, 58px);
+        padding: clamp(3px, 1vw, 6px);
+      }
+
+      body.is-mobile-ui .deck-middle-twelve .card-slot .title {
+        font-size: clamp(11px, 3.2vw, 13px);
+      }
+
+      body.is-mobile-ui .deck-middle-twelve .card-slot .meta {
+        font-size: clamp(8px, 2.3vw, 10px);
+      }
+
+      body.is-mobile-ui .deck-slot--ace .deck-rank-label {
+        font-size: clamp(9px, 2.5vw, 11px);
+      }
+
+      body.is-mobile-ui .deck-slot--ace .title {
+        font-size: clamp(14px, 4.2vw, 17px);
+      }
+
+      body.is-mobile-ui .deck-slot--ace .meta {
+        font-size: clamp(9px, 2.5vw, 11px);
+      }
+
+      body.is-mobile-ui .deck-slot--ace.card-slot {
+        min-height: clamp(74px, 22vw, 112px);
+        padding: clamp(6px, 2vw, 10px);
+        font-size: clamp(11px, 3.2vw, 13px);
+      }
+
+      body.is-mobile-ui .backpack-column {
+        gap: clamp(5px, 1.5vw, 8px);
+      }
+
+      body.is-mobile-ui .card-slot.backpack-slot {
+        min-height: clamp(42px, 12vw, 58px);
+        padding: clamp(4px, 1.2vw, 7px);
+      }
+
+      body.is-mobile-ui .card-slot.backpack-slot .deck-rank-label {
+        font-size: clamp(7px, 2.1vw, 9px);
+      }
+
+      body.is-mobile-ui .card-slot.backpack-slot .title {
+        font-size: clamp(10px, 3vw, 12px);
+      }
+
+      body.is-mobile-ui .card-slot.backpack-slot .deck-slot-empty {
+        font-size: clamp(8px, 2.3vw, 10px);
+      }
+
+      body.is-mobile-ui .danger-ramp-head {
+        font-size: clamp(11px, 3vw, 14px);
+      }
+
+      body.is-mobile-ui .danger-ramp-track {
+        min-height: clamp(8px, 2vw, 14px);
+      }
+
+      body.is-mobile-ui .mobile-touch-ui {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 30;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+        background: linear-gradient(to top, rgba(2, 6, 23, 0.92), rgba(2, 6, 23, 0.28));
+        pointer-events: none;
+      }
+
+      .mobile-stick-wrap,
+      .mobile-actions-wrap {
+        pointer-events: auto;
+      }
+
+      body.is-mobile-ui .mobile-stick-wrap {
+        flex: 0 0 auto;
+        width: min(45vw, 210px);
+      }
+
+      .mobile-stick-wrap {
+        width: 45vw;
+        max-width: 210px;
+      }
+
+      body.is-mobile-ui .mobile-stick-zone {
+        width: min(168px, 42vw);
+        height: min(168px, 42vw);
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+
+      .mobile-stick-zone {
+        width: 154px;
+        height: 154px;
+        border-radius: 50%;
+        border: 1px solid rgba(148, 163, 184, 0.65);
+        background: radial-gradient(circle at 35% 35%, rgba(100, 116, 139, 0.35), rgba(15, 23, 42, 0.65));
+        position: relative;
+        touch-action: none;
+      }
+
+      body.is-mobile-ui .mobile-stick-knob {
+        width: min(74px, 21vw);
+        height: min(74px, 21vw);
+        margin-left: calc(min(74px, 21vw) / -2);
+        margin-top: calc(min(74px, 21vw) / -2);
+      }
+
+      .mobile-stick-knob {
+        width: 72px;
+        height: 72px;
+        border-radius: 50%;
+        border: 1px solid rgba(226, 232, 240, 0.8);
+        background: rgba(148, 163, 184, 0.55);
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(0px, 0px);
+        margin-left: -36px;
+        margin-top: -36px;
+        box-shadow: 0 4px 12px rgba(2, 6, 23, 0.45);
+        pointer-events: none;
+      }
+
+      body.is-mobile-ui .mobile-actions-wrap {
+        flex: 1 1 0;
+        min-width: 0;
+        width: min(324px, var(--mobile-actions-available));
+        max-width: min(324px, var(--mobile-actions-available));
+        aspect-ratio: 324 / 318;
+        min-height: 0;
+        position: relative;
+        align-self: flex-end;
+      }
+
+      .mobile-actions-wrap {
+        width: 54vw;
+        max-width: 324px;
+        min-height: 318px;
+        position: relative;
+      }
+
+      body.is-mobile-ui .mobile-action-btn {
+        width: var(--mob-btn);
+        height: var(--mob-btn);
+        border-radius: 999px;
+        box-sizing: border-box;
+        font-size: clamp(10px, 2.9vw, 12px);
+      }
+
+      body.is-mobile-ui .mobile-action-inner {
+        padding: clamp(3px, 1.1vw, 6px);
+        column-gap: clamp(4px, 1.2vw, 6px);
+      }
+
+      body.is-mobile-ui .mobile-action-key {
+        font-size: clamp(11px, 3.4vw, 14px);
+      }
+
+      body.is-mobile-ui .mobile-action-label {
+        font-size: clamp(8px, 2.6vw, 10px);
+      }
+
+      body.is-mobile-ui .mobile-action-value {
+        font-size: clamp(8px, 2.6vw, 10px);
+      }
+
+      .mobile-action-btn {
+        position: absolute;
+        width: 76px;
+        height: 76px;
+        border-radius: 999px;
+        border: 1px solid #475569;
+        background: rgba(2, 6, 23, 0.62);
+        color: #f8fafc;
+        font-weight: 700;
+        font-size: 12px;
+        touch-action: none;
+        user-select: none;
+        text-align: left;
+        overflow: hidden;
+        padding: 0;
+      }
+
+      /*
+       * Q / W / E: identical 76×76 circles on evenly spaced parameter samples along one quadratic Bézier.
+       */
+      .mobile-action-btn--curve {
+        right: auto;
+      }
+
+      /*
+       * Quadratic Bezier anchors (conceptual px in wrap space — **center** trajectory):
+       * P₀=(32,36), Pc=(154,130), P₂=(274,222)
+       * Sample uniformly in Bézier parameter: t ∈ {⅙, ½, ⅚}.
+       * Mobile uses % of wrap + var(--mob-btn) so curved layout survives narrow viewports (fixed px clipped E).
+       */
+      #mobile-btn-q.mobile-action-btn--curve {
+        left: 34px;
+        bottom: 29px;
+      }
+
+      #mobile-btn-w.mobile-action-btn--curve {
+        left: 116px;
+        bottom: 92px;
+      }
+
+      #mobile-btn-e.mobile-action-btn--curve {
+        left: 196px;
+        bottom: 153px;
+      }
+
+      body.is-mobile-ui #mobile-btn-q.mobile-action-btn--curve {
+        left: calc(22.2222% - var(--mob-btn) / 2);
+        bottom: calc(21.0692% - var(--mob-btn) / 2);
+      }
+
+      body.is-mobile-ui #mobile-btn-w.mobile-action-btn--curve {
+        left: calc(47.5309% - var(--mob-btn) / 2);
+        bottom: calc(40.8805% - var(--mob-btn) / 2);
+      }
+
+      body.is-mobile-ui #mobile-btn-e.mobile-action-btn--curve {
+        left: calc(72.2222% - var(--mob-btn) / 2);
+        bottom: calc(60.0639% - var(--mob-btn) / 2);
+      }
+
+      /*
+       * Ultimate R: centred above the arc midpoint; same circle size — distinct accent only.
+       */
+      #mobile-btn-r.mobile-action-btn--ultimate {
+        right: auto;
+        left: 116px;
+        bottom: 226px;
+      }
+
+      body.is-mobile-ui #mobile-btn-r.mobile-action-btn--ultimate {
+        right: auto;
+        left: calc(47.5309% - var(--mob-btn) / 2);
+        bottom: calc(83.0189% - var(--mob-btn) / 2);
+        border-color: rgba(249, 115, 22, 0.95);
+        box-shadow:
+          0 0 0 1px rgba(251, 146, 60, 0.5) inset,
+          0 4px 18px rgba(234, 88, 12, 0.22);
+      }
+
+      .mobile-action-btn--active {
+        box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.65) inset;
+      }
+
+      .mobile-action-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 0%;
+        opacity: 0.2;
+        transition: width 0.08s linear, opacity 0.08s linear;
+      }
+
+      .mobile-action-inner {
+        position: relative;
+        z-index: 1;
+        padding: 6px;
+        color: #f8fafc;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        column-gap: 6px;
+        row-gap: 2px;
+        align-items: center;
+      }
+
+      .mobile-action-key {
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1;
+        grid-column: 1;
+        grid-row: 1 / span 2;
+      }
+
+      .mobile-action-label {
+        font-size: 10px;
+        line-height: 1.1;
+        color: #f8fafc;
+      }
+
+      .mobile-action-value {
+        font-size: 10px;
+        line-height: 1.15;
+        color: #f8fafc;
+        white-space: pre-line;
       }
 
       .death-screen {
@@ -1489,6 +1877,34 @@
         box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
         font-size: 12px;
         color: #e2e8f0;
+        transition: transform 0.18s ease, opacity 0.18s ease;
+      }
+
+      .special-test-west-panel.special-test-west-panel--hidden {
+        transform: translate(-108%, -50%);
+        opacity: 0.12;
+        pointer-events: none;
+      }
+
+      .dev-panel-toggle {
+        position: fixed;
+        left: 10px;
+        top: 10px;
+        z-index: 70;
+        min-width: 96px;
+        font-size: 12px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid #64748b;
+        background: rgba(15, 23, 42, 0.94);
+        color: #e2e8f0;
+      }
+
+      body.is-mobile-ui .dev-panel-toggle {
+        left: auto;
+        right: max(10px, env(safe-area-inset-right, 1px));
+        top: max(42px, calc(env(safe-area-inset-top, 0px) + 44px));
+        min-width: 0;
       }
 
       .special-test-west-panel label {
@@ -1680,10 +2096,13 @@
         width: 100%;
       }
     </style>
-    <script type="module" crossorigin src="/Escape-Game/assets/escape-DuqtO9ua.js"></script>
+    <script type="module" crossorigin src="/Escape-Game/assets/escape-B96yh8Ak.js"></script>
     <link rel="modulepreload" crossorigin href="/Escape-Game/assets/modulepreload-polyfill-wMinxHhO.js">
   </head>
   <body>
+    <button id="dev-panel-toggle-button" class="dev-panel-toggle" type="button" aria-controls="special-test-west-panel">
+      Hide debug
+    </button>
     <div id="special-test-west-panel" class="special-test-west-panel" aria-label="Test special hex west of spawn">
       <div class="dev-hero-select-block">
         <label for="dev-active-hero-select">Active hero</label>
@@ -1875,6 +2294,47 @@
             <span class="ability-label">NA</span>
             <span class="ability-value">NA</span>
           </div>
+        </div>
+      </div>
+      <div id="mobile-touch-ui" class="mobile-touch-ui" aria-label="Mobile controls">
+        <div class="mobile-stick-wrap">
+          <div id="mobile-stick-zone" class="mobile-stick-zone" aria-label="Movement stick">
+            <div id="mobile-stick-knob" class="mobile-stick-knob"></div>
+          </div>
+        </div>
+        <div class="mobile-actions-wrap" aria-label="Ability buttons">
+          <button id="mobile-btn-q" class="mobile-action-btn mobile-action-btn--curve" type="button" aria-label="Ability Q">
+            <div class="mobile-action-fill"></div>
+            <div class="mobile-action-inner">
+              <span class="mobile-action-key">Q</span>
+              <span class="mobile-action-label">Ability</span>
+              <span class="mobile-action-value">READY</span>
+            </div>
+          </button>
+          <button id="mobile-btn-w" class="mobile-action-btn mobile-action-btn--curve" type="button" aria-label="Ability W">
+            <div class="mobile-action-fill"></div>
+            <div class="mobile-action-inner">
+              <span class="mobile-action-key">W</span>
+              <span class="mobile-action-label">Ability</span>
+              <span class="mobile-action-value">READY</span>
+            </div>
+          </button>
+          <button id="mobile-btn-e" class="mobile-action-btn mobile-action-btn--curve" type="button" aria-label="Ability E">
+            <div class="mobile-action-fill"></div>
+            <div class="mobile-action-inner">
+              <span class="mobile-action-key">E</span>
+              <span class="mobile-action-label">Ability</span>
+              <span class="mobile-action-value">READY</span>
+            </div>
+          </button>
+          <button id="mobile-btn-r" class="mobile-action-btn mobile-action-btn--ultimate" type="button" aria-label="Ultimate (R)">
+            <div class="mobile-action-fill"></div>
+            <div class="mobile-action-inner">
+              <span class="mobile-action-key">R</span>
+              <span class="mobile-action-label">Ability</span>
+              <span class="mobile-action-value">READY</span>
+            </div>
+          </button>
         </div>
       </div>
     </main>
