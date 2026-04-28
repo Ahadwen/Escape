@@ -190,8 +190,13 @@ function shouldUseMobileUi(win = window) {
 }
 
 function isLocalDebugHost(win = window) {
-  const host = String(win.location?.hostname || "").toLowerCase();
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  const host = String(win.location?.hostname || "").trim().toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
 }
 
 function boot() {

@@ -7,10 +7,12 @@
     <script>
       (function () {
         var path = location.pathname;
+        var suffix = "game.html";
+        var idx = path.length - suffix.length;
         var next =
-          /game\\.html$/i.test(path)
-            ? path.replace(/game\\.html$/i, "index.html")
-            : "/index.html";
+          idx >= 0 && path.slice(idx).toLowerCase() === suffix
+            ? path.slice(0, idx) + "index.html"
+            : path.replace(/\/[^/]*$/, "/") + "index.html";
         location.replace(next + location.search + location.hash);
       })();
     </script>
@@ -19,6 +21,6 @@
   <body
     style="margin: 0; min-height: 100dvh; display: grid; place-items: center; background: #111827; color: #e2e8f0; font-family: system-ui, sans-serif"
   >
-    <p>Opening <a href="index.html" style="color: #38bdf8">Escape</a>…</p>
+    <p>Opening <a href="./index.html" style="color: #38bdf8">Escape</a>…</p>
   </body>
 </html>

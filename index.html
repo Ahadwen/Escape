@@ -4,6 +4,35 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Escape - Browser Game</title>
+    <script>
+      (function () {
+        try {
+          var raw = location.hostname || "";
+          var host = typeof raw !== "string" ? "" : String(raw).toLowerCase();
+          var localDev =
+            host === "localhost" ||
+            host === "127.0.0.1" ||
+            host === "::1" ||
+            host === "[::1]";
+          if (!localDev) {
+            document.documentElement.classList.add("escape-hide-dev-shell");
+          }
+        } catch {
+          document.documentElement.classList.add("escape-hide-dev-shell");
+        }
+      })();
+    </script>
+    <style>
+      /* Production / GitHub Pages: hide developer shell before bundles load (belt + suspenders with entry.js removal). */
+      html.escape-hide-dev-shell .dev-panel-toggle,
+      html.escape-hide-dev-shell .special-test-west-panel {
+        display: none !important;
+      }
+
+      html.escape-hide-dev-shell .sim-panel {
+        display: none !important;
+      }
+    </style>
     <style>
       :root {
         color-scheme: dark;
@@ -1711,7 +1740,7 @@
         align-items: center;
         justify-content: center;
         background: rgba(2, 6, 23, 0.84);
-        z-index: 60;
+        z-index: 120;
       }
 
       .character-select-modal.open {
