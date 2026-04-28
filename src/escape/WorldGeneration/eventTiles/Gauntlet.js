@@ -361,6 +361,7 @@ export function createGauntletHexEvent(deps) {
         awaitMode = "idle";
         eligibleForInnerExitReward = true;
         rewardPendingOnUnpause = false;
+        // Prime from current position so reward only fires on an actual inward boundary crossing.
         {
           const c = hexToWorld(lockQ, lockR);
           const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
@@ -399,9 +400,9 @@ export function createGauntletHexEvent(deps) {
     return phase;
   }
 
-  /** Active during outer lock + waves only — blocks ordnance into the locked hex. Off in phase 3+ so the tile is not a cage after the gauntlet. */
+  /** Active during outer lock + waves + reward-crossing, so enemies/ordnance cannot flood the tile before reward collection. */
   function isSurgeLockBarrierWorldPoint(px, py) {
-    if (phase !== 1 && phase !== 2) return false;
+    if (phase !== 1 && phase !== 2 && phase !== 3) return false;
     const h = worldToHex(px, py);
     if (h.q !== lockQ || h.r !== lockR) return false;
     const c = hexToWorld(h.q, h.r);

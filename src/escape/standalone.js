@@ -5164,13 +5164,13 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       suitSetBonusGoalLabel(suit) {
         if (suit === "hearts") return "continuous health regen";
         if (suit === "diamonds") return "ability empowerment";
-        if (suit === "clubs") return "burst phases through terrain";
+        if (suit === "clubs") return "burst: speed + deck stealth (solid terrain)";
         return "after ultimate: world (except you) at 30% speed for 2s";
       },
       suitSetBonusSevenActiveShort(suit) {
         if (suit === "diamonds") return "diamond empowerment active";
         if (suit === "hearts") return "passive HP regeneration";
-        if (suit === "clubs") return "phase-through active";
+        if (suit === "clubs") return "burst speed + stealth";
         return "ultimate world slow";
       },
       suitSetBonusTierTwoGoalLabel(suit) {
@@ -10071,9 +10071,6 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         return [];
       }
       if (activeCharacterId === "valiant" && countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD && typeof character.getValiantSurgeUntil === "function" && simElapsed < character.getValiantSurgeUntil()) {
-        return [];
-      }
-      if (activeCharacterId === "knight" && countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD && typeof character.getBurstVisualUntil === "function" && character.getBurstVisualUntil(simElapsed) > simElapsed) {
         return [];
       }
       return obstacles;

@@ -36,6 +36,7 @@ export function createCardPickupModal(opts) {
   let inventoryModalOpen = false;
   let cardPickupFlowActive = false;
   let pendingCard = null;
+  let setBonusChoicePendingSuit = null;
   let pickupTargetRank = null;
   /** While dragging from a backpack or rank slot, overrides stale `pickupTargetRank` for face + deck drop zone (no full row rebuild). */
   let dragIntentRank = null;
@@ -386,12 +387,34 @@ export function createCardPickupModal(opts) {
       cardSwapRow.appendChild(zoneEl);
     }
 
-    const leaveBtn = document.createElement("button");
-    leaveBtn.type = "button";
-    leaveBtn.className = "leave-button";
-    leaveBtn.textContent = "Leave";
-    leaveBtn.addEventListener("click", () => continueAfterLoadout());
-    cardSwapRow.appendChild(leaveBtn);
+    const needsDiamondChoice = setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower;
+    if (needsDiamondChoice) {
+      const mk = (id, text) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "leave-button";
+        btn.textContent = `Set bonus! ${text}`;
+        btn.addEventListener("click", () => {
+          inventory.diamondEmpower = id;
+          setBonusChoicePendingSuit = null;
+          pendingCard = null;
+          cardPickupFlowActive = false;
+          pickupTargetRank = null;
+          dragIntentRank = null;
+          closeCardModal();
+        });
+        return btn;
+      };
+      cardSwapRow.appendChild(mk("dash2x", "Empower Dash (twice range)"));
+      cardSwapRow.appendChild(mk("speedPassive", "Empower Burst (+speed/+duration)"));
+    } else {
+      const leaveBtn = document.createElement("button");
+      leaveBtn.type = "button";
+      leaveBtn.className = "leave-button";
+      leaveBtn.textContent = "Leave";
+      leaveBtn.addEventListener("click", () => continueAfterLoadout());
+      cardSwapRow.appendChild(leaveBtn);
+    }
 
     if (modalSetBonusStatusEl) {
       const progress = getModalSetBonusProgressLines(inventory, pendingCard, itemRules);
@@ -431,12 +454,16 @@ export function createCardPickupModal(opts) {
     continueAfterLoadout();
   }
 
-  const onCloseClick = () => continueAfterLoadout();
+  const onCloseClick = () => {
+    if (setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower) return;
+    continueAfterLoadout();
+  };
   if (cardCloseButton) cardCloseButton.addEventListener("click", onCloseClick);
 
   function onGlobalKeydown(e) {
     if (e.key !== "Escape") return;
     if (!inventoryModalOpen) return;
+    if (setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower) return;
     e.preventDefault();
     continueAfterLoadout();
   }
@@ -449,6 +476,25 @@ export function createCardPickupModal(opts) {
     renderCardModal,
     /** @returns {object | null} */
     getPendingCard: () => pendingCard,
+    openSetBonusChoice(suit) {
+      if (suit !== "diamonds") return;
+      if (inventory.diamondEmpower) return;
+      if (setBonusChoicePendingSuit === "diamonds" && inventoryModalOpen) return;
+      setBonusChoicePendingSuit = "diamonds";
+      inventoryModalOpen = true;
+      cardPickupFlowActive = false;
+      pendingCard = null;
+      pickupTargetRank = null;
+      dragIntentRank = null;
+      onPausedChange(true);
+      renderCardModal();
+    },
+    clearSetBonusChoice(suit = null) {
+      if (suit != null && setBonusChoicePendingSuit !== suit) return;
+      if (setBonusChoicePendingSuit == null) return;
+      setBonusChoicePendingSuit = null;
+      renderCardModal();
+    },
     dispose() {
       if (cardCloseButton) cardCloseButton.removeEventListener("click", onCloseClick);
       window.removeEventListener("keydown", onGlobalKeydown);

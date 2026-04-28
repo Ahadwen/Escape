@@ -1224,7 +1224,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function ejectHuntersFromSurgeLockHex(lockQ, lockR, surgePhase) {
-    if (surgePhase !== 1 && surgePhase !== 2) return;
+    if (surgePhase !== 1 && surgePhase !== 2 && surgePhase !== 3) return;
     const { x: cx, y: cy } = hexToWorld(lockQ, lockR);
     const edgeR = HEX_SIZE + 14;
     for (const h of entities.hunters) {

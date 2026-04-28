@@ -181,7 +181,8 @@ export function createKnight() {
     burstUntil = elapsed + BURST_DURATION + burstDurBonus;
     const invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck(inventory);
     if (invisSec > 0) {
-      inventory.clubsInvisUntil = Math.max(inventory.clubsInvisUntil ?? 0, elapsed + invisSec);
+      const invisUntil = Math.min(burstUntil, elapsed + invisSec);
+      inventory.clubsInvisUntil = Math.max(inventory.clubsInvisUntil ?? 0, invisUntil);
     }
     if (typeof spawnAttackRing === "function") {
       spawnAttackRing(player.x, player.y, 72, "#94a3b8", 0.2);

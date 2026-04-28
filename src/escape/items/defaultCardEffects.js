@@ -27,13 +27,24 @@ export function makeDefaultCardEffect(suit, rank, ctx) {
   if (suit === "clubs") {
     const picks = ["dodge", "stun", "invisBurst"];
     const pick = picks[Math.floor(Math.random() * picks.length)];
-    if (pick === "dodge") return { kind: "dodge", value: (5 + 0.1 * rank) / 100 };
+    if (pick === "dodge") return { kind: "dodge", value: (2 + rank) / 100 };
     if (pick === "stun") return { kind: "stun", value: 0.2 * rank };
-    return { kind: "invisBurst", value: 0.1 * rank };
+    return { kind: "invisBurst", value: invisBurstDurationSeconds(rank) };
   }
   if (rank >= 11) return { kind: "dashCharge", value: 1 };
   if (Math.random() < 0.5) return { kind: "speed", value: Math.min(0.18, 0.018 * rank) };
   return { kind: "terrainBoost", value: Math.min(0.36, 0.036 * rank) };
+}
+
+/**
+ * Clubs invis scaling:
+ * - ranks 2-6: fixed 0.2s
+ * - ranks 7+: 0.(rank-4)s (e.g. 7->0.3s, 8->0.4s)
+ * @param {number} rank
+ */
+export function invisBurstDurationSeconds(rank) {
+  if (rank <= 6) return 0.2;
+  return Math.max(0.2, (rank - 4) / 10);
 }
 
 /**

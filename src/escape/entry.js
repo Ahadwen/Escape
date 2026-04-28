@@ -85,6 +85,7 @@ import { makeRandomMapCard } from "./items/makeRandomCard.js";
 import { getItemRulesForCharacter } from "./items/itemRulesRegistry.js";
 import { countSuitsInActiveSlots } from "./items/setBonusPresentation.js";
 import { createCardPickupModal } from "./items/cardPickupModal.js";
+import { invisBurstDurationSeconds } from "./items/defaultCardEffects.js";
 import { syncDeckSlotsFromInventory } from "./items/deckHudSync.js";
 import { getModalSetBonusProgressLines } from "./items/setBonusPresentation.js";
 import { createForgeHexFlow } from "./specials/forgeHexFlow.js";
@@ -371,14 +372,6 @@ function boot() {
     ) {
       return [];
     }
-    if (
-      activeCharacterId === "knight" &&
-      countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD &&
-      typeof character.getBurstVisualUntil === "function" &&
-      character.getBurstVisualUntil(simElapsed) > simElapsed
-    ) {
-      return [];
-    }
     return obstacles;
   }
   applyShellUiFromCharacter(document, character);
@@ -578,6 +571,25 @@ function boot() {
       const lines = getModalSetBonusProgressLines(inventory, cardPickup?.getPendingCard() ?? null, getItemRulesForCharacter(activeCharacterId));
       setBonusStatusEl.textContent = lines.length ? lines.join("\n") : "";
     }
+    maybePromptDiamondEmpowerChoice();
+  }
+
+  function maybePromptDiamondEmpowerChoice() {
+    if (!cardPickup) return;
+    if (activeCharacterId !== "knight") {
+      cardPickup.clearSetBonusChoice?.("diamonds");
+      return;
+    }
+    if (inventory.diamondEmpower) {
+      cardPickup.clearSetBonusChoice?.("diamonds");
+      return;
+    }
+    const suits = countSuitsInActiveSlots(inventory);
+    if (suits.diamonds < SET_BONUS_SUIT_THRESHOLD || suits.diamonds >= SET_BONUS_SUIT_MAX) {
+      cardPickup.clearSetBonusChoice?.("diamonds");
+      return;
+    }
+    cardPickup.openSetBonusChoice("diamonds");
   }
 
   function switchActiveCharacter(id) {
@@ -1076,7 +1088,6 @@ function boot() {
       }
       manualPause = false;
       handsResetPause = false;
-      clearMovementKeys();
       return;
     }
 
@@ -1139,9 +1150,9 @@ function boot() {
         return;
       }
       if (srcSuit === "clubs") {
-        add(`clubs:dodge`, "clubs dodge", { kind: "dodge", value: (5 + 0.1 * rank) / 100 }, srcSuit);
+        add(`clubs:dodge`, "clubs dodge", { kind: "dodge", value: (2 + rank) / 100 }, srcSuit);
         add(`clubs:stun`, "clubs stun", { kind: "stun", value: 0.2 * rank }, srcSuit);
-        add(`clubs:invisBurst`, "clubs invis on burst", { kind: "invisBurst", value: 0.1 * rank }, srcSuit);
+        add(`clubs:invisBurst`, "clubs invis on burst", { kind: "invisBurst", value: invisBurstDurationSeconds(rank) }, srcSuit);
         return;
       }
       if (srcSuit === "spades") {
@@ -1454,6 +1465,7 @@ function boot() {
         typeof character.isBulwarkCharging === "function" &&
         character.isBulwarkCharging();
 
+      let sweepTouchedObstacle = false;
       if (!lunaticMove && !bulwarkCharging) {
         if (keys.isDown("ArrowLeft")) vx -= 1;
         if (keys.isDown("ArrowRight")) vx += 1;
@@ -1480,8 +1492,22 @@ function boot() {
           }
         }
 
-        player.x += vx;
-        player.y += vy;
+        const moveDist = Math.hypot(vx, vy);
+        const moveSteps = Math.max(1, Math.ceil(moveDist / Math.max(3, player.r * 0.35)));
+        const stepX = vx / moveSteps;
+        const stepY = vy / moveSteps;
+        for (let i = 0; i < moveSteps; i++) {
+          player.x += stepX;
+          player.y += stepY;
+          const preResolveX = player.x;
+          const preResolveY = player.y;
+          const stepResolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obstaclesForPlayerCollision());
+          if (Math.abs(stepResolved.x - preResolveX) > 1e-6 || Math.abs(stepResolved.y - preResolveY) > 1e-6) {
+            sweepTouchedObstacle = true;
+          }
+          player.x = stepResolved.x;
+          player.y = stepResolved.y;
+        }
       } else if (lunaticMove) {
         rogueMovementIntent = lunaticMove.rogueMovementIntent;
       }
@@ -1498,7 +1524,10 @@ function boot() {
       if (!lunaticMove) {
         const obsForPlayer = obstaclesForPlayerCollision();
         const resolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForPlayer);
-        touchedObstacle = Math.abs(resolved.x - player.x) > 1e-6 || Math.abs(resolved.y - player.y) > 1e-6;
+        touchedObstacle =
+          sweepTouchedObstacle ||
+          Math.abs(resolved.x - player.x) > 1e-6 ||
+          Math.abs(resolved.y - player.y) > 1e-6;
         player.x = resolved.x;
         player.y = resolved.y;
         if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
