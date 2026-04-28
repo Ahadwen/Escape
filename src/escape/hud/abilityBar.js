@@ -40,5 +40,35 @@ export function syncAbilityBarDocument(doc, hud) {
         root.style.borderColor = "#475569";
       }
     }
+
+    // Mirror the same HUD payload into mobile touch buttons.
+    const mobileBtn = doc.getElementById(`mobile-btn-${slot}`);
+    if (mobileBtn) {
+      const keyEl = mobileBtn.querySelector(".mobile-action-key");
+      const labelEl2 = mobileBtn.querySelector(".mobile-action-label");
+      const valueEl2 = mobileBtn.querySelector(".mobile-action-value");
+      const fillEl2 = mobileBtn.querySelector(".mobile-action-fill");
+      if (keyEl) keyEl.textContent = slot.toUpperCase();
+      if (labelEl2) labelEl2.textContent = cell.label;
+      if (valueEl2) valueEl2.textContent = cell.value;
+      if (fillEl2) {
+        const idleBorder = mobileBtn.classList.contains("mobile-action-btn--ultimate")
+          ? "rgba(249, 115, 22, 0.95)"
+          : "#475569";
+        const f = cell.fill;
+        if (f && f.duration > 1e-4) {
+          const cooldownProgress = clamp(1 - f.remaining / f.duration, 0, 1);
+          fillEl2.style.width = `${Math.round(cooldownProgress * 100)}%`;
+          fillEl2.style.background = f.color;
+          fillEl2.style.opacity = String(0.2 + cooldownProgress * 0.75);
+          mobileBtn.style.borderColor = f.color;
+        } else {
+          fillEl2.style.width = "100%";
+          fillEl2.style.background = "#64748b";
+          fillEl2.style.opacity = "0.35";
+          mobileBtn.style.borderColor = idleBorder;
+        }
+      }
+    }
   }
 }

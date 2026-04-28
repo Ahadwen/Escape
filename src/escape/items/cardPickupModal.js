@@ -7,7 +7,7 @@ function rankDeckIsCompletelyEmpty(inventory) {
 }
 
 function cardModalInventoryDragHintHtml() {
-  return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Click and hold</strong> a card, then <b>drag</b> it to a slot and <b>release</b> to drop, either in the relevant card slot, or the <b>backpack</b>.</p></aside>`;
+  return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Desktop:</strong> click and hold, then <b>drag</b> a card to a slot and release.<br><strong>Mobile:</strong> tap a card to select it, then tap the destination slot (rank slot, <b>New pickup</b>, or <b>backpack</b>).</p></aside>`;
 }
 
 function cardFaceNameHtml(card) {
@@ -40,6 +40,8 @@ export function createCardPickupModal(opts) {
   let pickupTargetRank = null;
   /** While dragging from a backpack or rank slot, overrides stale `pickupTargetRank` for face + deck drop zone (no full row rebuild). */
   let dragIntentRank = null;
+  /** Mobile/touch swap source (`data-zone-id`): tap card, then tap destination zone. */
+  let tapSwapSourceZoneId = null;
 
   function effectivePickupRank() {
     if (pendingCard?.rank != null) return pendingCard.rank;
@@ -155,6 +157,23 @@ export function createCardPickupModal(opts) {
     syncDeckSlots();
   }
 
+  function clearTapSwapSelection() {
+    tapSwapSourceZoneId = null;
+    if (!cardSwapRow) return;
+    const highlighted = cardSwapRow.querySelectorAll(".drop-zone.over");
+    for (const el of highlighted) el.classList.remove("over");
+  }
+
+  function markTapSwapSelection(zoneId) {
+    if (!cardSwapRow) return;
+    const zones = cardSwapRow.querySelectorAll("[data-zone-id]");
+    for (const zoneEl of zones) {
+      if (!(zoneEl instanceof HTMLElement)) continue;
+      zoneEl.classList.toggle("over", zoneEl.dataset.zoneId === zoneId);
+    }
+    tapSwapSourceZoneId = zoneId;
+  }
+
   function wireDropZone(zoneEl, zoneId) {
     zoneEl.dataset.zoneId = zoneId;
     zoneEl.addEventListener("dragover", (event) => {
@@ -167,6 +186,17 @@ export function createCardPickupModal(opts) {
       zoneEl.classList.remove("over");
       const from = event.dataTransfer?.getData("text/plain");
       if (!from) return;
+      swapCardsBetweenZones(from, zoneId);
+      clearTapSwapSelection();
+    });
+    zoneEl.addEventListener("click", () => {
+      if (!tapSwapSourceZoneId) return;
+      if (tapSwapSourceZoneId === zoneId) {
+        clearTapSwapSelection();
+        return;
+      }
+      const from = tapSwapSourceZoneId;
+      clearTapSwapSelection();
       swapCardsBetweenZones(from, zoneId);
     });
   }
@@ -198,6 +228,15 @@ export function createCardPickupModal(opts) {
           dragIntentRank = null;
           renderCardModal();
         }
+      });
+      cardEl.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (tapSwapSourceZoneId === zoneId) {
+          clearTapSwapSelection();
+          return;
+        }
+        markTapSwapSelection(zoneId);
       });
       zoneEl.appendChild(cardEl);
     } else {
@@ -297,6 +336,7 @@ export function createCardPickupModal(opts) {
     const itemRules = getItemRules();
     if (!cardModal || !cardModalFace || !cardSwapRow) return;
     dragIntentRank = null;
+    tapSwapSourceZoneId = null;
     if (modalDeckStripEl) modalDeckStripEl.innerHTML = "";
     if (!inventoryModalOpen) {
       cardModal.classList.remove("open");
@@ -430,12 +470,14 @@ export function createCardPickupModal(opts) {
     cardPickupFlowActive = false;
     pickupTargetRank = null;
     dragIntentRank = null;
+    tapSwapSourceZoneId = null;
     if (wasOpen) onPausedChange(false);
     renderCardModal();
   }
 
   function continueAfterLoadout() {
     pendingCard = null;
+    clearTapSwapSelection();
     closeCardModal();
   }
 

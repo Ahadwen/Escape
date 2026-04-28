@@ -182,9 +182,42 @@ function circleOverlapsAnyRect(cx, cy, r, rects) {
   return false;
 }
 
+function shouldUseMobileUi(win = window) {
+  const coarse = win.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+  const narrow = win.matchMedia?.("(max-width: 920px)")?.matches ?? false;
+  const touchPoints = (navigator.maxTouchPoints ?? 0) > 0;
+  return coarse && (narrow || touchPoints);
+}
+
 function boot() {
   const runLogger = createRunLogger(30);
   mountCharacterRoster(document);
+  const devPanelEl = document.getElementById("special-test-west-panel");
+  const devPanelToggleBtn = document.getElementById("dev-panel-toggle-button");
+  const DEV_PANEL_HIDDEN_LS_KEY = "escape-dev-panel-hidden";
+  function setDevPanelHidden(hidden) {
+    if (!devPanelEl || !devPanelToggleBtn) return;
+    devPanelEl.classList.toggle("special-test-west-panel--hidden", hidden);
+    devPanelToggleBtn.textContent = hidden ? "Show debug" : "Hide debug";
+    devPanelToggleBtn.setAttribute("aria-expanded", hidden ? "false" : "true");
+    try {
+      localStorage.setItem(DEV_PANEL_HIDDEN_LS_KEY, hidden ? "1" : "0");
+    } catch {
+      /* ignore storage failures */
+    }
+  }
+  if (devPanelEl && devPanelToggleBtn) {
+    let initiallyHidden = false;
+    try {
+      initiallyHidden = localStorage.getItem(DEV_PANEL_HIDDEN_LS_KEY) === "1";
+    } catch {
+      initiallyHidden = false;
+    }
+    setDevPanelHidden(initiallyHidden);
+    devPanelToggleBtn.addEventListener("click", () => {
+      setDevPanelHidden(!devPanelEl.classList.contains("special-test-west-panel--hidden"));
+    });
+  }
 
   const canvas = document.getElementById("game");
   if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
@@ -215,6 +248,8 @@ function boot() {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
   runLogger.log("entry", "boot");
+  const mobileUiEnabled = shouldUseMobileUi(window);
+  document.body.classList.toggle("is-mobile-ui", mobileUiEnabled);
 
   /** Declared early so west-test `change` / death callbacks never hit the TDZ on these bindings. */
   let hunterRuntime = /** @type {ReturnType<typeof createHunterRuntime> | null} */ (null);
@@ -293,9 +328,30 @@ function boot() {
 
   const keys = attachArrowKeyState(window);
   const steerKeys = attachHeldLetterKeys(window, ["q", "e"]);
+  const touchMoveHeld = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+  const touchSteerHeld = { q: false, e: false };
+  const mobileControlDisposers = [];
+  function clearTouchMoveInputs() {
+    touchMoveHeld.ArrowUp = false;
+    touchMoveHeld.ArrowDown = false;
+    touchMoveHeld.ArrowLeft = false;
+    touchMoveHeld.ArrowRight = false;
+  }
+  function clearTouchInputs() {
+    clearTouchMoveInputs();
+    touchSteerHeld.q = false;
+    touchSteerHeld.e = false;
+  }
+  function isArrowHeld(key) {
+    return keys.isDown(key) || !!touchMoveHeld[key];
+  }
+  function isSteerHeld(letter) {
+    return steerKeys.isDown(letter) || !!touchSteerHeld[String(letter).toLowerCase()];
+  }
   function clearMovementKeys() {
     keys.clearHeld();
     steerKeys.clearHeld();
+    clearTouchInputs();
   }
   const player = {
     x: 0,
@@ -319,6 +375,33 @@ function boot() {
     _px: 0,
     _py: 0,
   };
+
+  function setTouchMoveFromStick(nx, ny) {
+    touchMoveHeld.ArrowUp = false;
+    touchMoveHeld.ArrowDown = false;
+    touchMoveHeld.ArrowLeft = false;
+    touchMoveHeld.ArrowRight = false;
+    const mag = Math.hypot(nx, ny);
+    if (mag < 0.28) return;
+    const sector = Math.round(Math.atan2(ny, nx) / (Math.PI / 4));
+    if (sector === 0) touchMoveHeld.ArrowRight = true;
+    else if (sector === 1) {
+      touchMoveHeld.ArrowRight = true;
+      touchMoveHeld.ArrowDown = true;
+    } else if (sector === 2) touchMoveHeld.ArrowDown = true;
+    else if (sector === 3) {
+      touchMoveHeld.ArrowDown = true;
+      touchMoveHeld.ArrowLeft = true;
+    } else if (Math.abs(sector) === 4) touchMoveHeld.ArrowLeft = true;
+    else if (sector === -3) {
+      touchMoveHeld.ArrowLeft = true;
+      touchMoveHeld.ArrowUp = true;
+    } else if (sector === -2) touchMoveHeld.ArrowUp = true;
+    else if (sector === -1) {
+      touchMoveHeld.ArrowUp = true;
+      touchMoveHeld.ArrowRight = true;
+    }
+  }
 
   let obstacles = [];
   let activeHexes = [];
@@ -1331,24 +1414,139 @@ function boot() {
     };
   }
 
-  const abilityKeys = attachAbilityKeyPresses(
-    window,
-    (slot) => {
-      if (runDead || isWorldPaused()) return;
-      if (simElapsed < playerTimelockUntil) return;
-      const ctx = buildAbilityContext(0);
-      if (slot === "r" && tryUseEquippedUltimate(ctx)) return;
-      character.onAbilityPress(slot, ctx);
-    },
-    undefined,
-    (slot) => {
-      if (runDead || isWorldPaused()) return;
-      if (simElapsed < playerTimelockUntil) return;
-      if (typeof character.onAbilityRelease !== "function") return;
-      const ctx = buildAbilityContext(0);
-      character.onAbilityRelease(slot, ctx);
-    },
-  );
+  function handleAbilityPress(slot) {
+    if (runDead) return;
+    if (manualPause || handsResetPause) {
+      manualPause = false;
+      handsResetPause = false;
+    }
+    if (isWorldPaused()) return;
+    if (simElapsed < playerTimelockUntil) return;
+    const ctx = buildAbilityContext(0);
+    if (slot === "r" && tryUseEquippedUltimate(ctx)) return;
+    character.onAbilityPress(slot, ctx);
+  }
+  function handleAbilityRelease(slot) {
+    if (runDead || isWorldPaused()) return;
+    if (simElapsed < playerTimelockUntil) return;
+    if (typeof character.onAbilityRelease !== "function") return;
+    const ctx = buildAbilityContext(0);
+    character.onAbilityRelease(slot, ctx);
+  }
+  const abilityKeys = attachAbilityKeyPresses(window, handleAbilityPress, undefined, handleAbilityRelease);
+
+  if (mobileUiEnabled) {
+    const characterSelectModalEl = document.getElementById("character-select-modal");
+    const characterPickHostEl = document.getElementById("character-select-pick");
+    if (characterSelectModalEl && characterPickHostEl) {
+      characterSelectModalEl.classList.add("open");
+      manualPause = true;
+      clearMovementKeys();
+      const onMobileCharacterPick = (ev) => {
+        const btn = ev.target instanceof Element ? ev.target.closest("button[data-character-id]") : null;
+        if (!btn || btn.hasAttribute("disabled")) return;
+        const nextId = btn.dataset.characterId;
+        if (!nextId) return;
+        switchActiveCharacter(nextId);
+        characterSelectModalEl.classList.remove("open");
+        manualPause = false;
+        handsResetPause = false;
+      };
+      characterPickHostEl.addEventListener("click", onMobileCharacterPick);
+      mobileControlDisposers.push(() => characterPickHostEl.removeEventListener("click", onMobileCharacterPick));
+    }
+
+    const stickZoneEl = document.getElementById("mobile-stick-zone");
+    const stickKnobEl = document.getElementById("mobile-stick-knob");
+    if (stickZoneEl && stickKnobEl) {
+      let stickPointerId = null;
+      let stickCx = 0;
+      let stickCy = 0;
+      let stickR = 1;
+      const updateStickGeom = () => {
+        const rect = stickZoneEl.getBoundingClientRect();
+        stickCx = rect.left + rect.width / 2;
+        stickCy = rect.top + rect.height / 2;
+        stickR = Math.max(24, Math.min(rect.width, rect.height) * 0.36);
+      };
+      const resetStick = () => {
+        stickPointerId = null;
+        clearTouchMoveInputs();
+        stickKnobEl.style.transform = "translate(0px, 0px)";
+      };
+      const updateStickFromEvent = (ev) => {
+        const dx = ev.clientX - stickCx;
+        const dy = ev.clientY - stickCy;
+        const len = Math.hypot(dx, dy) || 1;
+        const clamped = Math.min(stickR, len);
+        const kx = (dx / len) * clamped;
+        const ky = (dy / len) * clamped;
+        stickKnobEl.style.transform = `translate(${kx}px, ${ky}px)`;
+        setTouchMoveFromStick(dx / stickR, dy / stickR);
+      };
+      const onStickDown = (ev) => {
+        ev.preventDefault();
+        updateStickGeom();
+        stickPointerId = ev.pointerId;
+        stickZoneEl.setPointerCapture(ev.pointerId);
+        updateStickFromEvent(ev);
+      };
+      const onStickMove = (ev) => {
+        if (ev.pointerId !== stickPointerId) return;
+        ev.preventDefault();
+        updateStickFromEvent(ev);
+      };
+      const onStickUp = (ev) => {
+        if (ev.pointerId !== stickPointerId) return;
+        ev.preventDefault();
+        resetStick();
+      };
+      stickZoneEl.addEventListener("pointerdown", onStickDown);
+      stickZoneEl.addEventListener("pointermove", onStickMove);
+      stickZoneEl.addEventListener("pointerup", onStickUp);
+      stickZoneEl.addEventListener("pointercancel", onStickUp);
+      window.addEventListener("blur", resetStick);
+      mobileControlDisposers.push(() => {
+        stickZoneEl.removeEventListener("pointerdown", onStickDown);
+        stickZoneEl.removeEventListener("pointermove", onStickMove);
+        stickZoneEl.removeEventListener("pointerup", onStickUp);
+        stickZoneEl.removeEventListener("pointercancel", onStickUp);
+        window.removeEventListener("blur", resetStick);
+      });
+    }
+
+    for (const slot of ["q", "w", "e", "r"]) {
+      const btn = document.getElementById(`mobile-btn-${slot}`);
+      if (!btn) continue;
+      let heldPointerId = null;
+      const onDown = (ev) => {
+        ev.preventDefault();
+        heldPointerId = ev.pointerId;
+        btn.setPointerCapture?.(ev.pointerId);
+        if (slot === "q" || slot === "e") touchSteerHeld[slot] = true;
+        btn.classList.add("mobile-action-btn--active");
+        handleAbilityPress(slot);
+      };
+      const onUp = (ev) => {
+        if (heldPointerId != null && ev.pointerId !== heldPointerId) return;
+        ev.preventDefault();
+        heldPointerId = null;
+        if (slot === "q" || slot === "e") touchSteerHeld[slot] = false;
+        btn.classList.remove("mobile-action-btn--active");
+        handleAbilityRelease(slot);
+      };
+      btn.addEventListener("pointerdown", onDown);
+      btn.addEventListener("pointerup", onUp);
+      btn.addEventListener("pointercancel", onUp);
+      btn.addEventListener("pointerleave", onUp);
+      mobileControlDisposers.push(() => {
+        btn.removeEventListener("pointerdown", onDown);
+        btn.removeEventListener("pointerup", onUp);
+        btn.removeEventListener("pointercancel", onUp);
+        btn.removeEventListener("pointerleave", onUp);
+      });
+    }
+  }
 
   function isLootForbiddenForSpawns(q, r) {
     if (specials.isSpecialTile(q, r)) return true;
@@ -1436,8 +1634,8 @@ function boot() {
               simElapsed,
               player,
               keys,
-              steerLeft: () => steerKeys.isDown("q"),
-              steerRight: () => steerKeys.isDown("e"),
+              steerLeft: () => isSteerHeld("q"),
+              steerRight: () => isSteerHeld("e"),
               inventory,
               PLAYER_SPEED,
               ultimateSpeedUntil,
@@ -1467,10 +1665,10 @@ function boot() {
 
       let sweepTouchedObstacle = false;
       if (!lunaticMove && !bulwarkCharging) {
-        if (keys.isDown("ArrowLeft")) vx -= 1;
-        if (keys.isDown("ArrowRight")) vx += 1;
-        if (keys.isDown("ArrowUp")) vy -= 1;
-        if (keys.isDown("ArrowDown")) vy += 1;
+        if (isArrowHeld("ArrowLeft")) vx -= 1;
+        if (isArrowHeld("ArrowRight")) vx += 1;
+        if (isArrowHeld("ArrowUp")) vy -= 1;
+        if (isArrowHeld("ArrowDown")) vy += 1;
         const len = Math.hypot(vx, vy);
         const rogueDashHold = activeCharacterId === "rogue" && rogueWorld.getDashAiming();
         if (len > 1e-6) {
@@ -2272,6 +2470,8 @@ function boot() {
       keys.dispose();
       steerKeys.dispose();
       abilityKeys.dispose();
+      clearTouchInputs();
+      mobileControlDisposers.forEach((fn) => fn());
       devHeroSelect.dispose();
       cardPickup?.dispose();
       rouletteModal?.dispose();
