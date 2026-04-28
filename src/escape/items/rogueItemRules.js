@@ -45,7 +45,7 @@ export function createRogueItemRules() {
       const e = card?.effect;
       if (e?.kind === "invisBurst") {
         const base = `Smoke lingers +${e.value.toFixed(1)}s`;
-        if (card?.suit === "joker") return `${base} (Joker — Contributes towards all set bonuses).`;
+        if (card?.suit === "joker") return base;
         return `${base} (clubs)`;
       }
       return describeDefaultCardEffect(card, {

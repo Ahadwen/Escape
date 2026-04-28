@@ -75,8 +75,5 @@ export function describeDefaultCardEffect(card, helpers) {
   else if (e.kind === "terrainBoost") base = `+${Math.round(e.value * 100)}% terrain-touch speed boost`;
   else if (e.kind === "dashCharge") base = `+${e.value} dash charge`;
   else base = "Passive effect";
-  if (card?.suit === "joker") {
-    return `${base} (Joker — Contributes towards all set bonuses).`;
-  }
   return base;
 }

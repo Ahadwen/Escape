@@ -1248,6 +1248,15 @@ function boot() {
   }
   window.addEventListener("keydown", onManualPauseKeydown);
 
+  /** Mirrors Space-to-pause; used by HUD pause control on touch. */
+  function tryMobileHudPause() {
+    if (runDead) return;
+    if (modalChromePausesWorld()) return;
+    if (manualPause || handsResetPause) return;
+    manualPause = true;
+    clearMovementKeys();
+  }
+
   const dangerRampFillEl = document.getElementById("danger-ramp-fill");
 
   const devHuntersEl = document.getElementById("dev-hunters-enabled");
@@ -1508,13 +1517,27 @@ function boot() {
     }
 
     if (mobileUnpauseBtn) {
-      const onMobileUnpause = () => {
+      /** Same as ability `pointerdown` — `click` waits for finger up, so pause + thumb on stick blocked unpause. */
+      const onMobileUnpause = (ev) => {
         if (runDead) return;
+        ev.preventDefault();
+        ev.stopPropagation();
         manualPause = false;
         handsResetPause = false;
       };
-      mobileUnpauseBtn.addEventListener("click", onMobileUnpause);
-      mobileControlDisposers.push(() => mobileUnpauseBtn.removeEventListener("click", onMobileUnpause));
+      mobileUnpauseBtn.addEventListener("pointerdown", onMobileUnpause, { passive: false });
+      mobileControlDisposers.push(() => mobileUnpauseBtn.removeEventListener("pointerdown", onMobileUnpause));
+    }
+
+    const mobileHudPauseBtn = document.getElementById("mobile-hud-pause-btn");
+    if (mobileHudPauseBtn) {
+      const onMobileHudPause = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        tryMobileHudPause();
+      };
+      mobileHudPauseBtn.addEventListener("pointerdown", onMobileHudPause, { passive: false });
+      mobileControlDisposers.push(() => mobileHudPauseBtn.removeEventListener("pointerdown", onMobileHudPause));
     }
 
     const stickZoneEl = document.getElementById("mobile-stick-zone");

@@ -1,4 +1,4 @@
-import { formatCardName, cardRankText } from "./cardUtils.js";
+import { formatCardHudSuitGlyph, cardRankText } from "./cardUtils.js";
 import { clearCardGlowClasses, countSuitsAcrossAllStowed, suitInventoryGlowClass } from "./setBonusPresentation.js";
 
 function fillDeckSlotEl(el, rank, card, inventory, pendingCard, itemRules, forgeHudDragSources) {
@@ -15,9 +15,7 @@ function fillDeckSlotEl(el, rank, card, inventory, pendingCard, itemRules, forge
   }
   const glow = suitInventoryGlowClass(card, suitsAll);
   if (glow) el.classList.add(glow);
-  el.innerHTML = `<span class="deck-rank-label">${cardRankText(rank)}</span><div><span class="title">${formatCardName(
-    card,
-  )}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
+  el.innerHTML = `<span class="deck-rank-label">${cardRankText(card.rank)}</span><div class="card-slot-copy"><span class="title">${formatCardHudSuitGlyph(card)}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
   if (forgeHudDragSources && card.suit !== "joker") {
     el.draggable = true;
     el.dataset.forgeRef = JSON.stringify({ kind: "deck", rank });
@@ -63,7 +61,7 @@ export function syncDeckSlotsFromInventory(
       }
       const glow = suitInventoryGlowClass(card, suitsAll);
       if (glow) slot.classList.add(glow);
-      slot.innerHTML = `<span class="deck-rank-label">Pack ${i + 1}</span><div><span class="title">${formatCardName(
+      slot.innerHTML = `<span class="deck-rank-label">${cardRankText(card.rank)}</span><div class="card-slot-copy"><span class="title">${formatCardHudSuitGlyph(
         card,
       )}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
       if (forgeHudDragSources && card.suit !== "joker") {

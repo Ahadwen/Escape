@@ -1,4 +1,4 @@
-import { formatCardName, cardRankText, CARD_SET_GLOW_CLASSES } from "./cardUtils.js";
+import { formatCardName, formatCardHudSuitGlyph, cardRankText, CARD_SET_GLOW_CLASSES } from "./cardUtils.js";
 import { countSuitsAcrossAllStowed, suitInventoryGlowClass, getModalSetBonusProgressLines } from "./setBonusPresentation.js";
 
 function rankDeckIsCompletelyEmpty(inventory) {
@@ -7,7 +7,11 @@ function rankDeckIsCompletelyEmpty(inventory) {
 }
 
 function cardModalInventoryDragHintHtml() {
-  return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Desktop:</strong> click and hold, then <b>drag</b> a card to a slot and release.<br><strong>Mobile:</strong> tap a card to select it, then tap the destination slot (rank slot, <b>New pickup</b>, or <b>backpack</b>).</p></aside>`;
+  return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Desktop:</strong> click and hold, then <b>drag</b> a card to a slot and release.<br><strong>Touch:</strong> press and <b>drag</b> a card onto another slot (same as desktop).</p></aside>`;
+}
+
+function preferTouchPointerDrag() {
+  return window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
 }
 
 function cardFaceNameHtml(card) {
@@ -40,8 +44,45 @@ export function createCardPickupModal(opts) {
   let pickupTargetRank = null;
   /** While dragging from a backpack or rank slot, overrides stale `pickupTargetRank` for face + deck drop zone (no full row rebuild). */
   let dragIntentRank = null;
-  /** Mobile/touch swap source (`data-zone-id`): tap card, then tap destination zone. */
+  /** Desktop: tap card then tap zone. Coarse pointer: disabled in favour of pointer-drag on `.zone-card`. */
   let tapSwapSourceZoneId = null;
+
+  /** @type {{ pointerId: number; onMove: (e: PointerEvent) => void; onUp: (e: PointerEvent) => void } | null} */
+  let touchDragSession = null;
+
+  function clearDropZoneHoverHighlights() {
+    if (!cardSwapRow) return;
+    for (const el of cardSwapRow.querySelectorAll(".drop-zone.over")) el.classList.remove("over");
+  }
+
+  function dropZoneFromClientPoint(clientX, clientY) {
+    const stack =
+      typeof document.elementsFromPoint === "function"
+        ? document.elementsFromPoint(clientX, clientY)
+        : [document.elementFromPoint(clientX, clientY)];
+    for (const node of stack) {
+      if (!(node instanceof Element)) continue;
+      const z = node.closest("[data-zone-id].drop-zone");
+      if (z && cardSwapRow?.contains(z)) return z;
+    }
+    return null;
+  }
+
+  function endTouchDragSession() {
+    if (!touchDragSession) return;
+    window.removeEventListener("pointermove", touchDragSession.onMove);
+    window.removeEventListener("pointerup", touchDragSession.onUp);
+    window.removeEventListener("pointercancel", touchDragSession.onUp);
+    if (cardModal && "releasePointerCapture" in cardModal) {
+      try {
+        cardModal.releasePointerCapture(touchDragSession.pointerId);
+      } catch {
+        /* already released */
+      }
+    }
+    touchDragSession = null;
+    clearDropZoneHoverHighlights();
+  }
 
   function effectivePickupRank() {
     if (pendingCard?.rank != null) return pendingCard.rank;
@@ -189,30 +230,83 @@ export function createCardPickupModal(opts) {
       swapCardsBetweenZones(from, zoneId);
       clearTapSwapSelection();
     });
-    zoneEl.addEventListener("click", () => {
-      if (!tapSwapSourceZoneId) return;
-      if (tapSwapSourceZoneId === zoneId) {
+    if (!preferTouchPointerDrag()) {
+      zoneEl.addEventListener("click", () => {
+        if (!tapSwapSourceZoneId) return;
+        if (tapSwapSourceZoneId === zoneId) {
+          clearTapSwapSelection();
+          return;
+        }
+        const from = tapSwapSourceZoneId;
         clearTapSwapSelection();
-        return;
+        swapCardsBetweenZones(from, zoneId);
+      });
+    }
+  }
+
+  function beginTouchDragFromZone(zoneId, card, pointerId) {
+    if (touchDragSession) return;
+    clearTapSwapSelection();
+    if (cardPickupFlowActive && card?.rank != null) {
+      const fromBp = parseBpZoneId(zoneId) != null;
+      const fromDeck = parseDeckZoneId(zoneId) != null;
+      if (fromBp || fromDeck) {
+        dragIntentRank = card.rank;
+        refreshRankTargetUiDuringDrag();
       }
-      const from = tapSwapSourceZoneId;
-      clearTapSwapSelection();
-      swapCardsBetweenZones(from, zoneId);
-    });
+    }
+    const fromZoneId = zoneId;
+    const onMove = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      clearDropZoneHoverHighlights();
+      const drop = dropZoneFromClientPoint(ev.clientX, ev.clientY);
+      if (drop) drop.classList.add("over");
+    };
+    const onUp = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      const drop = dropZoneFromClientPoint(ev.clientX, ev.clientY);
+      const to = drop?.dataset?.zoneId;
+      if (to && to !== fromZoneId) {
+        swapCardsBetweenZones(fromZoneId, to);
+        clearTapSwapSelection();
+      } else if (dragIntentRank != null) {
+        dragIntentRank = null;
+        renderCardModal();
+      }
+      endTouchDragSession();
+    };
+    touchDragSession = { pointerId, onMove, onUp };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    if (cardModal && "setPointerCapture" in cardModal) {
+      try {
+        cardModal.setPointerCapture(pointerId);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   function appendCardToZone(zoneEl, zoneId, card, compact, itemRules) {
     const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+    const usePointerDrag = preferTouchPointerDrag();
     if (card) {
       const cardEl = document.createElement("div");
       cardEl.className = "zone-card";
-      cardEl.draggable = true;
+      cardEl.draggable = !usePointerDrag;
       const glow = suitInventoryGlowClass(card, suitsAll);
       if (glow) cardEl.classList.add(glow);
       cardEl.textContent = compact
         ? formatCardName(card)
-        : `${formatCardName(card)} — ${itemRules.describeCardEffect(card)}`;
+        : `${cardRankText(card.rank)}${formatCardHudSuitGlyph(card)} — ${itemRules.describeCardEffect(card)}`;
       cardEl.addEventListener("dragstart", (event) => {
+        if (usePointerDrag) {
+          event.preventDefault();
+          return;
+        }
         event.dataTransfer?.setData("text/plain", zoneId);
         if (cardPickupFlowActive && card?.rank != null) {
           const fromBp = parseBpZoneId(zoneId) != null;
@@ -229,15 +323,24 @@ export function createCardPickupModal(opts) {
           renderCardModal();
         }
       });
-      cardEl.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (tapSwapSourceZoneId === zoneId) {
-          clearTapSwapSelection();
-          return;
-        }
-        markTapSwapSelection(zoneId);
-      });
+      if (usePointerDrag) {
+        cardEl.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          if (touchDragSession) return;
+          event.preventDefault();
+          beginTouchDragFromZone(zoneId, card, event.pointerId);
+        });
+      } else {
+        cardEl.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (tapSwapSourceZoneId === zoneId) {
+            clearTapSwapSelection();
+            return;
+          }
+          markTapSwapSelection(zoneId);
+        });
+      }
       zoneEl.appendChild(cardEl);
     } else {
       const emptyEl = document.createElement("div");
@@ -251,14 +354,15 @@ export function createCardPickupModal(opts) {
     const cell = document.createElement("div");
     cell.className = ["modal-deck-cell", extraClass].filter(Boolean).join(" ");
     for (const c of CARD_SET_GLOW_CLASSES) cell.classList.remove(c);
-    cell.innerHTML = `<div class="modal-deck-cell-label">${cardRankText(rank)}</div>`;
+    const rankLabelText = card ? cardRankText(card.rank) : cardRankText(rank);
+    cell.innerHTML = `<div class="modal-deck-cell-label">${rankLabelText}</div>`;
     const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
     if (card) {
       const glow = suitInventoryGlowClass(card, suitsAll);
       if (glow) cell.classList.add(glow);
       const t = document.createElement("div");
       t.className = "modal-deck-cell-card";
-      t.textContent = formatCardName(card);
+      t.textContent = formatCardHudSuitGlyph(card);
       cell.appendChild(t);
     } else {
       const e = document.createElement("div");
@@ -273,14 +377,15 @@ export function createCardPickupModal(opts) {
     const cell = document.createElement("div");
     cell.className = "modal-deck-cell modal-deck-cell--bp";
     for (const c of CARD_SET_GLOW_CLASSES) cell.classList.remove(c);
-    cell.innerHTML = `<div class="modal-deck-cell-label">Pack ${packIndex + 1}</div>`;
+    const bpLabel = card ? cardRankText(card.rank) : `Pack ${packIndex + 1}`;
+    cell.innerHTML = `<div class="modal-deck-cell-label">${bpLabel}</div>`;
     const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
     if (card) {
       const glow = suitInventoryGlowClass(card, suitsAll);
       if (glow) cell.classList.add(glow);
       const t = document.createElement("div");
       t.className = "modal-deck-cell-card";
-      t.textContent = formatCardName(card);
+      t.textContent = formatCardHudSuitGlyph(card);
       cell.appendChild(t);
     } else {
       const e = document.createElement("div");
@@ -333,6 +438,7 @@ export function createCardPickupModal(opts) {
   }
 
   function renderCardModal() {
+    endTouchDragSession();
     const itemRules = getItemRules();
     if (!cardModal || !cardModalFace || !cardSwapRow) return;
     dragIntentRank = null;
@@ -538,6 +644,7 @@ export function createCardPickupModal(opts) {
       renderCardModal();
     },
     dispose() {
+      endTouchDragSession();
       if (cardCloseButton) cardCloseButton.removeEventListener("click", onCloseClick);
       window.removeEventListener("keydown", onGlobalKeydown);
     },

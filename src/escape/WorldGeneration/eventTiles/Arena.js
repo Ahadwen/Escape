@@ -71,6 +71,8 @@ export function createArenaHexEvent(deps) {
   let nextLaserEnemyAt = 0;
   let nextSniperEnemyAt = 0;
   let cardRewardAt = 0;
+  /** True while card UI is paused at/after reward time — grant on unpause (Gauntlet parity). */
+  let arenaRewardPendingOnUnpause = false;
 
   function reset() {
     phase = 0;
@@ -80,6 +82,7 @@ export function createArenaHexEvent(deps) {
     nextLaserEnemyAt = 0;
     nextSniperEnemyAt = 0;
     cardRewardAt = 0;
+    arenaRewardPendingOnUnpause = false;
   }
 
   function worldCenter() {
@@ -109,6 +112,7 @@ export function createArenaHexEvent(deps) {
   function finishSiege() {
     phase = 2;
     cleanupArenaNexusSiegeCombat();
+    arenaRewardPendingOnUnpause = false;
     cardRewardAt = getSimElapsed() + ARENA_NEXUS_REWARD_MODAL_DELAY_SEC;
     markProceduralArenaHexSpent(siegeQ, siegeR);
   }
@@ -167,11 +171,33 @@ export function createArenaHexEvent(deps) {
     const cardPaused = isCardPickupPaused();
     const ph = worldToHex(player.x, player.y);
 
-    if (phase === 2 && cardRewardAt > 0 && elapsed >= cardRewardAt && !cardPaused) {
+    if (phase === 2 && cardRewardAt > 0 && elapsed >= cardRewardAt) {
+      if (!cardPaused) {
+        cardRewardAt = 0;
+        arenaRewardPendingOnUnpause = false;
+        dropSpecialEventJokerReward();
+      } else {
+        arenaRewardPendingOnUnpause = true;
+      }
+    }
+    if (!cardPaused && phase === 2 && arenaRewardPendingOnUnpause) {
+      arenaRewardPendingOnUnpause = false;
       cardRewardAt = 0;
       dropSpecialEventJokerReward();
     }
     if (phase === 2 && (ph.q !== siegeQ || ph.r !== siegeR)) {
+      // Leaving the tile before the delayed grant used to reset state and skip the
+      // reward entirely (common when moving fast). Still grant if the siege completed.
+      if (cardRewardAt > 0) {
+        if (!cardPaused) {
+          dropSpecialEventJokerReward();
+          cardRewardAt = 0;
+          arenaRewardPendingOnUnpause = false;
+        } else {
+          arenaRewardPendingOnUnpause = true;
+          return;
+        }
+      }
       // Once the completed arena despawns from active play, reset event state
       // so future arena tiles start fresh instead of inheriting a spent phase.
       reset();

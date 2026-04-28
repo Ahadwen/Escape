@@ -28,6 +28,13 @@ export function formatCardName(card) {
   return `${cardRankText(card.rank)}${SUIT_GLYPH[card.suit] ?? "?"}`;
 }
 
+/** Suit line for compact HUD tiles: rank stays in `.deck-rank-label`, title row shows only glyph (★ Joker). */
+export function formatCardHudSuitGlyph(card) {
+  if (!card) return "?";
+  if (card.suit === "joker") return SUIT_GLYPH.joker;
+  return SUIT_GLYPH[card.suit] ?? "?";
+}
+
 export function deckKey(suit, rank) {
   return `${suit}:${rank}`;
 }
