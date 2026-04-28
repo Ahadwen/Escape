@@ -189,11 +189,23 @@ function shouldUseMobileUi(win = window) {
   return coarse && (narrow || touchPoints);
 }
 
+function isLocalDebugHost(win = window) {
+  const host = String(win.location?.hostname || "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
 function boot() {
   const runLogger = createRunLogger(30);
   mountCharacterRoster(document);
-  const devPanelEl = document.getElementById("special-test-west-panel");
-  const devPanelToggleBtn = document.getElementById("dev-panel-toggle-button");
+  const debugAllowed = isLocalDebugHost(window);
+  let devPanelEl = document.getElementById("special-test-west-panel");
+  let devPanelToggleBtn = document.getElementById("dev-panel-toggle-button");
+  if (!debugAllowed) {
+    devPanelEl?.remove();
+    devPanelToggleBtn?.remove();
+    devPanelEl = null;
+    devPanelToggleBtn = null;
+  }
   const DEV_PANEL_HIDDEN_LS_KEY = "escape-dev-panel-hidden";
   function setDevPanelHidden(hidden) {
     if (!devPanelEl || !devPanelToggleBtn) return;

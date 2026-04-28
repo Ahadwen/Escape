@@ -1,13 +1,12 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: '/Escape-Game/',
+  base: "/Escape/",
   appType: "mpa",
   build: {
     rollupOptions: {
       input: {
         main: "index.html",
-        escape: "game.html",
       },
     },
   },
