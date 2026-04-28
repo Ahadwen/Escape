@@ -1,4 +1,4 @@
-import { formatCardHudSuitGlyph, cardRankText } from "./cardUtils.js";
+import { formatCardName, cardRankText } from "./cardUtils.js";
 import { clearCardGlowClasses, countSuitsAcrossAllStowed, suitInventoryGlowClass } from "./setBonusPresentation.js";
 
 function preferTouchPointerDrag() {
@@ -19,7 +19,8 @@ function fillDeckSlotEl(el, rank, card, inventory, pendingCard, itemRules, forge
   }
   const glow = suitInventoryGlowClass(card, suitsAll);
   if (glow) el.classList.add(glow);
-  el.innerHTML = `<span class="deck-rank-label">${cardRankText(card.rank)}</span><div class="card-slot-copy"><span class="title">${formatCardHudSuitGlyph(card)}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
+  const red = card.suit === "hearts" || card.suit === "diamonds";
+  el.innerHTML = `<div class="card-slot-headline"><span class="card-slot-rank-suit${red ? " card-slot-rank-suit--red" : ""}">${formatCardName(card)}</span></div><div class="card-slot-copy"><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
   if (forgeHudDragSources && card.suit !== "joker") {
     el.draggable = !preferTouchPointerDrag();
     el.dataset.forgeRef = JSON.stringify({ kind: "deck", rank });
@@ -65,9 +66,10 @@ export function syncDeckSlotsFromInventory(
       }
       const glow = suitInventoryGlowClass(card, suitsAll);
       if (glow) slot.classList.add(glow);
-      slot.innerHTML = `<span class="deck-rank-label">${cardRankText(card.rank)}</span><div class="card-slot-copy"><span class="title">${formatCardHudSuitGlyph(
+      const red = card.suit === "hearts" || card.suit === "diamonds";
+      slot.innerHTML = `<div class="card-slot-headline"><span class="card-slot-rank-suit${red ? " card-slot-rank-suit--red" : ""}">${formatCardName(
         card,
-      )}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
+      )}</span></div><div class="card-slot-copy"><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
       if (forgeHudDragSources && card.suit !== "joker") {
         slot.draggable = !preferTouchPointerDrag();
         slot.dataset.forgeRef = JSON.stringify({ kind: "bp", idx: i });

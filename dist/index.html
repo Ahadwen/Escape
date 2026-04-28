@@ -187,7 +187,8 @@
         font-size: 10px;
       }
 
-      .deck-slot--ace .title {
+      .deck-slot--ace .title,
+      .deck-slot--ace .card-slot-rank-suit {
         font-size: 15px;
       }
 
@@ -208,7 +209,8 @@
         padding: 5px 3px;
       }
 
-      .deck-middle-twelve .card-slot .title {
+      .deck-middle-twelve .card-slot .title,
+      .deck-middle-twelve .card-slot .card-slot-rank-suit {
         font-size: 12px;
       }
 
@@ -246,7 +248,8 @@
         font-size: 9px;
       }
 
-      .card-slot.backpack-slot .title {
+      .card-slot.backpack-slot .title,
+      .card-slot.backpack-slot .card-slot-rank-suit {
         font-size: 11px;
         line-height: 1.15;
       }
@@ -280,6 +283,32 @@
         color: #64748b;
         font-weight: 700;
         margin-bottom: 2px;
+      }
+
+      .card-slot-headline {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        min-width: 0;
+      }
+
+      .card-slot .title,
+      .card-slot .card-slot-rank-suit {
+        display: block;
+        font-weight: 700;
+        font-size: 14px;
+        line-height: 1;
+        flex-shrink: 0;
+      }
+
+      .card-slot .card-slot-rank-suit {
+        color: #e2e8f0;
+      }
+
+      .card-slot .card-slot-rank-suit--red {
+        color: #fecaca;
       }
 
       .deck-slot-empty {
@@ -357,14 +386,6 @@
           0 0 0 1px rgba(148, 163, 184, 0.55),
           0 0 18px 5px rgba(255, 255, 255, 0.55),
           inset 0 0 16px rgba(255, 255, 255, 0.18);
-      }
-
-      .card-slot .title {
-        display: block;
-        font-weight: 700;
-        font-size: 14px;
-        line-height: 1;
-        flex-shrink: 0;
       }
 
       .card-slot .meta {
@@ -604,7 +625,8 @@
         padding: clamp(3px, 1vw, 6px);
       }
 
-      body.is-mobile-ui .deck-middle-twelve .card-slot .title {
+      body.is-mobile-ui .deck-middle-twelve .card-slot .title,
+      body.is-mobile-ui .deck-middle-twelve .card-slot .card-slot-rank-suit {
         font-size: clamp(11px, 3.2vw, 13px);
       }
 
@@ -617,7 +639,8 @@
         font-size: clamp(9px, 2.5vw, 11px);
       }
 
-      body.is-mobile-ui .deck-slot--ace .title {
+      body.is-mobile-ui .deck-slot--ace .title,
+      body.is-mobile-ui .deck-slot--ace .card-slot-rank-suit {
         font-size: clamp(14px, 4.2vw, 17px);
       }
 
@@ -645,7 +668,8 @@
         font-size: clamp(7px, 2.1vw, 9px);
       }
 
-      body.is-mobile-ui .card-slot.backpack-slot .title {
+      body.is-mobile-ui .card-slot.backpack-slot .title,
+      body.is-mobile-ui .card-slot.backpack-slot .card-slot-rank-suit {
         font-size: clamp(10px, 3vw, 12px);
       }
 
@@ -2723,6 +2747,6 @@
       </div>
     </div>
 
-      <script type="module" crossorigin src="./assets/main-DFPpo8uX.js"></script>
+      <script type="module" crossorigin src="./assets/main-Dhhl8dr6.js"></script>
   </body>
 </html>
