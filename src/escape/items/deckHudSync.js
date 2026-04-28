@@ -1,6 +1,10 @@
 import { formatCardHudSuitGlyph, cardRankText } from "./cardUtils.js";
 import { clearCardGlowClasses, countSuitsAcrossAllStowed, suitInventoryGlowClass } from "./setBonusPresentation.js";
 
+function preferTouchPointerDrag() {
+  return window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+}
+
 function fillDeckSlotEl(el, rank, card, inventory, pendingCard, itemRules, forgeHudDragSources) {
   if (!el) return;
   const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
@@ -17,7 +21,7 @@ function fillDeckSlotEl(el, rank, card, inventory, pendingCard, itemRules, forge
   if (glow) el.classList.add(glow);
   el.innerHTML = `<span class="deck-rank-label">${cardRankText(card.rank)}</span><div class="card-slot-copy"><span class="title">${formatCardHudSuitGlyph(card)}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
   if (forgeHudDragSources && card.suit !== "joker") {
-    el.draggable = true;
+    el.draggable = !preferTouchPointerDrag();
     el.dataset.forgeRef = JSON.stringify({ kind: "deck", rank });
   } else {
     el.removeAttribute("draggable");
@@ -65,7 +69,7 @@ export function syncDeckSlotsFromInventory(
         card,
       )}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
       if (forgeHudDragSources && card.suit !== "joker") {
-        slot.draggable = true;
+        slot.draggable = !preferTouchPointerDrag();
         slot.dataset.forgeRef = JSON.stringify({ kind: "bp", idx: i });
       } else {
         slot.removeAttribute("draggable");

@@ -1,5 +1,9 @@
 import { formatCardName } from "../items/cardUtils.js";
 
+function preferTouchPointerDrag() {
+  return window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+}
+
 function forgeRefKey(ref) {
   if (!ref) return "";
   return ref.kind === "deck" ? `d:${ref.rank}` : `b:${ref.idx}`;
@@ -85,7 +89,45 @@ export function createForgeWorldModal(deps) {
     else inventory.backpackSlots[ref.idx] = null;
   }
 
+  /** @type {{ pointerId: number; onMove: (e: PointerEvent) => void; onUp: (e: PointerEvent) => void } | null} */
+  let forgeTouchSession = null;
+
+  function clearForgeDropHover() {
+    forgeSlotLeft?.classList.remove("forge-drop-slot--hover");
+    forgeSlotRight?.classList.remove("forge-drop-slot--hover");
+  }
+
+  function forgeDropSlotFromClientPoint(clientX, clientY) {
+    const stack =
+      typeof document.elementsFromPoint === "function"
+        ? document.elementsFromPoint(clientX, clientY)
+        : [document.elementFromPoint(clientX, clientY)];
+    for (const node of stack) {
+      if (!(node instanceof Element)) continue;
+      const z = node.closest(".forge-drop-slot[data-slot]");
+      if (z && forgeModal?.contains(z)) return z;
+    }
+    return null;
+  }
+
+  function endForgeTouchSession() {
+    if (!forgeTouchSession) return;
+    window.removeEventListener("pointermove", forgeTouchSession.onMove);
+    window.removeEventListener("pointerup", forgeTouchSession.onUp);
+    window.removeEventListener("pointercancel", forgeTouchSession.onUp);
+    if (forgeModal && "releasePointerCapture" in forgeModal) {
+      try {
+        forgeModal.releasePointerCapture(forgeTouchSession.pointerId);
+      } catch {
+        /* already released */
+      }
+    }
+    forgeTouchSession = null;
+    clearForgeDropHover();
+  }
+
   function closeUi() {
+    endForgeTouchSession();
     const had = mode;
     mode = false;
     forgeRefA = null;
@@ -274,8 +316,9 @@ export function createForgeWorldModal(deps) {
     } else {
       forgePendingSuit = null;
       if (forgeModalHint) {
-        forgeModalHint.textContent =
-          "Drag two cards from your deck and backpack above into the side slots, then confirm.";
+        forgeModalHint.textContent = preferTouchPointerDrag()
+          ? "Press and drag two cards from the deck row above into the side slots, then confirm."
+          : "Drag two cards from your deck and backpack above into the side slots, then confirm.";
       }
     }
 
@@ -285,11 +328,52 @@ export function createForgeWorldModal(deps) {
 
   function onForgeHudDragStart(e) {
     if (!mode) return;
+    if (preferTouchPointerDrag()) {
+      e.preventDefault();
+      return;
+    }
     const t = e.target;
     const src = t instanceof Element ? t.closest("[data-forge-ref]") : null;
     if (!src?.dataset.forgeRef) return;
     e.dataTransfer?.setData("application/json", src.dataset.forgeRef);
     if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
+  }
+
+  function onForgeModalPointerDownCapture(e) {
+    if (!mode || !preferTouchPointerDrag() || e.button !== 0) return;
+    const src = e.target instanceof Element ? e.target.closest("[data-forge-ref]") : null;
+    if (!src?.dataset?.forgeRef || !forgeModal?.contains(src)) return;
+    if (forgeTouchSession) return;
+    e.preventDefault();
+    const refJson = src.dataset.forgeRef;
+    const pointerId = e.pointerId;
+    const onMove = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      clearForgeDropHover();
+      const drop = forgeDropSlotFromClientPoint(ev.clientX, ev.clientY);
+      if (drop) drop.classList.add("forge-drop-slot--hover");
+    };
+    const onUp = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      const drop = forgeDropSlotFromClientPoint(ev.clientX, ev.clientY);
+      const slot = drop?.dataset?.slot;
+      const ref = parseForgeRefFromDataset(refJson);
+      if (ref && (slot === "left" || slot === "right")) assignForgeToSlot(slot, ref);
+      endForgeTouchSession();
+    };
+    forgeTouchSession = { pointerId, onMove, onUp };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    if ("setPointerCapture" in forgeModal) {
+      try {
+        forgeModal.setPointerCapture(pointerId);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   function wireForgeModalDragDropOnce() {
@@ -298,6 +382,7 @@ export function createForgeWorldModal(deps) {
     forgeModal.dataset.forgeDragWired = "1";
 
     doc.addEventListener("dragstart", onForgeHudDragStart, true);
+    forgeModal.addEventListener("pointerdown", onForgeModalPointerDownCapture, true);
 
     for (const slotEl of [forgeSlotLeft, forgeSlotRight]) {
       slotEl.addEventListener("dragenter", (e) => {
@@ -339,8 +424,9 @@ export function createForgeWorldModal(deps) {
     forgeModal.hidden = false;
     if (forgeModalTitle) forgeModalTitle.textContent = "Forge";
     if (forgeModalSub) {
-      forgeModalSub.textContent =
-        "Use your normal deck row above. Drag two cards into the side slots. The center is the forged rank (sum of ranks, capped at 13).";
+      forgeModalSub.textContent = preferTouchPointerDrag()
+        ? "Use your normal deck row above. Press and drag two cards into the side slots. The center is the forged rank (sum of ranks, capped at 13)."
+        : "Use your normal deck row above. Drag two cards into the side slots. The center is the forged rank (sum of ranks, capped at 13).";
     }
     mountDeckPanelIntoForgeModal();
     syncForgeMergeUi();
@@ -348,8 +434,11 @@ export function createForgeWorldModal(deps) {
   }
 
   function dispose() {
+    endForgeTouchSession();
     doc.defaultView?.removeEventListener("keydown", onGlobalKeydown);
     doc.removeEventListener("dragstart", onForgeHudDragStart, true);
+    forgeModal?.removeEventListener("pointerdown", onForgeModalPointerDownCapture, true);
+    if (forgeModal) delete forgeModal.dataset.forgeDragWired;
   }
 
   return {

@@ -8,24 +8,15 @@ import {
   ARENA_NEXUS_RING_LASER_SPAWN_INTERVAL,
   ARENA_NEXUS_RING_SNIPER_SPAWN_INTERVAL,
   ARENA_NEXUS_REWARD_MODAL_DELAY_SEC,
-  ARENA_NEXUS_INNER_ENTER_R,
-  ARENA_NEXUS_INNER_APOTHEM,
   LATE_GAME_ELITE_SPAWN_SEC,
 } from "../../balance.js";
 import { TAU } from "../../constants.js";
-
-const SQRT3 = Math.sqrt(3);
-
-function pointInsidePointyHex(px, py, cx, cy, vertexRadius) {
-  const dx = Math.abs(px - cx);
-  const dy = Math.abs(py - cy);
-  if (dx > (SQRT3 / 2) * vertexRadius) return false;
-  return dy <= vertexRadius - dx / SQRT3;
-}
-
-function vertexRadiusFromApothem(apothem) {
-  return (2 * apothem) / SQRT3;
-}
+import {
+  pointInsidePointyHex,
+  innerInteractionVertexRadius,
+  crossedIntoExpandedInnerHex,
+  clampPlayerCenterToExpandedInnerHex,
+} from "./innerHexZone.js";
 
 /**
  * @typedef {object} ArenaHexEventDeps
@@ -89,11 +80,6 @@ export function createArenaHexEvent(deps) {
     return hexToWorld(siegeQ, siegeR);
   }
 
-  function siegeInnerMaxCenterDistPx() {
-    const player = getPlayer();
-    return Math.max(6, ARENA_NEXUS_INNER_APOTHEM - player.r - 0.75);
-  }
-
   function beginSiege() {
     const player = getPlayer();
     const ph = worldToHex(player.x, player.y);
@@ -142,34 +128,22 @@ export function createArenaHexEvent(deps) {
     if (phase !== 1) return;
     const player = getPlayer();
     const { x: cx, y: cy } = worldCenter();
-    const dx = player.x - cx;
-    const dy = player.y - cy;
-    const d = Math.hypot(dx, dy) || 1;
-    const maxD = siegeInnerMaxCenterDistPx();
-    if (d <= maxD) return;
-    player.x = cx + (dx / d) * maxD;
-    player.y = cy + (dy / d) * maxD;
+    clampPlayerCenterToExpandedInnerHex(player, cx, cy, innerInteractionVertexRadius(player.r));
   }
 
   /** @param {{ x: number; y: number }} player */
   function clampPlayerSegment(player) {
     if (phase !== 1) return;
     const { x: cx, y: cy } = worldCenter();
-    const dx = player.x - cx;
-    const dy = player.y - cy;
-    const d = Math.hypot(dx, dy) || 1;
-    const maxD = siegeInnerMaxCenterDistPx();
-    if (d > maxD) {
-      player.x = cx + (dx / d) * maxD;
-      player.y = cy + (dy / d) * maxD;
-    }
+    clampPlayerCenterToExpandedInnerHex(player, cx, cy, innerInteractionVertexRadius(player.r));
   }
 
-  function tick() {
+  function tick(dt = 1 / 60) {
     const elapsed = getSimElapsed();
     const player = getPlayer();
     const cardPaused = isCardPickupPaused();
     const ph = worldToHex(player.x, player.y);
+    const pdt = Math.max(1e-5, dt);
 
     if (phase === 2 && cardRewardAt > 0 && elapsed >= cardRewardAt) {
       if (!cardPaused) {
@@ -219,8 +193,15 @@ export function createArenaHexEvent(deps) {
     if (phase !== 0) return;
     if (!isArenaHexInteractive(ph.q, ph.r)) return;
     const c = hexToWorld(ph.q, ph.r);
-    const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-    if (pointInsidePointyHex(player.x, player.y, c.x, c.y, innerVertexR)) beginSiege();
+    const vr = innerInteractionVertexRadius(player.r);
+    const prevX = player.x - (player.velX || 0) * pdt;
+    const prevY = player.y - (player.velY || 0) * pdt;
+    if (
+      pointInsidePointyHex(player.x, player.y, c.x, c.y, vr) ||
+      crossedIntoExpandedInnerHex(prevX, prevY, player.x, player.y, c.x, c.y, vr)
+    ) {
+      beginSiege();
+    }
   }
 
   function postHunterTick() {

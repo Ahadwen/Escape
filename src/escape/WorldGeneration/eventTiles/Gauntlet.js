@@ -3,7 +3,6 @@
  */
 import {
   HEX_SIZE,
-  ARENA_NEXUS_INNER_ENTER_R,
   ARENA_NEXUS_INNER_APOTHEM,
   SURGE_HEX_WAVES,
   SURGE_TRAVEL_DUR_FIRST,
@@ -15,19 +14,13 @@ import {
   SURGE_GAUNTLET_MIN_CENTER_SEP_PX,
 } from "../../balance.js";
 import { TAU } from "../../constants.js";
+import {
+  pointInsidePointyHex,
+  innerInteractionVertexRadius,
+  crossedIntoExpandedInnerHex,
+} from "./innerHexZone.js";
 
 const SQRT3 = Math.sqrt(3);
-
-function pointInsidePointyHex(px, py, cx, cy, vertexRadius) {
-  const dx = Math.abs(px - cx);
-  const dy = Math.abs(py - cy);
-  if (dx > (SQRT3 / 2) * vertexRadius) return false;
-  return dy <= vertexRadius - dx / SQRT3;
-}
-
-function vertexRadiusFromApothem(apothem) {
-  return (2 * apothem) / SQRT3;
-}
 
 /**
  * @typedef {object} GauntletHexEventDeps
@@ -278,10 +271,11 @@ export function createGauntletHexEvent(deps) {
     player.y = c.y + (dy / d) * maxD;
   }
 
-  function tick() {
+  function tick(dt = 1 / 60) {
     const elapsed = getSimElapsed();
     const player = getPlayer();
     const cardPaused = isCardPickupPaused();
+    const pdt = Math.max(1e-5, dt);
 
     if (!cardPaused && phase === 3 && rewardPendingOnUnpause) {
       rewardPendingOnUnpause = false;
@@ -323,18 +317,28 @@ export function createGauntletHexEvent(deps) {
     }
     if (phase === 1 && ph.q === lockQ && ph.r === lockR) {
       const c = hexToWorld(lockQ, lockR);
-      const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-      if (pointInsidePointyHex(player.x, player.y, c.x, c.y, innerVertexR)) {
+      const vr = innerInteractionVertexRadius(player.r);
+      const prevX = player.x - (player.velX || 0) * pdt;
+      const prevY = player.y - (player.velY || 0) * pdt;
+      if (
+        pointInsidePointyHex(player.x, player.y, c.x, c.y, vr) ||
+        crossedIntoExpandedInnerHex(prevX, prevY, player.x, player.y, c.x, c.y, vr)
+      ) {
         beginGauntletActive();
       }
     }
     if (phase === 3 && ph.q === lockQ && ph.r === lockR) {
       const c = hexToWorld(lockQ, lockR);
-      const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-      const insideInner = pointInsidePointyHex(player.x, player.y, c.x, c.y, innerVertexR);
-      const crossedIntoInner = insideInner && !wasInsideInnerRewardHex;
+      const vr = innerInteractionVertexRadius(player.r);
+      const prevX = player.x - (player.velX || 0) * pdt;
+      const prevY = player.y - (player.velY || 0) * pdt;
+      const insideInner = pointInsidePointyHex(player.x, player.y, c.x, c.y, vr);
+      const crossedIntoInner =
+        eligibleForInnerExitReward &&
+        (crossedIntoExpandedInnerHex(prevX, prevY, player.x, player.y, c.x, c.y, vr) ||
+          (insideInner && !wasInsideInnerRewardHex));
       wasInsideInnerRewardHex = insideInner;
-      if (eligibleForInnerExitReward && crossedIntoInner) {
+      if (crossedIntoInner) {
         eligibleForInnerExitReward = false;
         if (cardPaused) {
           rewardPendingOnUnpause = true;
@@ -359,15 +363,23 @@ export function createGauntletHexEvent(deps) {
       if (wave > SURGE_HEX_WAVES) {
         phase = 3;
         awaitMode = "idle";
-        eligibleForInnerExitReward = true;
         rewardPendingOnUnpause = false;
-        // Prime from current position so reward only fires on an actual inward boundary crossing.
-        {
-          const c = hexToWorld(lockQ, lockR);
-          const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-          wasInsideInnerRewardHex = pointInsidePointyHex(player.x, player.y, c.x, c.y, innerVertexR);
-        }
         markProceduralSurgeHexSpent(lockQ, lockR);
+        const c = hexToWorld(lockQ, lockR);
+        const vr = innerInteractionVertexRadius(player.r);
+        const insideNow = pointInsidePointyHex(player.x, player.y, c.x, c.y, vr);
+        wasInsideInnerRewardHex = insideNow;
+        if (insideNow) {
+          eligibleForInnerExitReward = false;
+          if (cardPaused) {
+            rewardPendingOnUnpause = true;
+          } else {
+            dropSpecialEventJokerReward();
+            phase = 4;
+          }
+        } else {
+          eligibleForInnerExitReward = true;
+        }
       } else {
         beginTravelWave();
       }

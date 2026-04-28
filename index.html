@@ -1217,6 +1217,12 @@
         cursor: grab;
       }
 
+      @media (pointer: coarse) {
+        .forge-modal [data-forge-ref] {
+          touch-action: none;
+        }
+      }
+
       .forge-inv-chip {
         cursor: grab;
         user-select: none;
