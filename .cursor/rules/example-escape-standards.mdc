@@ -1,0 +1,36 @@
+---
+description: Example standards for Escape (template — rename and edit)
+alwaysApply: true
+---
+
+# Escape — example standards (template)
+
+These bullets are placeholders. Replace them with your real conventions.
+
+## Game loop and time
+
+- Use a **fixed simulation timestep** for movement and collisions; decouple rendering from `dt` when you add a render loop.
+- Name the main update entry point consistently (e.g. `tick(dt)` or `update(fixedDt)`).
+
+## Module layout
+
+- Keep **one “system” per file** where it makes sense (e.g. `pickups.js`, `gameControls.js`).
+- Prefer **plain functions + small structs** over deep class hierarchies unless you already committed to OOP.
+
+## Style (JavaScript)
+
+```javascript
+// ❌ Avoid: magic numbers scattered in logic
+if (x > 847) spawnBoss();
+
+// ✅ Prefer: named constants near the system that owns them
+const BOSS_SPAWN_X = 847;
+if (x > BOSS_SPAWN_X) spawnBoss();
+```
+
+## What to tell the agent
+
+- When you change behavior, say whether **save data / level format** must stay compatible.
+- Call out **performance-sensitive** paths (collision, pathfinding, many entities).
+
+Rename this file (drop `example-`) and split into more `.mdc` files if it grows past ~50 lines per topic.
