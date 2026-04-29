@@ -183,6 +183,10 @@ export const DAMAGE_SCREEN_SHAKE_SEC = 0.18;
 export const DAMAGE_SCREEN_SHAKE_STRENGTH = 8;
 export const LASER_BLUE_PLAYER_SLOW_MULT = 0.8;
 export const LASER_BLUE_PLAYER_SLOW_SEC = 1.5;
+
+/** Swamp path (run level 3+): slow after any damage; stacks multiplicatively with blue laser slow. */
+export const SWAMP_HIT_SLOW_MULT = 0.8;
+export const SWAMP_HIT_SLOW_SEC = 1.0;
 /** Hearts 13: once per this many seconds, lethal damage sets HP to 5 instead. */
 export const HEARTS_13_DEATH_DEFY_CD_SEC = 30;
 /** Clubs 13: after taking real HP damage, enemies ignore the player briefly. */

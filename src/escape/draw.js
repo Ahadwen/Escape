@@ -112,9 +112,11 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
 }
 
 /** Tetris-style blocks — matches REFERENCE `Ct` (`#334155` / `#94a3b8`, stroke width 2). */
-export function drawObstacles(ctx, obstacles) {
-  ctx.fillStyle = "#334155";
-  ctx.strokeStyle = "#94a3b8";
+export function drawObstacles(ctx, obstacles, opts = {}) {
+  const fill = opts.fill ?? "#334155";
+  const stroke = opts.stroke ?? "#94a3b8";
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
   ctx.lineWidth = 2;
   for (const o of obstacles) {
     ctx.fillRect(o.x, o.y, o.w, o.h);

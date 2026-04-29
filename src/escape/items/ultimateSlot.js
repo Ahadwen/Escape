@@ -57,7 +57,8 @@ function applyUltimateBurstWavePush(player, hunterEntities, burstRadius) {
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len;
     const uy = dy / len;
-    const push = h.type === "spawner" || h.type === "airSpawner" ? 0 : 95;
+    const push =
+      h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" ? 0 : 95;
     h.x += ux * push;
     h.y += uy * push;
     h.dir = { x: ux, y: uy };

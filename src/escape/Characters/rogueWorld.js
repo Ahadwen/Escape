@@ -159,7 +159,8 @@ export function createRogueWorld() {
     }
     let seen = false;
     for (const h of hunterEntities.hunters) {
-      if (h.type === "spawner" || h.type === "airSpawner") continue;
+      if (h.type === "spawner" || h.type === "airSpawner" || (h.type === "cryptSpawner" && h.cryptDisguised))
+        continue;
       if (elapsed < (h.stunnedUntil || 0)) continue;
       if (hasLineOfSight(h, player)) {
         seen = true;

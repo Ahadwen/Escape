@@ -12,7 +12,6 @@ import {
   HEAL_CRYSTAL_HP,
   ROULETTE_OUTER_PENALTY_HP,
   FORGE_OUTER_PENALTY_HP,
-  LASER_BLUE_PLAYER_SLOW_MULT,
   SURGE_TILE_FLASH_SEC,
   TERRAIN_SPEED_BOOST_LINGER,
   LUNATIC_SPRINT_TIER_FX_DUR_T2,
@@ -114,6 +113,7 @@ import {
 import { drawUltimateEffects } from "./fx/ultimateEffects.js";
 import { createPlayerDamage } from "./playerDamage.js";
 import { createRunLogger, instrumentObjectMethods } from "./debug/runLogger.js";
+import { createPathRuntime } from "./run/pathRuntime.js";
 
 /** Procedural hex floor — near REFERENCE slate fill (`rgba(15,23,42,…)` family). */
 const FLOOR_HEX_FILL = "#0f172a";
@@ -201,6 +201,7 @@ function isLocalDebugHost(win = window) {
 
 function boot() {
   const runLogger = createRunLogger(30);
+  const pathRuntime = createPathRuntime({ rng: Math.random });
   mountCharacterRoster(document);
   const debugAllowed = isLocalDebugHost(window);
   let devPanelEl = document.getElementById("special-test-west-panel");
@@ -446,6 +447,8 @@ function boot() {
   inventory.spadesLandingStealthUntil = 0;
   inventory.spadesObstacleBoostUntil = 0;
   inventory.heartsResistanceReadyAt = 0;
+  inventory.heartsResistanceCooldownDuration = 0;
+  inventory.swampInfectionStacks = 0;
   inventory.heartsRegenPerSec = 0;
   inventory.heartsRegenBank = 0;
 
@@ -523,6 +526,20 @@ function boot() {
   let timelockWorldShakeAt = 0;
   let ultimateSpeedUntil = 0;
   let knightSpadesWorldSlowUntil = 0;
+  let fireIgniteUntil = 0;
+  let fireIgniteNextTickAt = 0;
+  /** Seconds between ignite DoT ticks while `fireIgniteUntil` is active (L3+: 3 ticks / 2s). */
+  let fireIgniteTickStep = 1;
+  /** Bone path: mild ambient tunnel (always on). Laser "blind" debuff: timed peak + fade — near-black periphery + dimmed center. */
+  let boneBlindDebuffPeakEnd = 0;
+  let boneBlindDebuffFadeEnd = 0;
+  /** True if the blind debuff was triggered by a blue laser (pale-blue accent for that debuff). */
+  let boneBlindDebuffFromBlueLaser = false;
+  const BONE_BLIND_DEBUFF_PEAK_SEC = 0.92;
+  const BONE_BLIND_DEBUFF_FADE_SEC = 0.55;
+  let swampInfectionPopupUntil = 0;
+  const swampDamageInstanceSeenAt = new Map();
+  const damagePopups = /** @type {{ x: number; y: number; bornAt: number; expiresAt: number; base: number; swampBonus: number; driftX: number }[]} */ ([]);
   let nextHealSpawnAt = 3.5;
   let nextCardSpawnAt = 10;
   const MAX_HEAL_CRYSTALS = 6;
@@ -644,6 +661,112 @@ function boot() {
     },
   });
 
+  /**
+   * Extension seam for future path-specific incoming-damage modifiers.
+   * First pass is identity (no behavior changes).
+   */
+  function resetSwampInfection() {
+    inventory.swampInfectionStacks = 0;
+    swampInfectionPopupUntil = 0;
+    swampDamageInstanceSeenAt.clear();
+  }
+
+  function spawnDamagePopup(baseAmount, swampBonus, opts = {}) {
+    if (baseAmount <= 0 && swampBonus <= 0) return;
+    const sx = Number.isFinite(opts?.sourceX) ? opts.sourceX : player.x;
+    const sy = Number.isFinite(opts?.sourceY) ? opts.sourceY : player.y;
+    const jitter = (Math.random() - 0.5) * 18;
+    damagePopups.push({
+      x: sx + jitter,
+      y: sy - player.r - 4,
+      bornAt: simElapsed,
+      expiresAt: simElapsed + 0.9,
+      base: Math.max(0, Math.floor(baseAmount)),
+      swampBonus: Math.max(0, Math.floor(swampBonus)),
+      driftX: (Math.random() - 0.5) * 28,
+    });
+    if (damagePopups.length > 90) damagePopups.splice(0, damagePopups.length - 90);
+  }
+
+  function drawDamagePopups(ctx) {
+    for (let i = damagePopups.length - 1; i >= 0; i--) {
+      const p = damagePopups[i];
+      if (simElapsed >= p.expiresAt) {
+        damagePopups.splice(i, 1);
+        continue;
+      }
+      const u = clamp((simElapsed - p.bornAt) / Math.max(0.001, p.expiresAt - p.bornAt), 0, 1);
+      const alpha = 1 - u;
+      const px = p.x + p.driftX * u;
+      const py = p.y - u * 40;
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.font = 'bold 15px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+      ctx.lineWidth = 4;
+      const baseTxt = `-${p.base}`;
+      ctx.strokeStyle = `rgba(2, 6, 23, ${0.85 * alpha})`;
+      ctx.strokeText(baseTxt, px, py);
+      ctx.fillStyle = `rgba(248, 113, 113, ${alpha})`;
+      ctx.fillText(baseTxt, px, py);
+      if (p.swampBonus > 0) {
+        const extraTxt = `-${p.swampBonus}`;
+        ctx.font = 'bold 13px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+        ctx.strokeStyle = `rgba(2, 6, 23, ${0.8 * alpha})`;
+        ctx.strokeText(extraTxt, px + 20, py - 8);
+        ctx.fillStyle = `rgba(163, 230, 53, ${alpha})`;
+        ctx.fillText(extraTxt, px + 20, py - 8);
+      }
+      ctx.restore();
+    }
+  }
+
+  function damagePlayerThroughPath(amount, opts = {}) {
+    const hooked = pathRuntime.applyDamageHooks({
+      amount,
+      opts,
+      simElapsed,
+      runLevel,
+      player,
+      inventory,
+      activeCharacterId,
+    });
+    if (hooked?.cancel) return;
+    const finalAmount = hooked?.amount ?? amount;
+    const finalOpts = hooked?.opts ?? opts;
+    const baseDamage = Math.max(0, Number(amount) || 0);
+    const damageBonus = Math.max(0, (Number(finalAmount) || 0) - baseDamage);
+    playerDamage.damagePlayer(finalAmount, finalOpts);
+    if (pathRuntime.getCurrentPathId() === "swamp" && runLevel >= 2 && Number(finalAmount) > 0) {
+      playerDamage.applySwampHitSlow();
+    }
+    if (pathRuntime.getCurrentPathId() === "bone" && Number(finalAmount) > 0) {
+      boneBlindDebuffPeakEnd = simElapsed + BONE_BLIND_DEBUFF_PEAK_SEC;
+      boneBlindDebuffFadeEnd = boneBlindDebuffPeakEnd + BONE_BLIND_DEBUFF_FADE_SEC;
+      boneBlindDebuffFromBlueLaser = !!finalOpts?.laserBlueSlow;
+    }
+    if (finalAmount > 0) spawnDamagePopup(finalAmount, damageBonus, finalOpts);
+    if (pathRuntime.getCurrentPathId() === "swamp" && (finalOpts?.swampApplyInfection || finalAmount > 0)) {
+      const instanceId = finalOpts?.swampDamageInstanceId;
+      let shouldAddStack = true;
+      if (instanceId != null) {
+        const key = String(instanceId);
+        if (swampDamageInstanceSeenAt.has(key)) shouldAddStack = false;
+        else swampDamageInstanceSeenAt.set(key, simElapsed);
+      }
+      if (shouldAddStack) {
+        inventory.swampInfectionStacks = Math.max(0, Math.floor((inventory.swampInfectionStacks ?? 0) + 1));
+        swampInfectionPopupUntil = simElapsed + 0.95;
+      }
+    }
+    if ((finalOpts?.fireApplyIgnite ?? false) && !(finalOpts?.fireIgniteTick ?? false)) {
+      const igniteStep = runLevel >= 2 ? 2 / 3 : 1;
+      fireIgniteTickStep = igniteStep;
+      fireIgniteUntil = simElapsed + 2;
+      fireIgniteNextTickAt = simElapsed + igniteStep;
+    }
+  }
+
   /** @type {ReturnType<typeof createCardPickupModal> | null} */
   let cardPickup = null;
   function modalChromePausesWorld() {
@@ -745,9 +868,19 @@ function boot() {
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
     knightSpadesWorldSlowUntil = 0;
+    fireIgniteUntil = 0;
+    fireIgniteNextTickAt = 0;
+    fireIgniteTickStep = 1;
+    boneBlindDebuffPeakEnd = 0;
+    boneBlindDebuffFadeEnd = 0;
+    boneBlindDebuffFromBlueLaser = false;
+    resetSwampInfection();
+    damagePopups.length = 0;
     specials.resetSessionState();
     safehouseHexFlow.resetSession();
     runLevel = 0;
+    pathRuntime.resetRun();
+    refreshDebugRunProgressUi();
     if (specialTestWestEl && "value" in specialTestWestEl) {
       specials.setTestWestKind(specialTestWestEl.value);
     }
@@ -841,6 +974,9 @@ function boot() {
       safehouseHexFlow.applyLevelUpAccepted({
         onRunLevelIncrement: () => {
           runLevel += 1;
+          pathRuntime.ensurePathAssignedForLevel(runLevel);
+          resetSwampInfection();
+          refreshDebugRunProgressUi();
         },
         onSpawnAnchorResetToDifficultyClock: (eff) => {
           hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
@@ -893,7 +1029,7 @@ function boot() {
   }
 
   function ejectSpawnerHunterFromSpecialHexFootprint(h) {
-    if (h.type !== "spawner" && h.type !== "airSpawner") return;
+    if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") return;
     if (!isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y)) return;
     const hq = worldToHex(h.x, h.y);
     const c = hexToWorld(hq.q, hq.r);
@@ -1009,13 +1145,14 @@ function boot() {
     getObstacles: () => obstacles,
     getDecoys: () => character.getDecoys(),
     getCharacterId: () => activeCharacterId,
+    getActivePathId: () => pathRuntime.getCurrentPathId(),
     getInventory: () => inventory,
     getPlayerUntargetableUntil: () => playerDamage.combat.playerUntargetableUntil,
     pickRogueHunterTarget: (hunter, playerRef, inv, nearestDecoy, hasLOS, fallback, elapsed) =>
       rogueWorld.pickRogueHunterTarget(hunter, playerRef, inv, nearestDecoy, hasLOS, fallback, elapsed),
     rand: randRange,
     getViewSize: () => ({ w: canvas.width, h: canvas.height }),
-    damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+    damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
     collidesValiantEnemyShockField: (circle, elapsed) => valiantWorld.collidesEnemyShockField(circle, elapsed),
     getBulwarkPlantedFlag: () =>
       activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function"
@@ -1065,7 +1202,7 @@ function boot() {
     isSurgeHexTile: (q, r) => specials.isSurgeHexTile(q, r),
     isSurgeHexInteractive: (q, r) => specials.isSurgeHexInteractive(q, r),
     markProceduralSurgeHexSpent: (q, r) => specials.markProceduralSurgeHexSpent(q, r),
-    damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+    damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
     bumpScreenShake: (s, sec) => playerDamage.bumpScreenShake(s, sec),
     dropSpecialEventJokerReward: () =>
       dropJokerRewardFromSpecialEvent({
@@ -1113,6 +1250,8 @@ function boot() {
     inventory.spadesLandingStealthUntil = 0;
     inventory.spadesObstacleBoostUntil = 0;
     inventory.heartsResistanceReadyAt = 0;
+    inventory.heartsResistanceCooldownDuration = 0;
+    inventory.swampInfectionStacks = 0;
     inventory.heartsRegenPerSec = 0;
     inventory.heartsRegenBank = 0;
     inventory.diamondEmpower = null;
@@ -1128,9 +1267,19 @@ function boot() {
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
     knightSpadesWorldSlowUntil = 0;
+    fireIgniteUntil = 0;
+    fireIgniteNextTickAt = 0;
+    fireIgniteTickStep = 1;
+    boneBlindDebuffPeakEnd = 0;
+    boneBlindDebuffFadeEnd = 0;
+    boneBlindDebuffFromBlueLaser = false;
+    resetSwampInfection();
+    damagePopups.length = 0;
     specials.resetSessionState();
     safehouseHexFlow.resetSession();
     runLevel = 0;
+    pathRuntime.resetRun();
+    refreshDebugRunProgressUi();
     if (specialTestWestEl && "value" in specialTestWestEl) {
       specials.setTestWestKind(specialTestWestEl.value);
     }
@@ -1274,6 +1423,57 @@ function boot() {
       hunterRuntime.reset();
     });
   }
+
+  const debugRunLevelDecEl = document.getElementById("debug-run-level-dec");
+  const debugRunLevelIncEl = document.getElementById("debug-run-level-inc");
+  const debugRunLevelValueEl = document.getElementById("debug-run-level-value");
+  const debugPathSelectEl = document.getElementById("debug-path-select");
+
+  function refreshDebugRunProgressUi() {
+    const pathVisual = pathRuntime.getPathVisualConfig();
+    if (debugRunLevelValueEl) {
+      debugRunLevelValueEl.textContent = `Level ${runLevel + 1} \u00b7 Path: ${pathVisual.label}`;
+    }
+    if (debugPathSelectEl && "value" in debugPathSelectEl) {
+      debugPathSelectEl.value = pathRuntime.getForcedPathId() ?? "__auto__";
+    }
+  }
+
+  function applyDebugRunLevel(nextRunLevel) {
+    runLevel = Math.max(0, Math.floor(nextRunLevel));
+    if (runLevel < 1 && !pathRuntime.getForcedPathId()) {
+      pathRuntime.resetRun();
+    } else {
+      pathRuntime.ensurePathAssignedForLevel(runLevel);
+    }
+    const eff = safehouseHexFlow.getDifficultyClockSec(simElapsed);
+    hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
+    resetSwampInfection();
+    refreshDebugRunProgressUi();
+  }
+
+  if (debugPathSelectEl && "value" in debugPathSelectEl) {
+    for (const def of pathRuntime.getPathDefs()) {
+      const opt = document.createElement("option");
+      opt.value = def.id;
+      opt.textContent = def.label;
+      debugPathSelectEl.appendChild(opt);
+    }
+    debugPathSelectEl.addEventListener("change", () => {
+      const selected = String(debugPathSelectEl.value || "__auto__");
+      if (selected === "__auto__") {
+        pathRuntime.setForcedPathId(null);
+        if (runLevel < 1) pathRuntime.resetRun();
+        else pathRuntime.ensurePathAssignedForLevel(runLevel);
+      } else {
+        pathRuntime.setForcedPathId(selected);
+      }
+      refreshDebugRunProgressUi();
+    });
+  }
+  debugRunLevelDecEl?.addEventListener("click", () => applyDebugRunLevel(runLevel - 1));
+  debugRunLevelIncEl?.addEventListener("click", () => applyDebugRunLevel(runLevel + 1));
+  refreshDebugRunProgressUi();
 
   const debugItemSuitEl = document.getElementById("debug-item-suit");
   const debugItemRankEl = document.getElementById("debug-item-rank");
@@ -1689,6 +1889,39 @@ function boot() {
     if (!simPaused && !runDead) {
       simElapsed += rawDt;
       character.tick(buildAbilityContext(dt));
+      pathRuntime.applyDebuffHooks({ dt, simElapsed, runLevel, player, inventory, activeCharacterId });
+      const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
+      const firePathActive = pathRuntime.getCurrentPathId() === "fire";
+      const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
+      if (swampDamageInstanceSeenAt.size > 0) {
+        const cutoff = simElapsed - 20;
+        for (const [k, t] of swampDamageInstanceSeenAt) {
+          if (t < cutoff) swampDamageInstanceSeenAt.delete(k);
+        }
+      }
+      if (!swampPathActive && (inventory.swampInfectionStacks ?? 0) > 0) {
+        resetSwampInfection();
+      }
+      if (!firePathActive) {
+        fireIgniteUntil = 0;
+        fireIgniteNextTickAt = 0;
+        fireIgniteTickStep = 1;
+      } else if (fireIgniteUntil > simElapsed && fireIgniteNextTickAt > 0 && simElapsed >= fireIgniteNextTickAt) {
+        while (fireIgniteUntil > simElapsed && simElapsed >= fireIgniteNextTickAt) {
+          damagePlayerThroughPath(1, { fireIgniteTick: true, fireNoIgnite: true, sourceX: player.x, sourceY: player.y });
+          fireIgniteNextTickAt += fireIgniteTickStep;
+          if (player.hp <= 0) break;
+        }
+      } else if (fireIgniteUntil <= simElapsed) {
+        fireIgniteUntil = 0;
+        fireIgniteNextTickAt = 0;
+        fireIgniteTickStep = 1;
+      }
+      if (!bonePathActive) {
+        boneBlindDebuffPeakEnd = 0;
+        boneBlindDebuffFadeEnd = 0;
+        boneBlindDebuffFromBlueLaser = false;
+      }
       player.hp = Math.max(0, Math.min(player.maxHp, player.hp));
       if (activeCharacterId === "valiant") {
         const lootPlacementOpts = () => ({
@@ -1731,11 +1964,11 @@ function boot() {
               inventory,
               PLAYER_SPEED,
               ultimateSpeedUntil,
-              laserSlowMult: playerDamage.isLaserSlowActive() ? LASER_BLUE_PLAYER_SLOW_MULT : 1,
+              laserSlowMult: playerDamage.getMovementSlowMult(),
               getObsForCollision: () => obstaclesForPlayerCollision(),
               resolvePlayerAgainstRects,
               circleOverlapsAnyRect,
-              damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+              damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
               spawnAttackRing: (x, y, r, color, durationSec) => {
                 pushAttackRing(attackRings, x, y, r, color, simElapsed, durationSec);
               },
@@ -1773,7 +2006,7 @@ function boot() {
             if (simElapsed < (inventory.spadesObstacleBoostUntil ?? 0)) {
               sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
             }
-            if (playerDamage.isLaserSlowActive()) sp *= LASER_BLUE_PLAYER_SLOW_MULT;
+            sp *= playerDamage.getMovementSlowMult();
             vx = (vx / len) * sp * dt;
             vy = (vy / len) * sp * dt;
           } else {
@@ -1836,7 +2069,7 @@ function boot() {
           simElapsed,
           player,
           obstacles,
-          damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+          damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
         });
       }
       if (lunaticMove && typeof character.ejectFromObstaclesIfStuck === "function") {
@@ -1981,6 +2214,9 @@ function boot() {
             } else {
               player.hp = Math.min(player.maxHp, player.hp + (c.heal ?? HEAL_CRYSTAL_HP));
             }
+            fireIgniteUntil = 0;
+            fireIgniteNextTickAt = 0;
+            fireIgniteTickStep = 1;
           } else if (c.kind === "card" && cardPickup) {
             cardPickup.openCardPickup(c.card);
           }
@@ -2009,7 +2245,7 @@ function boot() {
           isRouletteHexTile: (q, r) => specials.isRouletteHexTile(q, r),
           isRouletteHexInteractive: (q, r) => specials.isRouletteHexInteractive(q, r),
           onOuterPenalty: () => {
-            playerDamage.damagePlayer(ROULETTE_OUTER_PENALTY_HP, {
+            damagePlayerThroughPath(ROULETTE_OUTER_PENALTY_HP, {
               rouletteHexOuterPenalty: true,
               floorHpAtMin: 1,
             });
@@ -2039,7 +2275,7 @@ function boot() {
           isForgeHexTile: (q, r) => specials.isForgeHexTile(q, r),
           isForgeHexInteractive: (q, r) => specials.isForgeHexInteractive(q, r),
           onOuterPenalty: () => {
-            playerDamage.damagePlayer(FORGE_OUTER_PENALTY_HP, {
+            damagePlayerThroughPath(FORGE_OUTER_PENALTY_HP, {
               rouletteHexOuterPenalty: true,
               floorHpAtMin: 1,
             });
@@ -2076,7 +2312,7 @@ function boot() {
           const len = Math.hypot(dx, dy) || 1;
           const ux = dx / len;
           const uy = dy / len;
-          if (h.type !== "spawner" && h.type !== "airSpawner") {
+          if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") {
             h.x += ux * 95;
             h.y += uy * 95;
           }
@@ -2124,7 +2360,7 @@ function boot() {
       if (hunterRuntime?.entities) {
         for (const shield of ultimateShields) {
           for (const h of hunterRuntime.entities.hunters) {
-            if (h.type === "spawner" || h.type === "airSpawner") continue;
+            if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
             const rr = shield.r + h.r;
             const dx = h.x - shield.x;
             const dy = h.y - shield.y;
@@ -2161,6 +2397,16 @@ function boot() {
       const timelockFrozen = simElapsed >= timelockEnemyFrom && simElapsed < timelockEnemyUntil;
       let worldTimeScale = timelockFrozen ? 0.05 : 1;
       if (simElapsed < knightSpadesWorldSlowUntil) worldTimeScale = Math.min(worldTimeScale, 0.3);
+      const enemyHook = pathRuntime.applyEnemyHooks({
+        dt,
+        simElapsed,
+        runLevel,
+        worldTimeScale,
+        timelockFrozen,
+        player,
+        inventory,
+      });
+      worldTimeScale = enemyHook?.worldTimeScale ?? worldTimeScale;
 
       if (huntersEnabled && !runDead) {
         hunterRuntime.tick(dt * worldTimeScale, { suppressRangedAttacks: timelockFrozen });
@@ -2285,12 +2531,54 @@ function boot() {
     ctx.save();
     ctx.translate(-cameraX + shake.x, -cameraY + shake.y);
 
+    const floorHexFill = pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
+    const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
+    const boneAmbientOverlay = bonePathActive;
+    const boneBlindDebuffActive =
+      bonePathActive && simElapsed < boneBlindDebuffFadeEnd && boneBlindDebuffFadeEnd > 0;
+    const firePathActive = pathRuntime.getCurrentPathId() === "fire";
+    const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
     for (const h of activeHexes) {
       const { x: cx, y: cy } = hexToWorld(h.q, h.r);
-      fillPointyHexCell(ctx, cx, cy, HEX_SIZE, FLOOR_HEX_FILL, null);
+      fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
+    }
+    if (bonePathActive) {
+      const edge = Math.min(160, viewW * 0.16, viewH * 0.16);
+      const pulse = 0.82 + 0.18 * Math.sin(simElapsed * 2.8);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const topG = ctx.createLinearGradient(0, 0, 0, edge);
+      topG.addColorStop(0, `rgba(255, 255, 255, ${0.26 * pulse})`);
+      topG.addColorStop(0.55, `rgba(248, 250, 252, ${0.1 * pulse})`);
+      topG.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = topG;
+      ctx.fillRect(0, 0, viewW, edge);
+      const botG = ctx.createLinearGradient(0, viewH, 0, viewH - edge);
+      botG.addColorStop(0, `rgba(255, 255, 255, ${0.26 * pulse})`);
+      botG.addColorStop(0.55, `rgba(248, 250, 252, ${0.1 * pulse})`);
+      botG.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = botG;
+      ctx.fillRect(0, viewH - edge, viewW, edge);
+      const leftG = ctx.createLinearGradient(0, 0, edge, 0);
+      leftG.addColorStop(0, `rgba(255, 255, 255, ${0.22 * pulse})`);
+      leftG.addColorStop(0.65, `rgba(241, 245, 249, ${0.08 * pulse})`);
+      leftG.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = leftG;
+      ctx.fillRect(0, 0, edge, viewH);
+      const rightG = ctx.createLinearGradient(viewW, 0, viewW - edge, 0);
+      rightG.addColorStop(0, `rgba(255, 255, 255, ${0.22 * pulse})`);
+      rightG.addColorStop(0.65, `rgba(241, 245, 249, ${0.08 * pulse})`);
+      rightG.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = rightG;
+      ctx.fillRect(viewW - edge, 0, edge, viewH);
+      ctx.restore();
     }
     /** REFERENCE `render`: obstacles, sanctuary, arena nexus, roulette, surge (specials above tetris footprint). */
-    drawObstacles(ctx, obstacles);
+    drawObstacles(
+      ctx,
+      obstacles,
+      swampPathActive ? { fill: "#3b2d20", stroke: "#7c5a3b" } : undefined,
+    );
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
       const lock = character.getBulwarkWorld().getDeathLock();
       if (lock) {
@@ -2359,6 +2647,11 @@ function boot() {
       hexEventRuntime?.getSurgeDrawState() ?? null,
     );
     if (huntersEnabled) {
+      if (firePathActive) {
+        for (const h of hunterRuntime.entities.hunters) h.fireGlow = true;
+      } else {
+        for (const h of hunterRuntime.entities.hunters) h.fireGlow = false;
+      }
       hunterRuntime.draw(ctx);
     }
     for (const c of collectibles) {
@@ -2366,6 +2659,71 @@ function boot() {
         drawHealPickup(ctx, c, simElapsed, { lunaticMaxHpCrystal: activeCharacterId === "lunatic" });
       } else if (c.kind === "card") {
         drawCardPickupWorld(ctx, c, simElapsed);
+      }
+    }
+    drawDamagePopups(ctx);
+    // Bone path: static ambient tunnel (no ctx.filter). Laser "blind" debuff = separate harsh blackout + dimmed center.
+    if (boneAmbientOverlay) {
+      const px = player.x;
+      const py = player.y;
+      const vx = cameraX + viewW / 2;
+      const vy = cameraY + viewH / 2;
+      const maxR = Math.max(viewW, viewH) * 0.92;
+      const ambInner = 98;
+
+      ctx.save();
+      ctx.globalAlpha = 0.76;
+      const vignette = ctx.createRadialGradient(px, py, ambInner, vx, vy, maxR);
+      vignette.addColorStop(0, "rgba(15, 23, 42, 0)");
+      vignette.addColorStop(0.46, "rgba(15, 23, 42, 0.42)");
+      vignette.addColorStop(1, "rgba(15, 23, 42, 0.86)");
+      ctx.fillStyle = vignette;
+      ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+
+      const fog = ctx.createRadialGradient(px, py, 108, px, py, 400);
+      fog.addColorStop(0, "rgba(15, 23, 42, 0)");
+      fog.addColorStop(0.6, "rgba(8, 10, 14, 0.44)");
+      fog.addColorStop(1, "rgba(8, 10, 14, 0.9)");
+      ctx.fillStyle = fog;
+      ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+      ctx.restore();
+
+      if (boneBlindDebuffActive) {
+        const fadeSpan = Math.max(0.0001, boneBlindDebuffFadeEnd - boneBlindDebuffPeakEnd);
+        const debuffStr =
+          simElapsed < boneBlindDebuffPeakEnd ? 1 : clamp((boneBlindDebuffFadeEnd - simElapsed) / fadeSpan, 0, 1);
+        const innerR = ambInner * (1 - 0.3 * debuffStr);
+
+        ctx.save();
+        ctx.globalAlpha = debuffStr;
+        const crushOuter = ctx.createRadialGradient(px, py, innerR * 0.7, vx, vy, maxR);
+        crushOuter.addColorStop(0, "rgba(0, 0, 0, 0)");
+        crushOuter.addColorStop(0.34, `rgba(0, 0, 0, ${0.72 + 0.26 * debuffStr})`);
+        crushOuter.addColorStop(0.58, `rgba(0, 0, 0, ${Math.min(1, 0.96 + 0.04 * debuffStr)})`);
+        crushOuter.addColorStop(1, "rgba(0, 0, 0, 0.998)");
+        ctx.fillStyle = crushOuter;
+        ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+
+        const innerDim = ctx.createRadialGradient(px, py, 0, px, py, innerR * 0.9);
+        innerDim.addColorStop(0, `rgba(0, 0, 0, ${0.78 + 0.2 * debuffStr})`);
+        innerDim.addColorStop(0.5, `rgba(0, 0, 0, ${0.42 * debuffStr})`);
+        innerDim.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = innerDim;
+        ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+        ctx.restore();
+
+        if (boneBlindDebuffFromBlueLaser && debuffStr > 0.04) {
+          ctx.save();
+          ctx.globalAlpha = debuffStr * 0.88;
+          const ice = ctx.createRadialGradient(px, py, innerR * 0.55, vx, vy, maxR * 0.96);
+          ice.addColorStop(0, "rgba(255, 255, 255, 0)");
+          ice.addColorStop(0.42, "rgba(224, 242, 254, 0.2)");
+          ice.addColorStop(0.75, "rgba(186, 230, 253, 0.42)");
+          ice.addColorStop(1, "rgba(56, 189, 248, 0.5)");
+          ctx.fillStyle = ice;
+          ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+          ctx.restore();
+        }
       }
     }
     for (const d of character.getDecoys()) {
@@ -2448,6 +2806,69 @@ function boot() {
     }
     if (activeCharacterId === "rogue") {
       rogueWorld.drawSurvivalHudArcs(ctx, player, simElapsed);
+    }
+    if (swampPathActive && simElapsed < swampInfectionPopupUntil) {
+      const u = clamp((swampInfectionPopupUntil - simElapsed) / 0.95, 0, 1);
+      const alpha = 0.25 + u * 0.75;
+      const extraHudYOffset = typeof character.getHpHudYOffset === "function" ? character.getHpHudYOffset() : 0;
+      const infX = player.x + player.r + 34;
+      const infY = player.y - player.r - 10 - extraHudYOffset;
+      const inf = Math.max(0, Math.floor(inventory.swampInfectionStacks ?? 0));
+      const txt = `${inf}`;
+      ctx.save();
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      ctx.font = 'bold 14px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = `rgba(2, 6, 23, ${0.8 * alpha})`;
+      ctx.strokeText(txt, infX, infY);
+      ctx.fillStyle = `rgba(163, 230, 53, ${alpha})`;
+      ctx.fillText(txt, infX, infY);
+      ctx.restore();
+    }
+    const heartsResistanceCount = playerDamage.getHeartsResistanceCardCount?.() ?? 0;
+    const heartsResistanceReady = heartsResistanceCount > 0 && simElapsed >= (inventory.heartsResistanceReadyAt ?? 0);
+    if (heartsResistanceReady) {
+      ctx.strokeStyle = "rgba(252, 165, 165, 0.95)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.r + 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (heartsResistanceCount > 0 && !heartsResistanceReady) {
+      const cdDur = Math.max(
+        0.001,
+        inventory.heartsResistanceCooldownDuration || playerDamage.getHeartsResistanceCooldown?.() || 1,
+      );
+      const rem = Math.max(0, (inventory.heartsResistanceReadyAt ?? 0) - simElapsed);
+      const t = clamp(1 - rem / cdDur, 0, 1);
+      const iconX = player.x;
+      const iconY = player.y + player.r + 20;
+      const ringR = 7;
+      const g = Math.round(148 + (191 - 148) * t);
+      const b = Math.round(163 + (255 - 163) * t);
+      ctx.strokeStyle = `rgb(100,${g},${b})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(iconX, iconY, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(100, 116, 139, 0.7)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(iconX, iconY, ringR, -Math.PI / 2 + Math.PI * 2 * t, -Math.PI / 2 + Math.PI * 2);
+      ctx.stroke();
+    }
+    if (firePathActive && fireIgniteUntil > simElapsed) {
+      const pulse = 0.62 + 0.38 * (0.5 + 0.5 * Math.sin(simElapsed * 12));
+      ctx.fillStyle = `rgba(220, 38, 38, ${0.18 + pulse * 0.1})`;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.r + 10 + pulse * 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(251, 113, 133, 0.8)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.r + 6, 0, Math.PI * 2);
+      ctx.stroke();
     }
     drawPlayerBody(ctx, player.x, player.y, player.r, player.facing, hurt01, bodyAlpha);
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkParryUntil === "function") {

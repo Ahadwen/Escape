@@ -11,6 +11,7 @@ const SHELL_SELECTS_THAT_DO_NOT_BLOCK_ABILITY_KEYS = [
   "#debug-item-suit",
   "#debug-item-rank",
   "#debug-item-effect",
+  "#debug-path-select",
 ];
 
 function isShellControlThatKeepsFocusButAllowsAbilityKeys(el) {

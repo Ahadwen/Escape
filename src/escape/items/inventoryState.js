@@ -11,6 +11,9 @@ export function createEmptyInventory() {
     valiantElectricBoxChargeBonus: 0,
     heartsRegenPerSec: 0,
     heartsRegenBank: 0,
+    heartsResistanceReadyAt: 0,
+    heartsResistanceCooldownDuration: 0,
+    swampInfectionStacks: 0,
     spadesObstacleBoostUntil: 0,
     aceUltimateReadyAt: 0,
     /** Seven diamonds in rank deck — larger dash range and smoke radius (rogue). */

@@ -211,11 +211,11 @@
 
       .deck-middle-twelve .card-slot .title,
       .deck-middle-twelve .card-slot .card-slot-rank-suit {
-        font-size: 12px;
+        font-size: clamp(12px, 1.1vw + 3px, 15px);
       }
 
       .deck-middle-twelve .card-slot .meta {
-        font-size: clamp(5px, 9cqmin + 1px, 9px);
+        font-size: clamp(8px, 0.45vw + 5px, 11px);
         margin-top: 1px;
       }
 
@@ -2339,6 +2339,41 @@
       .dev-item-dropper .dev-item-row button {
         width: 100%;
       }
+
+      .dev-run-path {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid #334155;
+      }
+
+      .dev-run-path > span {
+        display: block;
+        margin: 0 0 8px;
+        font-weight: 600;
+        color: #94a3b8;
+        font-size: 11px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .dev-run-level-row {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr) 36px;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .dev-run-level-value {
+        text-align: center;
+        font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        color: #e2e8f0;
+      }
+
+      .dev-run-level-row button,
+      .dev-run-path select {
+        width: 100%;
+      }
     </style>
     </head>
   <body>
@@ -2361,6 +2396,18 @@
         <option value="forge">Forge</option>
       </select>
       <p class="special-test-west-hint">Editable during character select only.</p>
+      <div class="dev-run-path" aria-label="Run progression controls">
+        <span>Run progression</span>
+        <div class="dev-run-level-row">
+          <button id="debug-run-level-dec" type="button" aria-label="Decrease run level">-</button>
+          <div id="debug-run-level-value" class="dev-run-level-value">Level 1</div>
+          <button id="debug-run-level-inc" type="button" aria-label="Increase run level">+</button>
+        </div>
+        <label for="debug-path-select">Path</label>
+        <select id="debug-path-select" autocomplete="off">
+          <option value="__auto__">Auto (random at level 2)</option>
+        </select>
+      </div>
       <div class="run-log-dev-actions" aria-label="Run log (last 30 entries)">
         <span>Run log</span>
         <div class="run-log-dev-row">
@@ -2747,6 +2794,6 @@
       </div>
     </div>
 
-      <script type="module" crossorigin src="./assets/main-CgGLD_4Q.js"></script>
+      <script type="module" crossorigin src="./assets/main-9MoQTH-7.js"></script>
   </body>
 </html>

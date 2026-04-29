@@ -8,7 +8,10 @@ import {
   DAMAGE_PLAYER_INVULN_SEC,
   DAMAGE_SCREEN_SHAKE_SEC,
   DAMAGE_SCREEN_SHAKE_STRENGTH,
+  LASER_BLUE_PLAYER_SLOW_MULT,
   LASER_BLUE_PLAYER_SLOW_SEC,
+  SWAMP_HIT_SLOW_MULT,
+  SWAMP_HIT_SLOW_SEC,
   HEARTS_13_DEATH_DEFY_CD_SEC,
   CLUBS_13_UNTARGETABLE_SEC,
 } from "./balance.js";
@@ -58,6 +61,7 @@ export function createPlayerDamage(deps) {
     screenShakeUntil: 0,
     screenShakeStrength: 0,
     playerLaserSlowUntil: 0,
+    playerSwampSlowUntil: 0,
     heartsDeathDefyReadyAt: 0,
   };
 
@@ -152,6 +156,7 @@ export function createPlayerDamage(deps) {
         !opts.lunaticRoarTerrain
       ) {
         const cd = getHeartsResistanceCooldown();
+        inventory.heartsResistanceCooldownDuration = cd;
         inventory.heartsResistanceReadyAt = elapsed + cd;
         return;
       }
@@ -225,6 +230,20 @@ export function createPlayerDamage(deps) {
     return getSimElapsed() < combat.playerLaserSlowUntil;
   }
 
+  function applySwampHitSlow() {
+    const elapsed = getSimElapsed();
+    combat.playerSwampSlowUntil = elapsed + SWAMP_HIT_SLOW_SEC;
+  }
+
+  /** Multiplicative product of path/debuff movement slows (e.g. blue laser × swamp hit). */
+  function getMovementSlowMult() {
+    const elapsed = getSimElapsed();
+    let m = 1;
+    if (elapsed < combat.playerLaserSlowUntil) m *= LASER_BLUE_PLAYER_SLOW_MULT;
+    if (elapsed < combat.playerSwampSlowUntil) m *= SWAMP_HIT_SLOW_MULT;
+    return m;
+  }
+
   function resetCombatState() {
     combat.playerInvulnerableUntil = 0;
     combat.playerUntargetableUntil = 0;
@@ -232,6 +251,7 @@ export function createPlayerDamage(deps) {
     combat.screenShakeUntil = 0;
     combat.screenShakeStrength = 0;
     combat.playerLaserSlowUntil = 0;
+    combat.playerSwampSlowUntil = 0;
     combat.heartsDeathDefyReadyAt = 0;
   }
 
@@ -261,8 +281,12 @@ export function createPlayerDamage(deps) {
     tickCombatPresentation,
     getShakeOffset,
     isLaserSlowActive,
+    applySwampHitSlow,
+    getMovementSlowMult,
     resetCombatState,
     bumpScreenShake,
     grantInvulnerabilityUntil,
+    getHeartsResistanceCardCount,
+    getHeartsResistanceCooldown,
   };
 }
