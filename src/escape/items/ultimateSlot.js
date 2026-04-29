@@ -101,7 +101,8 @@ export function tryUseEquippedUltimate(ctx) {
     applyUltimateBurstWavePush(ctx.player, ctx.hunterEntities, ULT_BURST_RADIUS);
   } else if (ultType === "timelock") {
     ctx.bumpScreenShake?.(6, 0.18);
-    ctx.grantInvulnerabilityUntil?.(elapsed + 2);
+    // Timelock is a full 4s defensive window: 2s player lock + 2s enemy lock.
+    ctx.grantInvulnerabilityUntil?.(elapsed + 4);
     ctx.setPlayerTimelockUntil?.(elapsed + 2);
     ctx.setTimelockWindow?.(elapsed + 2, elapsed + 4);
     ctx.setTimelockWorldShakeAt?.(elapsed + 2);

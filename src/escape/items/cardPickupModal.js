@@ -535,24 +535,26 @@ export function createCardPickupModal(opts) {
 
     const needsDiamondChoice = setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower;
     if (needsDiamondChoice) {
+      const applyDiamondChoice = (id) => {
+        inventory.diamondEmpower = id;
+        setBonusChoicePendingSuit = null;
+        pendingCard = null;
+        cardPickupFlowActive = false;
+        pickupTargetRank = null;
+        dragIntentRank = null;
+        closeCardModal();
+      };
       const mk = (id, text) => {
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "leave-button";
         btn.textContent = `Set bonus! ${text}`;
-        btn.addEventListener("click", () => {
-          inventory.diamondEmpower = id;
-          setBonusChoicePendingSuit = null;
-          pendingCard = null;
-          cardPickupFlowActive = false;
-          pickupTargetRank = null;
-          dragIntentRank = null;
-          closeCardModal();
-        });
+        btn.addEventListener("click", () => applyDiamondChoice(id));
         return btn;
       };
-      cardSwapRow.appendChild(mk("dash2x", "Empower Dash (twice range)"));
-      cardSwapRow.appendChild(mk("speedPassive", "Empower Burst (+speed/+duration)"));
+      cardSwapRow.appendChild(mk("dash2x", "Q Empower (Dash: twice range)"));
+      cardSwapRow.appendChild(mk("speedPassive", "W Empower (Burst: +speed/+duration)"));
+      cardSwapRow.appendChild(mk("decoyFortify", "E Empower (Decoy: +duration/+HP)"));
     } else {
       const leaveBtn = document.createElement("button");
       leaveBtn.type = "button";
@@ -609,9 +611,22 @@ export function createCardPickupModal(opts) {
   if (cardCloseButton) cardCloseButton.addEventListener("click", onCloseClick);
 
   function onGlobalKeydown(e) {
+    const needsDiamondChoice = setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower;
+    if (needsDiamondChoice && inventoryModalOpen) {
+      const k = String(e.key || "").toLowerCase();
+      if (k === "q" || k === "w" || k === "e") {
+        e.preventDefault();
+        if (k === "q") inventory.diamondEmpower = "dash2x";
+        else if (k === "w") inventory.diamondEmpower = "speedPassive";
+        else inventory.diamondEmpower = "decoyFortify";
+        setBonusChoicePendingSuit = null;
+        closeCardModal();
+        return;
+      }
+    }
     if (e.key !== "Escape") return;
     if (!inventoryModalOpen) return;
-    if (setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower) return;
+    if (needsDiamondChoice) return;
     e.preventDefault();
     continueAfterLoadout();
   }

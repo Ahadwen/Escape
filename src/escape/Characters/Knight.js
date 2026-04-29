@@ -23,6 +23,8 @@ const DECOY_COOLDOWN = 8;
 const DECOY_DURATION = 5;
 const DECOY_MIN_UPTIME_SEC = 0.3;
 const DECOY_HITS_AFTER_ARM = 4;
+const KNIGHT_DIAMOND_DECOY_DURATION_BONUS_SEC = 2.5;
+const KNIGHT_DIAMOND_DECOY_HITS_BONUS = 3;
 const KNIGHT_DIAMOND_BURST_SPEED_MULT = 2.6;
 const KNIGHT_DIAMOND_BURST_DURATION_BONUS_SEC = 1.5;
 
@@ -115,12 +117,26 @@ export function createKnight() {
     return ` ↓${reducedBy.toFixed(1)}s`;
   }
 
+  function diamondOmniEmpowerActive(passive) {
+    return passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
+  }
+
   function diamondSpeedEmpowerActive(passive, inventory) {
-    return passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD && inventory.diamondEmpower === "speedPassive";
+    return (
+      passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD &&
+      (inventory.diamondEmpower === "speedPassive" || diamondOmniEmpowerActive(passive))
+    );
+  }
+
+  function diamondDecoyEmpowerActive(passive, inventory) {
+    return (
+      passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD &&
+      (inventory?.diamondEmpower === "decoyFortify" || diamondOmniEmpowerActive(passive))
+    );
   }
 
   function dashDistanceForState(passive, inventory) {
-    const omniEmpower = passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
+    const omniEmpower = diamondOmniEmpowerActive(passive);
     const dash2xEmpower = inventory?.diamondEmpower === "dash2x";
     return dash2xEmpower || omniEmpower ? DASH_DISTANCE_EMPOWERED : DASH_DISTANCE;
   }
@@ -195,13 +211,14 @@ export function createKnight() {
     const passive = collectPassive(inventory);
     if (elapsed < decoyReadyAt) return;
     decoyReadyAt = elapsed + effectiveCooldown(passive, "decoy", DECOY_COOLDOWN, 0.4);
+    const decoyEmpower = diamondDecoyEmpowerActive(passive, inventory);
     decoys.push({
       x: player.x,
       y: player.y,
       r: player.r * 0.85,
-      until: elapsed + DECOY_DURATION,
+      until: elapsed + DECOY_DURATION + (decoyEmpower ? KNIGHT_DIAMOND_DECOY_DURATION_BONUS_SEC : 0),
       invulnerableUntil: elapsed + DECOY_MIN_UPTIME_SEC,
-      hp: DECOY_HITS_AFTER_ARM,
+      hp: DECOY_HITS_AFTER_ARM + (decoyEmpower ? KNIGHT_DIAMOND_DECOY_HITS_BONUS : 0),
     });
     if (typeof spawnAttackRing === "function") {
       spawnAttackRing(player.x, player.y, player.r + 24, "#818cf8", 0.25);
