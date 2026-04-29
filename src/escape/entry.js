@@ -697,6 +697,8 @@ function boot() {
       cardPickup.clearSetBonusChoice?.("diamonds");
       return;
     }
+    // Prevent surprise mid-run pauses: only surface this chooser while card loadout modal is already open.
+    if (!(cardPickup.isPaused?.() ?? false)) return;
     cardPickup.openSetBonusChoice("diamonds");
   }
 
