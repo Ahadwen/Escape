@@ -1167,6 +1167,76 @@
         display: flex;
       }
 
+      /* Knight diamond set bonus (7 diamonds): choice sits above inventory modal */
+      .diamond-empower-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 45;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        background: rgba(var(--escape-ui-ink-rgb), 0.55);
+        box-sizing: border-box;
+      }
+
+      .diamond-empower-overlay.open {
+        display: flex;
+      }
+
+      .diamond-empower-panel {
+        width: min(92vw, 420px);
+        border-radius: 14px;
+        border: 1px solid var(--escape-ui-border-bright);
+        background: linear-gradient(180deg, var(--escape-ui-mid), var(--escape-ui-veil));
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+        padding: 18px 20px 20px;
+      }
+
+      .diamond-empower-panel h2 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        color: #e2e8f0;
+      }
+
+      .diamond-empower-sub {
+        margin: 0 0 16px;
+        font-size: 14px;
+        line-height: 1.45;
+        color: #94a3b8;
+      }
+
+      .diamond-empower-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .diamond-empower-btn {
+        appearance: none;
+        text-align: left;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--escape-ui-border-bright);
+        background: linear-gradient(165deg, var(--escape-ui-panel), var(--escape-ui-deep));
+        color: #e2e8f0;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.35;
+        cursor: pointer;
+      }
+
+      .diamond-empower-btn:active {
+        transform: translateY(1px);
+      }
+
+      .diamond-empower-hint {
+        margin: 14px 0 0;
+        font-size: 12px;
+        color: #64748b;
+        line-height: 1.4;
+      }
+
       .roulette-modal {
         position: fixed;
         inset: 0;
@@ -2749,6 +2819,32 @@
         <div id="card-modal-face" class="card-face"></div>
         <div id="card-swap-row" class="swap-row"></div>
         <div id="modal-set-bonus-status" class="modal-set-bonus-status"></div>
+      </div>
+    </div>
+
+    <div
+      id="diamond-empower-overlay"
+      class="diamond-empower-overlay"
+      aria-hidden="true"
+      aria-modal="true"
+      role="dialog"
+      aria-labelledby="diamond-empower-title"
+    >
+      <div class="diamond-empower-panel">
+        <h2 id="diamond-empower-title">Diamond set bonus</h2>
+        <p class="diamond-empower-sub">Choose one ability to empower (applies for the rest of this run).</p>
+        <div class="diamond-empower-actions">
+          <button type="button" id="diamond-empower-q" class="diamond-empower-btn">
+            <strong>Q</strong> — Dash (twice range)
+          </button>
+          <button type="button" id="diamond-empower-w" class="diamond-empower-btn">
+            <strong>W</strong> — Burst (+speed / +duration)
+          </button>
+          <button type="button" id="diamond-empower-e" class="diamond-empower-btn">
+            <strong>E</strong> — Decoy (+duration / +HP)
+          </button>
+        </div>
+        <p class="diamond-empower-hint">Or press <kbd>Q</kbd> / <kbd>W</kbd> / <kbd>E</kbd> while this dialog is open.</p>
       </div>
     </div>
 

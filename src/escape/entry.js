@@ -17,6 +17,7 @@ import {
   LUNATIC_SPRINT_TIER_FX_DUR_T2,
   LUNATIC_SPRINT_TIER_FX_DUR_T4,
   SET_BONUS_SUIT_THRESHOLD,
+  SET_BONUS_SUIT_MAX,
   VALIANT_BUNNY_PICKUP_R,
   BULWARK_POST_HIT_INVULN_SEC,
   BULWARK_FLAG_MAX_HP,
@@ -810,20 +811,24 @@ function boot() {
     if (!cardPickup) return;
     if (activeCharacterId !== "knight") {
       cardPickup.clearSetBonusChoice?.("diamonds");
+      hideDiamondEmpowerOverlay();
       return;
     }
     if (inventory.diamondEmpower) {
       cardPickup.clearSetBonusChoice?.("diamonds");
+      hideDiamondEmpowerOverlay();
       return;
     }
     const suits = countSuitsInActiveSlots(inventory);
     if (suits.diamonds < SET_BONUS_SUIT_THRESHOLD || suits.diamonds >= SET_BONUS_SUIT_MAX) {
       cardPickup.clearSetBonusChoice?.("diamonds");
+      hideDiamondEmpowerOverlay();
       return;
     }
     // Prevent surprise mid-run pauses: only surface this chooser while card loadout modal is already open.
     if (!(cardPickup.isPaused?.() ?? false)) return;
     cardPickup.openSetBonusChoice("diamonds");
+    if (cardPickup.isDiamondSetBonusChoicePending?.()) showDiamondEmpowerOverlay();
   }
 
   /** @param {object} [opts]
@@ -924,6 +929,29 @@ function boot() {
     onSelect: switchActiveCharacter,
   });
 
+  const diamondEmpowerOverlayEl = document.getElementById("diamond-empower-overlay");
+  function hideDiamondEmpowerOverlay() {
+    if (!diamondEmpowerOverlayEl) return;
+    diamondEmpowerOverlayEl.classList.remove("open");
+    diamondEmpowerOverlayEl.setAttribute("aria-hidden", "true");
+  }
+  function showDiamondEmpowerOverlay() {
+    if (!diamondEmpowerOverlayEl) return;
+    diamondEmpowerOverlayEl.classList.add("open");
+    diamondEmpowerOverlayEl.setAttribute("aria-hidden", "false");
+  }
+  function wireDiamondEmpowerOverlay() {
+    if (!diamondEmpowerOverlayEl) return;
+    const bind = (btnId, id) => {
+      document.getElementById(btnId)?.addEventListener("click", () => {
+        cardPickup?.applyDiamondEmpowerChoice?.(id);
+      });
+    };
+    bind("diamond-empower-q", "dash2x");
+    bind("diamond-empower-w", "speedPassive");
+    bind("diamond-empower-e", "decoyFortify");
+  }
+
   cardPickup = instrumentObjectMethods(createCardPickupModal({
     cardModal: document.getElementById("card-modal"),
     cardModalFace: document.getElementById("card-modal-face"),
@@ -943,7 +971,9 @@ function boot() {
       handsResetPause = true;
       clearMovementKeys();
     },
+    onDiamondEmpowerPicked: hideDiamondEmpowerOverlay,
   }), "cardModal", runLogger);
+  wireDiamondEmpowerOverlay();
   syncDeckHud();
 
   rouletteModal = instrumentObjectMethods(createRouletteModal({
@@ -1960,7 +1990,12 @@ function boot() {
               dt,
               simElapsed,
               player,
-              keys,
+              keys: {
+                isDown: (k) =>
+                  k === "ArrowLeft" || k === "ArrowRight" || k === "ArrowUp" || k === "ArrowDown"
+                    ? isArrowHeld(k)
+                    : keys.isDown(k),
+              },
               steerLeft: () => isSteerHeld("q"),
               steerRight: () => isSteerHeld("e"),
               inventory,

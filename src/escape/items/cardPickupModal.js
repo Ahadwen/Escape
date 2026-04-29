@@ -35,6 +35,7 @@ export function createCardPickupModal(opts) {
     getItemRules,
     syncDeckSlots,
     onPausedChange = /** @param {boolean} _ */ () => {},
+    onDiamondEmpowerPicked = () => {},
   } = opts;
 
   let inventoryModalOpen = false;
@@ -533,29 +534,7 @@ export function createCardPickupModal(opts) {
       cardSwapRow.appendChild(zoneEl);
     }
 
-    const needsDiamondChoice = setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower;
-    if (needsDiamondChoice) {
-      const applyDiamondChoice = (id) => {
-        inventory.diamondEmpower = id;
-        setBonusChoicePendingSuit = null;
-        pendingCard = null;
-        cardPickupFlowActive = false;
-        pickupTargetRank = null;
-        dragIntentRank = null;
-        closeCardModal();
-      };
-      const mk = (id, text) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "leave-button";
-        btn.textContent = `Set bonus! ${text}`;
-        btn.addEventListener("click", () => applyDiamondChoice(id));
-        return btn;
-      };
-      cardSwapRow.appendChild(mk("dash2x", "Q Empower (Dash: twice range)"));
-      cardSwapRow.appendChild(mk("speedPassive", "W Empower (Burst: +speed/+duration)"));
-      cardSwapRow.appendChild(mk("decoyFortify", "E Empower (Decoy: +duration/+HP)"));
-    } else {
+    {
       const leaveBtn = document.createElement("button");
       leaveBtn.type = "button";
       leaveBtn.className = "leave-button";
@@ -616,11 +595,9 @@ export function createCardPickupModal(opts) {
       const k = String(e.key || "").toLowerCase();
       if (k === "q" || k === "w" || k === "e") {
         e.preventDefault();
-        if (k === "q") inventory.diamondEmpower = "dash2x";
-        else if (k === "w") inventory.diamondEmpower = "speedPassive";
-        else inventory.diamondEmpower = "decoyFortify";
-        setBonusChoicePendingSuit = null;
-        closeCardModal();
+        if (k === "q") applyDiamondEmpowerChoice("dash2x");
+        else if (k === "w") applyDiamondEmpowerChoice("speedPassive");
+        else applyDiamondEmpowerChoice("decoyFortify");
         return;
       }
     }
@@ -631,6 +608,16 @@ export function createCardPickupModal(opts) {
     continueAfterLoadout();
   }
   window.addEventListener("keydown", onGlobalKeydown);
+
+  /** @param {"dash2x" | "speedPassive" | "decoyFortify"} id */
+  function applyDiamondEmpowerChoice(id) {
+    if (setBonusChoicePendingSuit !== "diamonds") return;
+    if (inventory.diamondEmpower) return;
+    inventory.diamondEmpower = id;
+    setBonusChoicePendingSuit = null;
+    renderCardModal();
+    onDiamondEmpowerPicked();
+  }
 
   return {
     openCardPickup,
@@ -655,9 +642,13 @@ export function createCardPickupModal(opts) {
     clearSetBonusChoice(suit = null) {
       if (suit != null && setBonusChoicePendingSuit !== suit) return;
       if (setBonusChoicePendingSuit == null) return;
+      const wasDiamonds = setBonusChoicePendingSuit === "diamonds";
       setBonusChoicePendingSuit = null;
       renderCardModal();
+      if (wasDiamonds) onDiamondEmpowerPicked();
     },
+    applyDiamondEmpowerChoice,
+    isDiamondSetBonusChoicePending: () => setBonusChoicePendingSuit === "diamonds" && !inventory.diamondEmpower,
     dispose() {
       endTouchDragSession();
       if (cardCloseButton) cardCloseButton.removeEventListener("click", onCloseClick);
