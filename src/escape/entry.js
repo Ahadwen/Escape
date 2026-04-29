@@ -114,6 +114,7 @@ import { drawUltimateEffects } from "./fx/ultimateEffects.js";
 import { createPlayerDamage } from "./playerDamage.js";
 import { createRunLogger, instrumentObjectMethods } from "./debug/runLogger.js";
 import { createPathRuntime } from "./run/pathRuntime.js";
+import { applyPathShellTheme } from "./hud/pathShellTheme.js";
 
 /** Procedural hex floor — near REFERENCE slate fill (`rgba(15,23,42,…)` family). */
 const FLOOR_HEX_FILL = "#0f172a";
@@ -1431,6 +1432,7 @@ function boot() {
 
   function refreshDebugRunProgressUi() {
     const pathVisual = pathRuntime.getPathVisualConfig();
+    applyPathShellTheme(pathRuntime.getCurrentPathId());
     if (debugRunLevelValueEl) {
       debugRunLevelValueEl.textContent = `Level ${runLevel + 1} \u00b7 Path: ${pathVisual.label}`;
     }
