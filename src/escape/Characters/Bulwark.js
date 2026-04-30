@@ -94,7 +94,7 @@ export function createBulwark(bulwarkWorld) {
   function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown) {
     const flat = passive.cooldownFlat[abilityId] || 0;
     const pct = clamp(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-    return Math.max(minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    return Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
   }
 
   function cooldownIndicator(baseCooldown, effectiveCooldownSec) {

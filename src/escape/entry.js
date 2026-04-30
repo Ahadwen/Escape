@@ -477,6 +477,14 @@ function boot() {
       return [];
     }
     if (
+      activeCharacterId === "knight" &&
+      countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD &&
+      typeof character.getBurstVisualUntil === "function" &&
+      simElapsed < character.getBurstVisualUntil(simElapsed)
+    ) {
+      return [];
+    }
+    if (
       activeCharacterId === "valiant" &&
       countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD &&
       typeof character.getValiantSurgeUntil === "function" &&
