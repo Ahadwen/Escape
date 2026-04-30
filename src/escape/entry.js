@@ -547,9 +547,24 @@ function boot() {
   let boneBlindDebuffFromBlueLaser = false;
   const BONE_BLIND_DEBUFF_PEAK_SEC = 0.92;
   const BONE_BLIND_DEBUFF_FADE_SEC = 0.55;
+  const FIRE_GROWTH_ZONE_VISUAL_RADIUS_MULT = 1.9;
   let swampInfectionPopupUntil = 0;
   const swampDamageInstanceSeenAt = new Map();
   const damagePopups = /** @type {{ x: number; y: number; bornAt: number; expiresAt: number; base: number; swampBonus: number; driftX: number }[]} */ ([]);
+  /** Fire path L3+: stationary growing flame hazards tied to active tile lifetime. */
+  const fireGrowthZones = /** @type {Array<{
+    key: string;
+    q: number;
+    r: number;
+    x: number;
+    y: number;
+    bornAt: number;
+    growDur: number;
+    baseR: number;
+    maxR: number;
+    nextTouchDamageAt: number;
+    seed: number;
+  }>} */ ([]);
   let nextHealSpawnAt = 3.5;
   let nextCardSpawnAt = 10;
   const MAX_HEAL_CRYSTALS = 6;
@@ -731,6 +746,263 @@ function boot() {
     }
   }
 
+  function drawFireAtmosphereWorld(ctx, viewW, viewH) {
+    const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.9);
+    const r1 = Math.max(viewW, viewH) * 0.66;
+    const r2 = Math.max(viewW, viewH) * 0.98;
+    const g1 = ctx.createRadialGradient(player.x, player.y, r1 * 0.08, player.x, player.y, r1);
+    g1.addColorStop(0, `rgba(254, 215, 170, ${0.09 + pulse * 0.06})`);
+    g1.addColorStop(0.5, `rgba(251, 146, 60, ${0.075 + pulse * 0.05})`);
+    g1.addColorStop(1, "rgba(127, 29, 29, 0)");
+    ctx.fillStyle = g1;
+    ctx.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+
+    const g2 = ctx.createRadialGradient(player.x, player.y, r2 * 0.18, player.x, player.y, r2);
+    g2.addColorStop(0, "rgba(0, 0, 0, 0)");
+    g2.addColorStop(0.62, "rgba(120, 53, 15, 0.2)");
+    g2.addColorStop(1, "rgba(69, 10, 10, 0.4)");
+    ctx.fillStyle = g2;
+    ctx.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+
+    // Subtle ember motes in screen space to avoid collision/readability confusion.
+    const emberN = 32;
+    for (let i = 0; i < emberN; i++) {
+      const seed = i * 17.13;
+      const t = simElapsed * (0.32 + i * 0.02);
+      const sx = cameraX + (((Math.sin(t + seed) * 0.5 + 0.5) * (viewW + 140)) - 70);
+      const sy = cameraY + (((Math.sin(t * 0.7 + seed * 1.37) * 0.5 + 0.5) * (viewH + 140)) - 70);
+      const rr = 1.5 + (i % 4) * 0.9;
+      const a = 0.12 + (0.5 + 0.5 * Math.sin(simElapsed * 3.6 + i)) * 0.18;
+      ctx.fillStyle = i % 5 === 0 ? `rgba(254, 215, 170, ${a})` : `rgba(251, 146, 60, ${a})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, rr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawSwampAtmosphereWorld(ctx, viewW, viewH) {
+    const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.2);
+    const r1 = Math.max(viewW, viewH) * 0.7;
+    const r2 = Math.max(viewW, viewH) * 1.02;
+    const g1 = ctx.createRadialGradient(player.x, player.y, r1 * 0.1, player.x, player.y, r1);
+    g1.addColorStop(0, `rgba(187, 247, 208, ${0.02 + pulse * 0.02})`);
+    g1.addColorStop(0.45, `rgba(110, 231, 183, ${0.02 + pulse * 0.015})`);
+    g1.addColorStop(1, "rgba(15, 23, 42, 0)");
+    ctx.fillStyle = g1;
+    ctx.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+
+    const g2 = ctx.createRadialGradient(player.x, player.y, r2 * 0.2, player.x, player.y, r2);
+    g2.addColorStop(0, "rgba(0, 0, 0, 0)");
+    g2.addColorStop(0.66, "rgba(22, 101, 52, 0.1)");
+    g2.addColorStop(1, "rgba(6, 78, 59, 0.23)");
+    ctx.fillStyle = g2;
+    ctx.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+
+    // Slow miasma wisps in screen space.
+    const mistN = 7;
+    for (let i = 0; i < mistN; i++) {
+      const seed = i * 2.41;
+      const ox = Math.sin(simElapsed * 0.28 + seed) * (viewW * 0.18);
+      const oy = Math.cos(simElapsed * 0.22 + seed * 1.6) * (viewH * 0.14);
+      const cx = player.x + ox + Math.sin(simElapsed * 0.6 + i) * 28;
+      const cy = player.y + oy + Math.cos(simElapsed * 0.52 + i * 0.7) * 20;
+      const rr = Math.max(40, Math.min(95, viewW * 0.06 + i * 5));
+      const fog = ctx.createRadialGradient(cx, cy, 0, cx, cy, rr);
+      fog.addColorStop(0, "rgba(110, 231, 183, 0.045)");
+      fog.addColorStop(0.6, "rgba(16, 185, 129, 0.03)");
+      fog.addColorStop(1, "rgba(6, 78, 59, 0)");
+      ctx.fillStyle = fog;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function resetFireGrowthZones() {
+    fireGrowthZones.length = 0;
+  }
+
+  function fireGrowthZoneRadius(zone) {
+    const u = clamp((simElapsed - zone.bornAt) / Math.max(0.001, zone.growDur), 0, 1);
+    const e = u * u * (3 - 2 * u);
+    return zone.baseR + (zone.maxR - zone.baseR) * e;
+  }
+
+  function fireGrowthZoneVisualRadius(zone) {
+    return fireGrowthZoneRadius(zone) * FIRE_GROWTH_ZONE_VISUAL_RADIUS_MULT;
+  }
+
+  function pruneFireGrowthZonesToActiveHexes() {
+    if (!fireGrowthZones.length) return;
+    const needed = new Set(activeHexes.map((h) => hexKey(h.q, h.r)));
+    for (let i = fireGrowthZones.length - 1; i >= 0; i--) {
+      if (!needed.has(fireGrowthZones[i].key)) fireGrowthZones.splice(i, 1);
+    }
+  }
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {{ miniFromArtillery?: boolean }} [opts]
+   */
+  function spawnFireGrowthZoneAt(x, y, opts = {}) {
+    const miniFromArtillery = !!opts.miniFromArtillery;
+    let h = worldToHex(x, y);
+    if (miniFromArtillery && specials.isSpecialTile(h.q, h.r)) {
+      // Deterministic fallback: nudge to the first non-special neighbor hex in fixed direction order.
+      for (const d of HEX_DIRS) {
+        const q2 = h.q + d.q;
+        const r2 = h.r + d.r;
+        if (!specials.isSpecialTile(q2, r2)) {
+          h = { q: q2, r: r2 };
+          break;
+        }
+      }
+    }
+    const k = hexKey(h.q, h.r);
+    if (!miniFromArtillery) {
+      if (specials.isSpecialTile(h.q, h.r)) return false;
+      if (fireGrowthZones.some((z) => z.key === k)) return false;
+    }
+    fireGrowthZones.push({
+      key: k,
+      q: h.q,
+      r: h.r,
+      x,
+      y,
+      bornAt: simElapsed,
+      growDur: miniFromArtillery ? randRange(3.2, 6.1) : randRange(5.2, 7.4),
+      baseR: miniFromArtillery ? randRange(30, 68) : randRange(90, 128),
+      maxR: miniFromArtillery ? randRange(86, 104) : randRange(328, 386),
+      nextTouchDamageAt: simElapsed + 0.18,
+      seed: Math.random() * Math.PI * 2,
+    });
+    return true;
+  }
+
+  function maybeSpawnFireGrowthZone(dt) {
+    const targetMax = Math.min(5, 2 + Math.max(0, runLevel - 2));
+    if (fireGrowthZones.length >= targetMax) return;
+    // Mirror hunter danger pacing: fewer zones early, progressively more as danger ramps.
+    const dangerRamp01 = hunterRuntime ? hunterRuntime.getDangerRamp01() : clamp(simElapsed / 300, 0, 1);
+    const levelBonus = Math.max(0, runLevel - 2) * 0.04;
+    const spawnPerSec = 0.16 + levelBonus + 0.34 * dangerRamp01;
+    if (Math.random() >= spawnPerSec * Math.max(0, dt)) return;
+
+    const blocked = new Set(fireGrowthZones.map((z) => z.key));
+    const playerHex = worldToHex(player.x, player.y);
+    const candidates = activeHexes.filter((h) => {
+      if (h.q === 0 && h.r === 0) return false;
+      if (h.q === playerHex.q && h.r === playerHex.r) return false;
+      if (blocked.has(hexKey(h.q, h.r))) return false;
+      if (specials.isSpecialTile(h.q, h.r)) return false;
+      return true;
+    });
+    if (!candidates.length) return;
+    const h = candidates[Math.floor(Math.random() * candidates.length)];
+    const c = hexToWorld(h.q, h.r);
+    const a = Math.random() * Math.PI * 2;
+    const d = randRange(HEX_SIZE * 0.12, HEX_SIZE * 0.46);
+    const x = c.x + Math.cos(a) * d;
+    const y = c.y + Math.sin(a) * d;
+    if (Math.hypot(x - player.x, y - player.y) < player.r + 68) return;
+    spawnFireGrowthZoneAt(x, y);
+  }
+
+  function spawnFireGrowthZonesFromFireArtillery() {
+    if (!hunterRuntime) return;
+    for (const z of hunterRuntime.entities.dangerZones) {
+      if (!z || !z.firePath || !z.exploded) continue;
+      if (z.fireGrowthSpawned) continue;
+      const spawned = spawnFireGrowthZoneAt(z.x, z.y, { miniFromArtillery: true });
+      if (spawned) z.fireGrowthSpawned = true;
+    }
+  }
+
+  function tickFireGrowthZones(dt) {
+    const firePathActive = pathRuntime.getCurrentPathId() === "fire";
+    // L2+: keep/tick artillery mini-zones so players learn the hazard language early.
+    // L3+: additionally enable ambient fire-zone spawning.
+    if (!firePathActive || runLevel < 1) {
+      if (fireGrowthZones.length) resetFireGrowthZones();
+      return;
+    }
+    pruneFireGrowthZonesToActiveHexes();
+    if (runLevel >= 2) maybeSpawnFireGrowthZone(dt);
+
+    for (const zone of fireGrowthZones) {
+      // Match gameplay damage footprint to the visible fire body/ring.
+      const rr = fireGrowthZoneVisualRadius(zone) * 0.92 + player.r;
+      const dx = player.x - zone.x;
+      const dy = player.y - zone.y;
+      if (dx * dx + dy * dy > rr * rr) continue;
+      if (simElapsed < zone.nextTouchDamageAt) continue;
+      damagePlayerThroughPath(1, { sourceX: zone.x, sourceY: zone.y, fireApplyIgnite: true });
+      zone.nextTouchDamageAt = simElapsed + 0.35;
+    }
+  }
+
+  function drawFireGrowthZones(ctx) {
+    if (!fireGrowthZones.length) return;
+    for (const zone of fireGrowthZones) {
+      const r = fireGrowthZoneRadius(zone);
+      const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 5.4 + zone.seed);
+      const visualR = fireGrowthZoneVisualRadius(zone);
+
+      const scorch = ctx.createRadialGradient(zone.x, zone.y, visualR * 0.12, zone.x, zone.y, visualR * 1.2);
+      scorch.addColorStop(0, "rgba(69, 10, 10, 0.56)");
+      scorch.addColorStop(0.55, "rgba(39, 39, 42, 0.34)");
+      scorch.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = scorch;
+      ctx.beginPath();
+      ctx.arc(zone.x, zone.y, visualR * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      const core = ctx.createRadialGradient(zone.x, zone.y, 0, zone.x, zone.y, visualR);
+      core.addColorStop(0, `rgba(255, 251, 235, ${0.34 + pulse * 0.14})`);
+      core.addColorStop(0.22, `rgba(253, 186, 116, ${0.56 + pulse * 0.24})`);
+      core.addColorStop(0.58, `rgba(249, 115, 22, ${0.4 + pulse * 0.22})`);
+      core.addColorStop(1, "rgba(153, 27, 27, 0)");
+      ctx.fillStyle = core;
+      ctx.beginPath();
+      ctx.arc(zone.x, zone.y, visualR, 0, Math.PI * 2);
+      ctx.fill();
+
+      const outerHeat = ctx.createRadialGradient(zone.x, zone.y, visualR * 0.55, zone.x, zone.y, visualR * 1.55);
+      outerHeat.addColorStop(0, `rgba(251, 146, 60, ${0.12 + pulse * 0.06})`);
+      outerHeat.addColorStop(0.7, "rgba(220, 38, 38, 0.08)");
+      outerHeat.addColorStop(1, "rgba(153, 27, 27, 0)");
+      ctx.fillStyle = outerHeat;
+      ctx.beginPath();
+      ctx.arc(zone.x, zone.y, visualR * 1.55, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Flickering tongues near the flame edge.
+      const tongues = 10;
+      for (let i = 0; i < tongues; i++) {
+        const a = zone.seed + i * ((Math.PI * 2) / tongues) + simElapsed * (0.55 + i * 0.08);
+        const tr = visualR * (0.5 + 0.18 * Math.sin(simElapsed * 2.2 + i));
+        const tx = zone.x + Math.cos(a) * tr;
+        const ty = zone.y + Math.sin(a) * tr;
+        const fr = visualR * (0.16 + 0.05 * Math.sin(simElapsed * 6 + i));
+        const fg = ctx.createRadialGradient(tx, ty, 0, tx, ty, fr);
+        fg.addColorStop(0, "rgba(254, 243, 199, 0.32)");
+        fg.addColorStop(0.5, "rgba(251, 146, 60, 0.28)");
+        fg.addColorStop(1, "rgba(185, 28, 28, 0)");
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.arc(tx, ty, fr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.strokeStyle = `rgba(254, 215, 170, ${0.4 + pulse * 0.22})`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(zone.x, zone.y, visualR * (0.86 + pulse * 0.08), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
   function damagePlayerThroughPath(amount, opts = {}) {
     const hooked = pathRuntime.applyDamageHooks({
       amount,
@@ -889,6 +1161,7 @@ function boot() {
     boneBlindDebuffFadeEnd = 0;
     boneBlindDebuffFromBlueLaser = false;
     resetSwampInfection();
+    resetFireGrowthZones();
     damagePopups.length = 0;
     specials.resetSessionState();
     safehouseHexFlow.resetSession();
@@ -1314,6 +1587,7 @@ function boot() {
     boneBlindDebuffFadeEnd = 0;
     boneBlindDebuffFromBlueLaser = false;
     resetSwampInfection();
+    resetFireGrowthZones();
     damagePopups.length = 0;
     specials.resetSessionState();
     safehouseHexFlow.resetSession();
@@ -2000,6 +2274,7 @@ function boot() {
         boneBlindDebuffFadeEnd = 0;
         boneBlindDebuffFromBlueLaser = false;
       }
+      tickFireGrowthZones(rawDt);
       player.hp = Math.max(0, Math.min(player.maxHp, player.hp));
       if (activeCharacterId === "valiant") {
         const lootPlacementOpts = () => ({
@@ -2493,6 +2768,9 @@ function boot() {
 
       if (huntersEnabled && !runDead) {
         hunterRuntime.tick(dt * worldTimeScale, { suppressRangedAttacks: timelockFrozen });
+        if (pathRuntime.getCurrentPathId() === "fire" && runLevel >= 1) {
+          spawnFireGrowthZonesFromFireArtillery();
+        }
       }
       if (!runDead) {
         hexEventRuntime?.postHunterTick();
@@ -2627,6 +2905,8 @@ function boot() {
       const { x: cx, y: cy } = hexToWorld(h.q, h.r);
       fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
     }
+    if (firePathActive) drawFireAtmosphereWorld(ctx, viewW, viewH);
+    if (swampPathActive) drawSwampAtmosphereWorld(ctx, viewW, viewH);
     if (bonePathActive) {
       const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.6);
       const r1 = Math.max(viewW, viewH) * 0.62;
@@ -2651,10 +2931,13 @@ function boot() {
       obstacles,
       swampPathActive
         ? { fill: "#3b2d20", stroke: "#7c5a3b" }
+        : firePathActive
+          ? { fill: "#3a1812", stroke: "#fca5a5", glowColor: "rgba(251, 113, 133, 0.45)", glowBlur: 8 }
         : bonePathActive
           ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 }
           : undefined,
     );
+    if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
       const lock = character.getBulwarkWorld().getDeathLock();
       if (lock) {
