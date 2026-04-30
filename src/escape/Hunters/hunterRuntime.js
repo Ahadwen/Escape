@@ -77,6 +77,7 @@ import {
  * @property {(hunter: any, player: any, nearestDecoy: (h: any) => any, hasLOS: (a: any, b: any) => boolean, fallback: { x: number; y: number }, elapsed: number) => any} [pickRogueHunterTarget]
  * @property {(circle: { x: number; y: number; r: number }, elapsed: number) => boolean} [collidesValiantEnemyShockField] — hunter-only shock rects (Valiant W)
  * @property {() => { x: number; y: number; r: number; lureR: number } | null} [getBulwarkPlantedFlag] — planted Bulwark flag lures hunters in radius
+ * @property {() => string | null} [getDebugHunterTypeFilter] — debug-only forced wave spawn type (null = normal mix)
  */
 
 export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
@@ -108,6 +109,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     pickRogueHunterTarget: pickRogueHunterTargetDep,
     collidesValiantEnemyShockField: collidesValiantEnemyShockFieldDep,
     getBulwarkPlantedFlag: getBulwarkPlantedFlagDep,
+    getDebugHunterTypeFilter: getDebugHunterTypeFilterDep,
   } = deps;
 
   const worldToHex = worldToHexDep ?? (() => ({ q: 0, r: 0 }));
@@ -126,6 +128,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const getPlayerUntargetableUntil = getPlayerUntargetableUntilDep ?? (() => 0);
   const pickRogueHunterTarget = pickRogueHunterTargetDep ?? null;
   const getBulwarkPlantedFlag = getBulwarkPlantedFlagDep ?? (() => null);
+  const getDebugHunterTypeFilter = getDebugHunterTypeFilterDep ?? (() => null);
 
   /** Ghost dashes run to predicted target + this many pixels along aim (not a fixed world cap). */
   const GHOST_PRED_OVERSHOOT_PX = 40;
@@ -397,8 +400,15 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (roll < 0.61) return "sniper";
     if (roll < 0.78) return "ranged";
     if (roll < 0.93) return "laser";
-    if (bonePathActive() && getRunLevel() >= 2 && Math.random() < 0.22) return "cryptSpawner";
+    // Bone L3+: replace the normal spawner slot with the crypt mimic so it is clearly present.
+    if (bonePathActive() && getRunLevel() >= 2) return "cryptSpawner";
     return "spawner";
+  }
+
+  function pickWaveHunterType() {
+    const forced = getDebugHunterTypeFilter();
+    if (typeof forced === "string" && forced) return forced;
+    return pickRegularHunterType();
   }
 
   function hunterRadiusForType(type) {
@@ -534,7 +544,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.fastR = 10;
     } else if (type === "cryptSpawner") {
       r = 18;
-      life = 8;
+      life = 20;
       lastShotAt = elapsed + 999;
       h.cryptDisguised = true;
       h.spawnDelayUntil = elapsed + 9999;
@@ -639,7 +649,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const player = getPlayer();
     for (let i = 0; i < nJobs; i++) {
       jobs.push(() => {
-        const type = pickRegularHunterType();
+        const type = pickWaveHunterType();
         const ang = Math.random() * Math.PI * 2;
         const d = rand(300, 780);
         const x = player.x + Math.cos(ang) * d;
@@ -852,10 +862,21 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const ddy = h.y - player.y;
         if (ddx * ddx + ddy * ddy > 160 * 160) continue;
         h.cryptDisguised = false;
+        h.life = 3;
+        h.dieAt = elapsed + 3;
+        h.cryptRevealStartAt = elapsed;
+        h.cryptRevealEndAt = elapsed + 0.35;
+        h.cryptRevealU = 0;
         h.spawnDelayUntil = elapsed;
-        h.spawnActiveUntil = elapsed + 8;
+        h.spawnActiveUntil = elapsed + 3;
         h.nextSwarmAt = elapsed;
         h.fireGlow = true;
+      }
+      if (h.type === "cryptSpawner" && !h.cryptDisguised) {
+        const t0 = Number(h.cryptRevealStartAt ?? 0);
+        const t1 = Number(h.cryptRevealEndAt ?? 0);
+        if (t1 > t0) h.cryptRevealU = clamp((elapsed - t0) / Math.max(0.0001, t1 - t0), 0, 1);
+        else h.cryptRevealU = 1;
       }
       if (h.type === "spawner" || h.type === "cryptSpawner") continue;
       if (elapsed < (h.stunnedUntil || 0)) continue;

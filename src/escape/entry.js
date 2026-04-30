@@ -77,7 +77,7 @@ import {
   HEAL_PICKUP_ARM_THICK,
   CARD_PICKUP_REACH_EXTRA,
 } from "./constants.js";
-import { randRange } from "./rng.js";
+import { makeRng, randRange } from "./rng.js";
 import { randomOpenLootPoint } from "./collectibles/placement.js";
 import { makePickupVisualPair } from "./items/cardUtils.js";
 import { createEmptyInventory, collectReservedDeckKeys } from "./items/inventoryState.js";
@@ -731,6 +731,27 @@ function boot() {
     }
   }
 
+  function drawBoneSolitaryTerrainDecoys(ctx) {
+    for (const h of activeHexes) {
+      const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+      const rng = makeRng((((h.q * 73856093) ^ (h.r * 19349663)) | 0) ^ 0x6b5fca6d);
+      const roll = rng();
+      const pieces = roll < 0.38 ? 1 : roll < 0.82 ? 2 : 3;
+      for (let i = 0; i < pieces; i++) {
+        const a = rng() * Math.PI * 2;
+        const d = HEX_SIZE * (0.18 + rng() * 0.43);
+        const px = cx + Math.cos(a) * d;
+        const py = cy + Math.sin(a) * d;
+        if (Math.hypot(px - cx, py - cy) > HEX_SIZE * 0.78) continue;
+        ctx.fillStyle = "rgba(21, 24, 33, 0.88)";
+        ctx.strokeStyle = "rgba(58, 63, 74, 0.8)";
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(px - BLOCK / 2, py - BLOCK / 2, BLOCK, BLOCK);
+        ctx.strokeRect(px - BLOCK / 2, py - BLOCK / 2, BLOCK, BLOCK);
+      }
+    }
+  }
+
   function damagePlayerThroughPath(amount, opts = {}) {
     const hooked = pathRuntime.applyDamageHooks({
       amount,
@@ -1197,6 +1218,7 @@ function boot() {
       activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function"
         ? character.getBulwarkWorld().getPlantedFlagForAi()
         : null,
+    getDebugHunterTypeFilter: () => (huntersEnabled ? debugHunterTypeFilter : null),
     hitDecoyIfAny,
     hitDecoyAlongSegment,
     worldToHex,
@@ -1450,8 +1472,33 @@ function boot() {
   const dangerRampFillEl = document.getElementById("danger-ramp-fill");
 
   const devHuntersEl = document.getElementById("dev-hunters-enabled");
-  let huntersEnabled = true;
+  const devHunterTypeFilterEl = document.getElementById("dev-hunter-type-filter");
+  var huntersEnabled = true;
   const HUNTERS_LS_KEY = "escape-dev-hunters-enabled";
+  const HUNTER_TYPE_FILTER_LS_KEY = "escape-dev-hunter-type-filter";
+  /** @type {string | null} */
+  var debugHunterTypeFilter = null;
+  function normalizeDebugHunterTypeFilter(value) {
+    if (typeof value !== "string") return null;
+    const v = value.trim();
+    if (!v || v === "__all__") return null;
+    if (
+      v === "chaser" ||
+      v === "cutter" ||
+      v === "sniper" ||
+      v === "ranged" ||
+      v === "laser" ||
+      v === "laserBlue" ||
+      v === "spawner" ||
+      v === "airSpawner" ||
+      v === "cryptSpawner" ||
+      v === "ghost" ||
+      v === "fast"
+    ) {
+      return v;
+    }
+    return null;
+  }
   if (devHuntersEl && "checked" in devHuntersEl) {
     const saved = localStorage.getItem(HUNTERS_LS_KEY);
     if (saved != null) devHuntersEl.checked = saved !== "0";
@@ -1460,6 +1507,18 @@ function boot() {
       huntersEnabled = devHuntersEl.checked;
       localStorage.setItem(HUNTERS_LS_KEY, huntersEnabled ? "1" : "0");
       hunterRuntime.reset();
+    });
+  }
+  if (devHunterTypeFilterEl && "value" in devHunterTypeFilterEl) {
+    const saved = localStorage.getItem(HUNTER_TYPE_FILTER_LS_KEY);
+    const normalized = normalizeDebugHunterTypeFilter(saved);
+    debugHunterTypeFilter = normalized;
+    devHunterTypeFilterEl.value = normalized ?? "__all__";
+    devHunterTypeFilterEl.addEventListener("change", () => {
+      const normalizedNext = normalizeDebugHunterTypeFilter(String(devHunterTypeFilterEl.value || "__all__"));
+      debugHunterTypeFilter = normalizedNext;
+      localStorage.setItem(HUNTER_TYPE_FILTER_LS_KEY, normalizedNext ?? "__all__");
+      if (huntersEnabled) hunterRuntime.reset();
     });
   }
 
@@ -2576,8 +2635,10 @@ function boot() {
     ctx.save();
     ctx.translate(-cameraX + shake.x, -cameraY + shake.y);
 
-    const floorHexFill = pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
     const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
+    const floorHexFill = bonePathActive
+      ? "#1b1d24"
+      : pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
     const boneAmbientOverlay = bonePathActive;
     const boneBlindDebuffActive =
       bonePathActive && simElapsed < boneBlindDebuffFadeEnd && boneBlindDebuffFadeEnd > 0;
@@ -2587,42 +2648,34 @@ function boot() {
       const { x: cx, y: cy } = hexToWorld(h.q, h.r);
       fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
     }
+    if (bonePathActive) drawBoneSolitaryTerrainDecoys(ctx);
     if (bonePathActive) {
-      const edge = Math.min(160, viewW * 0.16, viewH * 0.16);
-      const pulse = 0.82 + 0.18 * Math.sin(simElapsed * 2.8);
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      const topG = ctx.createLinearGradient(0, 0, 0, edge);
-      topG.addColorStop(0, `rgba(255, 255, 255, ${0.26 * pulse})`);
-      topG.addColorStop(0.55, `rgba(248, 250, 252, ${0.1 * pulse})`);
-      topG.addColorStop(1, "rgba(255, 255, 255, 0)");
-      ctx.fillStyle = topG;
-      ctx.fillRect(0, 0, viewW, edge);
-      const botG = ctx.createLinearGradient(0, viewH, 0, viewH - edge);
-      botG.addColorStop(0, `rgba(255, 255, 255, ${0.26 * pulse})`);
-      botG.addColorStop(0.55, `rgba(248, 250, 252, ${0.1 * pulse})`);
-      botG.addColorStop(1, "rgba(255, 255, 255, 0)");
-      ctx.fillStyle = botG;
-      ctx.fillRect(0, viewH - edge, viewW, edge);
-      const leftG = ctx.createLinearGradient(0, 0, edge, 0);
-      leftG.addColorStop(0, `rgba(255, 255, 255, ${0.22 * pulse})`);
-      leftG.addColorStop(0.65, `rgba(241, 245, 249, ${0.08 * pulse})`);
-      leftG.addColorStop(1, "rgba(255, 255, 255, 0)");
-      ctx.fillStyle = leftG;
-      ctx.fillRect(0, 0, edge, viewH);
-      const rightG = ctx.createLinearGradient(viewW, 0, viewW - edge, 0);
-      rightG.addColorStop(0, `rgba(255, 255, 255, ${0.22 * pulse})`);
-      rightG.addColorStop(0.65, `rgba(241, 245, 249, ${0.08 * pulse})`);
-      rightG.addColorStop(1, "rgba(255, 255, 255, 0)");
-      ctx.fillStyle = rightG;
-      ctx.fillRect(viewW - edge, 0, edge, viewH);
-      ctx.restore();
+      const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.6);
+      const r1 = Math.max(viewW, viewH) * 0.62;
+      const r2 = Math.max(viewW, viewH) * 0.92;
+      const g1 = ctx.createRadialGradient(player.x, player.y, r1 * 0.06, player.x, player.y, r1);
+      g1.addColorStop(0, `rgba(226, 232, 240, ${0.05 + pulse * 0.025})`);
+      g1.addColorStop(0.45, `rgba(148, 163, 184, ${0.045 + pulse * 0.02})`);
+      g1.addColorStop(1, "rgba(15, 23, 42, 0)");
+      ctx.fillStyle = g1;
+      ctx.fillRect(cameraX - 16, cameraY - 16, viewW + 32, viewH + 32);
+
+      const g2 = ctx.createRadialGradient(player.x, player.y, r2 * 0.15, player.x, player.y, r2);
+      g2.addColorStop(0, "rgba(0, 0, 0, 0)");
+      g2.addColorStop(0.68, "rgba(2, 6, 23, 0.16)");
+      g2.addColorStop(1, "rgba(2, 6, 23, 0.34)");
+      ctx.fillStyle = g2;
+      ctx.fillRect(cameraX - 20, cameraY - 20, viewW + 40, viewH + 40);
     }
     /** REFERENCE `render`: obstacles, sanctuary, arena nexus, roulette, surge (specials above tetris footprint). */
     drawObstacles(
       ctx,
       obstacles,
-      swampPathActive ? { fill: "#3b2d20", stroke: "#7c5a3b" } : undefined,
+      swampPathActive
+        ? { fill: "#3b2d20", stroke: "#7c5a3b" }
+        : bonePathActive
+          ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 }
+          : undefined,
     );
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
       const lock = character.getBulwarkWorld().getDeathLock();

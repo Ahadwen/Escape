@@ -2367,6 +2367,10 @@
         cursor: pointer;
       }
 
+      .dev-hunter-filter-row {
+        margin-top: 8px;
+      }
+
       .dev-death-snapshots {
         margin-top: 12px;
         padding-top: 10px;
@@ -2509,6 +2513,23 @@
             <input type="checkbox" id="dev-hunters-enabled" checked autocomplete="off" />
             Hunters spawn &amp; AI
           </label>
+        </div>
+        <div class="dev-hunter-filter-row">
+          <label for="dev-hunter-type-filter">Spawn filter (while hunters on)</label>
+          <select id="dev-hunter-type-filter" autocomplete="off" title="Only spawn this hunter type when enabled">
+            <option value="__all__" selected>All types</option>
+            <option value="chaser">chaser</option>
+            <option value="cutter">cutter</option>
+            <option value="sniper">sniper</option>
+            <option value="ranged">ranged</option>
+            <option value="laser">laser</option>
+            <option value="laserBlue">laserBlue</option>
+            <option value="spawner">spawner</option>
+            <option value="airSpawner">airSpawner</option>
+            <option value="cryptSpawner">cryptSpawner</option>
+            <option value="ghost">ghost</option>
+            <option value="fast">fast</option>
+          </select>
         </div>
         <details class="run-log-collapsible">
           <summary>Show live log (30 lines)</summary>
@@ -2906,6 +2927,6 @@
       </div>
     </div>
 
-      <script type="module" crossorigin src="./assets/main-DJBLUELC.js"></script>
+      <script type="module" crossorigin src="./assets/main-C5Fe4xel.js"></script>
   </body>
 </html>

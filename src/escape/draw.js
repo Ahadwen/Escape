@@ -115,13 +115,20 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
 export function drawObstacles(ctx, obstacles, opts = {}) {
   const fill = opts.fill ?? "#334155";
   const stroke = opts.stroke ?? "#94a3b8";
+  const glowColor = opts.glowColor ?? null;
+  const glowBlur = Math.max(0, Number(opts.glowBlur ?? 0));
   ctx.fillStyle = fill;
   ctx.strokeStyle = stroke;
   ctx.lineWidth = 2;
+  if (glowColor && glowBlur > 0) {
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = glowBlur;
+  }
   for (const o of obstacles) {
     ctx.fillRect(o.x, o.y, o.w, o.h);
     ctx.strokeRect(o.x, o.y, o.w, o.h);
   }
+  if (glowColor && glowBlur > 0) ctx.shadowBlur = 0;
 }
 
 /**

@@ -33,21 +33,31 @@ export function hunterPalette(type) {
 export function drawHunterBody(ctx, h) {
   if (h.type === "cryptSpawner" && h.cryptDisguised) {
     const s = 35;
+    const pulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + h.x * 0.01 + h.y * 0.01) * 4.2);
     ctx.save();
-    ctx.fillStyle = "#334155";
-    ctx.strokeStyle = "#94a3b8";
+    ctx.fillStyle = "#1b1d24";
+    ctx.strokeStyle = "#8b95a8";
     ctx.lineWidth = 2;
     ctx.fillRect(h.x - s / 2, h.y - s / 2, s, s);
     ctx.strokeRect(h.x - s / 2, h.y - s / 2, s, s);
+    ctx.strokeStyle = `rgba(226, 232, 240, ${0.18 + pulse * 0.18})`;
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(h.x - s / 2 + 1.8, h.y - s / 2 + 1.8, s - 3.6, s - 3.6);
     ctx.restore();
     return;
   }
-  const pal = hunterPalette(h.type);
+  const boneSwarmGhostFast = h.type === "fast" && !!h.boneSwarmPhasing;
+  const pal = boneSwarmGhostFast
+    ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" }
+    : hunterPalette(h.type);
   const { x, y, r } = h;
   const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
+  const cryptRevealU = h.type === "cryptSpawner" ? clamp(Number(h.cryptRevealU ?? 1), 0, 1) : 1;
+  const cryptRevealPulse = h.type === "cryptSpawner" ? 1 + (1 - cryptRevealU) * 0.22 : 1;
   const ghostTelegraph = h.type === "ghost" && (h.ghostPhase === "telegraph1" || h.ghostPhase === "telegraph2");
   const teleU = ghostTelegraph ? clamp(Number(h.ghostTelegraphU ?? 0), 0, 1) : 0;
-  const rBody = ghostTelegraph ? r * (1 - 0.12 * Math.sin(teleU * Math.PI)) : r;
+  const rBase = ghostTelegraph ? r * (1 - 0.12 * Math.sin(teleU * Math.PI)) : r;
+  const rBody = rBase * cryptRevealPulse;
   if (h.type === "ghost" && Array.isArray(h.motionTrail)) {
     for (const tr of h.motionTrail) {
       const ta = clamp(Number(tr.alpha ?? 0), 0, 1) * 0.55 * alpha;
@@ -83,6 +93,21 @@ export function drawHunterBody(ctx, h) {
     const aura = clamp(Number(h.ghostAura ?? 0.75), 0, 1);
     drawCircle(ctx, x, y, rBody + 11 + aura * 3, "#cbd5e1", 0.13 + aura * 0.08);
     drawCircle(ctx, x, y, rBody + 6 + aura * 2, "#94a3b8", 0.1 + aura * 0.06);
+  }
+  if (boneSwarmGhostFast) {
+    const pulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + x * 0.01 + y * 0.01) * 6);
+    drawCircle(ctx, x, y, rBody + 6 + pulse * 3, "#e2e8f0", 0.16 + pulse * 0.12);
+    drawCircle(ctx, x, y, rBody + 2 + pulse * 1.5, "#cbd5e1", 0.18 + pulse * 0.14);
+  }
+  if (h.type === "cryptSpawner" && cryptRevealU < 1) {
+    const flash = 1 - cryptRevealU;
+    drawCircle(ctx, x, y, rBody + 24 + flash * 11, "#ffffff", 0.1 + flash * 0.24);
+    drawCircle(ctx, x, y, rBody + 15 + flash * 8, "#e2e8f0", 0.14 + flash * 0.2);
+  }
+  if (h.type === "cryptSpawner") {
+    const pulse = 0.5 + 0.5 * Math.sin((Number(h.cryptRevealU ?? 1) + x * 0.004 + y * 0.004) * 8.5);
+    drawCircle(ctx, x, y, rBody + 9 + pulse * 3, "#cbd5e1", 0.12 + pulse * 0.1);
+    drawCircle(ctx, x, y, rBody + 4 + pulse * 2, "#f8fafc", 0.08 + pulse * 0.08);
   }
   const g = ctx.createRadialGradient(x - rBody * 0.38, y - rBody * 0.42, rBody * 0.08, x, y, rBody);
   g.addColorStop(0, pal.light);
