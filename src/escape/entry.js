@@ -77,7 +77,7 @@ import {
   HEAL_PICKUP_ARM_THICK,
   CARD_PICKUP_REACH_EXTRA,
 } from "./constants.js";
-import { makeRng, randRange } from "./rng.js";
+import { randRange } from "./rng.js";
 import { randomOpenLootPoint } from "./collectibles/placement.js";
 import { makePickupVisualPair } from "./items/cardUtils.js";
 import { createEmptyInventory, collectReservedDeckKeys } from "./items/inventoryState.js";
@@ -728,27 +728,6 @@ function boot() {
         ctx.fillText(extraTxt, px + 20, py - 8);
       }
       ctx.restore();
-    }
-  }
-
-  function drawBoneSolitaryTerrainDecoys(ctx) {
-    for (const h of activeHexes) {
-      const { x: cx, y: cy } = hexToWorld(h.q, h.r);
-      const rng = makeRng((((h.q * 73856093) ^ (h.r * 19349663)) | 0) ^ 0x6b5fca6d);
-      const roll = rng();
-      const pieces = roll < 0.38 ? 1 : roll < 0.82 ? 2 : 3;
-      for (let i = 0; i < pieces; i++) {
-        const a = rng() * Math.PI * 2;
-        const d = HEX_SIZE * (0.18 + rng() * 0.43);
-        const px = cx + Math.cos(a) * d;
-        const py = cy + Math.sin(a) * d;
-        if (Math.hypot(px - cx, py - cy) > HEX_SIZE * 0.78) continue;
-        ctx.fillStyle = "rgba(21, 24, 33, 0.88)";
-        ctx.strokeStyle = "rgba(58, 63, 74, 0.8)";
-        ctx.lineWidth = 1.5;
-        ctx.fillRect(px - BLOCK / 2, py - BLOCK / 2, BLOCK, BLOCK);
-        ctx.strokeRect(px - BLOCK / 2, py - BLOCK / 2, BLOCK, BLOCK);
-      }
     }
   }
 
@@ -2648,7 +2627,6 @@ function boot() {
       const { x: cx, y: cy } = hexToWorld(h.q, h.r);
       fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
     }
-    if (bonePathActive) drawBoneSolitaryTerrainDecoys(ctx);
     if (bonePathActive) {
       const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.6);
       const r1 = Math.max(viewW, viewH) * 0.62;
