@@ -11,6 +11,7 @@
   var HEAL_CRYSTAL_LIFETIME_SEC = 7.2;
   var CARD_COLLECTIBLE_LIFETIME_SEC = 12;
   var HEAL_CRYSTAL_HP = 3;
+  var SWAMP_BOOTLEG_CRYSTAL_HP = 2;
   var CARD_RANK_SPAWN_WEIGHT_MAX = 24;
   var CARD_RANK_SPAWN_WEIGHT_MIN = 1;
   var SET_BONUS_SUIT_THRESHOLD = 7;
@@ -98,6 +99,17 @@
   var DAMAGE_SCREEN_SHAKE_STRENGTH = 8;
   var LASER_BLUE_PLAYER_SLOW_MULT = 0.8;
   var LASER_BLUE_PLAYER_SLOW_SEC = 1.5;
+  var SWAMP_HIT_SLOW_MULT = 0.8;
+  var SWAMP_HIT_SLOW_SEC = 1;
+  var FROG_MUD_POOL_MOVE_MULT = 0.8;
+  var SWAMP_L3PLUS_SNIPER_WAVE_KEEP_FRACTION = 0.4;
+  var SWAMP_INFECTION_CAP = 10;
+  var SWAMP_INFECTION_STACK_MIN_GAP_LEVEL2_SEC = 0.3;
+  var SWAMP_INFECTION_STACK_MIN_GAP_LEVEL3_SEC = 0.2;
+  var SWAMP_INFECTION_BURST_STUN_SEC = 0.4;
+  var SWAMP_INFECTION_BURST_SLOW_SEC = 2;
+  var SWAMP_INFECTION_BURST_SLOW_MULT = 0.45;
+  var SWAMP_INFECTION_TEN_DRIFT_SEC = 0.85;
   var HEARTS_13_DEATH_DEFY_CD_SEC = 30;
   var CLUBS_13_UNTARGETABLE_SEC = 1;
   var TERRAIN_SPEED_BOOST_LINGER = 0.16;
@@ -419,7 +431,8 @@
     "#game-speed",
     "#debug-item-suit",
     "#debug-item-rank",
-    "#debug-item-effect"
+    "#debug-item-effect",
+    "#debug-path-select"
   ];
   function isShellControlThatKeepsFocusButAllowsAbilityKeys(el) {
     if (!el || !(el instanceof Element)) return false;
@@ -467,8 +480,8 @@
   var ULT_BURST_WAVE_COUNT = 4;
   var ULT_BURST_WAVE_SPAN_SEC = 2;
   var KNIGHT_SPADES_WORLD_SLOW_SEC = 2;
-  function getEquippedUltimateType(inventory) {
-    const ace = inventory?.deckByRank?.[1];
+  function getEquippedUltimateType(inventory2) {
+    const ace = inventory2?.deckByRank?.[1];
     const e = ace?.effect;
     return e && e.kind === "ultimate" ? e.ultType : null;
   }
@@ -487,10 +500,10 @@
     if (ultType === "heal") return "Heal";
     return "Ultimate";
   }
-  function buildEquippedUltimateHud(inventory, elapsed, fallbackLabel = "Ultimate", color = "#60a5fa") {
-    const ultType = getEquippedUltimateType(inventory);
+  function buildEquippedUltimateHud(inventory2, elapsed, fallbackLabel = "Ultimate", color = "#60a5fa") {
+    const ultType = getEquippedUltimateType(inventory2);
     const hasAceUlt = !!ultType;
-    const readyAt = Number(inventory?.aceUltimateReadyAt ?? 0);
+    const readyAt = Number(inventory2?.aceUltimateReadyAt ?? 0);
     const displayName = ultimateDisplayName(ultType);
     return {
       label: hasAceUlt ? displayName : fallbackLabel,
@@ -512,7 +525,7 @@
       const len = Math.hypot(dx, dy) || 1;
       const ux = dx / len;
       const uy = dy / len;
-      const push = h.type === "spawner" || h.type === "airSpawner" ? 0 : 95;
+      const push = h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" ? 0 : 95;
       h.x += ux * push;
       h.y += uy * push;
       h.dir = { x: ux, y: uy };
@@ -548,7 +561,7 @@
       applyUltimateBurstWavePush(ctx.player, ctx.hunterEntities, ULT_BURST_RADIUS);
     } else if (ultType === "timelock") {
       ctx.bumpScreenShake?.(6, 0.18);
-      ctx.grantInvulnerabilityUntil?.(elapsed + 2);
+      ctx.grantInvulnerabilityUntil?.(elapsed + 4);
       ctx.setPlayerTimelockUntil?.(elapsed + 2);
       ctx.setTimelockWindow?.(elapsed + 2, elapsed + 4);
       ctx.setTimelockWorldShakeAt?.(elapsed + 2);
@@ -602,6 +615,11 @@
   function formatCardName(card) {
     return `${cardRankText(card.rank)}${SUIT_GLYPH[card.suit] ?? "?"}`;
   }
+  function formatCardHudSuitGlyph(card) {
+    if (!card) return "?";
+    if (card.suit === "joker") return SUIT_GLYPH.joker;
+    return SUIT_GLYPH[card.suit] ?? "?";
+  }
   function deckKey(suit, rank) {
     return `${suit}:${rank}`;
   }
@@ -643,6 +661,18 @@
       valiantElectricBoxChargeBonus: 0,
       heartsRegenPerSec: 0,
       heartsRegenBank: 0,
+      heartsResistanceReadyAt: 0,
+      heartsResistanceCooldownDuration: 0,
+      swampInfectionStacks: 0,
+      /** Swamp bootleg crystal curses (runtime rows; cleared on run / path reset). */
+      swampBootlegCurses: (
+        /** @type {object[]} */
+        []
+      ),
+      swampBootlegCdDash: 0,
+      swampBootlegCdBurst: 0,
+      swampBootlegSpellSilenceUntil: 0,
+      swampBootlegBloodTax: null,
       spadesObstacleBoostUntil: 0,
       aceUltimateReadyAt: 0,
       /** Seven diamonds in rank deck — larger dash range and smoke radius (rogue). */
@@ -661,17 +691,17 @@
       }
     }
   }
-  function collectReservedDeckKeys(inventory, pendingCard, worldCards) {
+  function collectReservedDeckKeys(inventory2, pendingCard, worldCards) {
     const reserved = /* @__PURE__ */ new Set();
     addReservedDeckKey(pendingCard, reserved);
-    for (let r = 1; r <= 13; r++) addReservedDeckKey(inventory.deckByRank[r], reserved);
-    for (const c of inventory.backpackSlots) addReservedDeckKey(c, reserved);
+    for (let r = 1; r <= 13; r++) addReservedDeckKey(inventory2.deckByRank[r], reserved);
+    for (const c of inventory2.backpackSlots) addReservedDeckKey(c, reserved);
     for (const w of worldCards) addReservedDeckKey(w.card, reserved);
     return reserved;
   }
-  function forEachDeckCard(inventory, fn) {
+  function forEachDeckCard(inventory2, fn) {
     for (let r = 1; r <= 13; r++) {
-      const c = inventory.deckByRank[r];
+      const c = inventory2.deckByRank[r];
       if (c) fn(c, r);
     }
   }
@@ -692,6 +722,8 @@
   var DECOY_DURATION = 5;
   var DECOY_MIN_UPTIME_SEC = 0.3;
   var DECOY_HITS_AFTER_ARM = 4;
+  var KNIGHT_DIAMOND_DECOY_DURATION_BONUS_SEC = 2.5;
+  var KNIGHT_DIAMOND_DECOY_HITS_BONUS = 3;
   var KNIGHT_DIAMOND_BURST_SPEED_MULT = 2.6;
   var KNIGHT_DIAMOND_BURST_DURATION_BONUS_SEC = 1.5;
   function clamp(x, a, b) {
@@ -705,9 +737,9 @@
     if (left <= 0.05) return "READY";
     return `${left.toFixed(1)}s`;
   }
-  function sumInvisBurstSecondsFromDeck(inventory) {
+  function sumInvisBurstSecondsFromDeck(inventory2) {
     let s = 0;
-    forEachDeckCard(inventory, (c) => {
+    forEachDeckCard(inventory2, (c) => {
       if (c?.effect?.kind === "invisBurst" && typeof c.effect.value === "number") s += c.effect.value;
     });
     return s;
@@ -724,7 +756,7 @@
     let dashCharges = 1;
     let dashNextRechargeAt = 0;
     const cdrHud = { dash: "", burst: "", decoy: "" };
-    function collectPassive2(inventory) {
+    function collectPassive2(inventory2) {
       const p = {
         cooldownFlat: { dash: 0, burst: 0, decoy: 0 },
         cooldownPct: { dash: 0, burst: 0, decoy: 0 },
@@ -738,7 +770,7 @@
         maxHpBonus: 0,
         suits: { diamonds: 0, hearts: 0, clubs: 0, spades: 0 }
       };
-      forEachDeckCard(inventory, (card) => {
+      forEachDeckCard(inventory2, (card) => {
         if (!card?.suit) return;
         if (card.suit === "joker") {
           p.suits.diamonds += 1;
@@ -763,35 +795,44 @@
       });
       return p;
     }
-    function effectiveCooldown2(passive, abilityId, baseCooldown, minCooldown) {
+    function effectiveCooldown2(passive, abilityId, baseCooldown, minCooldown, inventory2) {
       const flat = passive.cooldownFlat[abilityId] || 0;
       const pct = clamp(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-      return Math.max(minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+      const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+      const swQ = abilityId === "dash" ? inventory2?.swampBootlegCdDash ?? 0 : 0;
+      const swW = abilityId === "burst" ? inventory2?.swampBootlegCdBurst ?? 0 : 0;
+      return baseEff + swQ + swW;
     }
     function cooldownIndicator2(baseCooldown, effectiveCooldownSec) {
       const reducedBy = Math.max(0, baseCooldown - effectiveCooldownSec);
       if (reducedBy <= 0.05) return "";
       return ` \u2193${reducedBy.toFixed(1)}s`;
     }
-    function diamondSpeedEmpowerActive(passive, inventory) {
-      return passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD && inventory.diamondEmpower === "speedPassive";
+    function diamondOmniEmpowerActive(passive) {
+      return passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
     }
-    function dashDistanceForState(passive, inventory) {
-      const omniEmpower = passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
-      const dash2xEmpower = inventory?.diamondEmpower === "dash2x";
+    function diamondSpeedEmpowerActive(passive, inventory2) {
+      return passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD && (inventory2.diamondEmpower === "speedPassive" || diamondOmniEmpowerActive(passive));
+    }
+    function diamondDecoyEmpowerActive(passive, inventory2) {
+      return passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD && (inventory2?.diamondEmpower === "decoyFortify" || diamondOmniEmpowerActive(passive));
+    }
+    function dashDistanceForState(passive, inventory2) {
+      const omniEmpower = diamondOmniEmpowerActive(passive);
+      const dash2xEmpower = inventory2?.diamondEmpower === "dash2x";
       return dash2xEmpower || omniEmpower ? DASH_DISTANCE_EMPOWERED : DASH_DISTANCE;
     }
     function tryDash(ctx) {
-      const { player, elapsed, resolvePlayer, spawnAttackRing, circleHitsObstacle, inventory } = ctx;
-      const passive = collectPassive2(inventory);
+      const { player, elapsed, resolvePlayer, spawnAttackRing, circleHitsObstacle, inventory: inventory2 } = ctx;
+      const passive = collectPassive2(inventory2);
       if (dashCharges <= 0) return;
-      const dashCd = effectiveCooldown2(passive, "dash", DASH_COOLDOWN, 0.25);
+      const dashCd = effectiveCooldown2(passive, "dash", DASH_COOLDOWN, 0.25, inventory2);
       dashCharges -= 1;
       if (dashCharges < dashChargesMax && dashNextRechargeAt <= elapsed) {
         dashNextRechargeAt = elapsed + dashCd;
         dashReadyAt = dashNextRechargeAt;
       }
-      const dashDistance = dashDistanceForState(passive, inventory);
+      const dashDistance = dashDistanceForState(passive, inventory2);
       const len = Math.hypot(player.facing.x, player.facing.y) || 1;
       const fx = player.facing.x / len;
       const fy = player.facing.y / len;
@@ -821,17 +862,21 @@
       if (progressed && typeof spawnAttackRing === "function") {
         spawnAttackRing(player.x, player.y, 30, "rgba(56, 189, 248, 0.4)", 0.1);
       }
+      if (progressed && typeof ctx.spawnKnightDashEndSplash === "function") {
+        ctx.spawnKnightDashEndSplash(player.x, player.y);
+      }
     }
     function tryBurst(ctx) {
-      const { player, elapsed, inventory, spawnAttackRing } = ctx;
-      const passive = collectPassive2(inventory);
+      const { player, elapsed, inventory: inventory2, spawnAttackRing } = ctx;
+      const passive = collectPassive2(inventory2);
       if (elapsed < burstReadyAt) return;
-      burstReadyAt = elapsed + effectiveCooldown2(passive, "burst", BURST_COOLDOWN, 0.4);
-      const burstDurBonus = diamondSpeedEmpowerActive(passive, inventory) ? KNIGHT_DIAMOND_BURST_DURATION_BONUS_SEC : 0;
+      burstReadyAt = elapsed + effectiveCooldown2(passive, "burst", BURST_COOLDOWN, 0.4, inventory2);
+      const burstDurBonus = diamondSpeedEmpowerActive(passive, inventory2) ? KNIGHT_DIAMOND_BURST_DURATION_BONUS_SEC : 0;
       burstUntil = elapsed + BURST_DURATION + burstDurBonus;
-      const invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck(inventory);
+      const invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck(inventory2);
       if (invisSec > 0) {
-        inventory.clubsInvisUntil = Math.max(inventory.clubsInvisUntil ?? 0, elapsed + invisSec);
+        const invisUntil = Math.min(burstUntil, elapsed + invisSec);
+        inventory2.clubsInvisUntil = Math.max(inventory2.clubsInvisUntil ?? 0, invisUntil);
       }
       if (typeof spawnAttackRing === "function") {
         spawnAttackRing(player.x, player.y, 72, "#94a3b8", 0.2);
@@ -839,17 +884,18 @@
       }
     }
     function tryDecoy(ctx) {
-      const { player, elapsed, spawnAttackRing, inventory } = ctx;
-      const passive = collectPassive2(inventory);
+      const { player, elapsed, spawnAttackRing, inventory: inventory2 } = ctx;
+      const passive = collectPassive2(inventory2);
       if (elapsed < decoyReadyAt) return;
-      decoyReadyAt = elapsed + effectiveCooldown2(passive, "decoy", DECOY_COOLDOWN, 0.4);
+      decoyReadyAt = elapsed + effectiveCooldown2(passive, "decoy", DECOY_COOLDOWN, 0.4, inventory2);
+      const decoyEmpower = diamondDecoyEmpowerActive(passive, inventory2);
       decoys.push({
         x: player.x,
         y: player.y,
         r: player.r * 0.85,
-        until: elapsed + DECOY_DURATION,
+        until: elapsed + DECOY_DURATION + (decoyEmpower ? KNIGHT_DIAMOND_DECOY_DURATION_BONUS_SEC : 0),
         invulnerableUntil: elapsed + DECOY_MIN_UPTIME_SEC,
-        hp: DECOY_HITS_AFTER_ARM
+        hp: DECOY_HITS_AFTER_ARM + (decoyEmpower ? KNIGHT_DIAMOND_DECOY_HITS_BONUS : 0)
       });
       if (typeof spawnAttackRing === "function") {
         spawnAttackRing(player.x, player.y, player.r + 24, "#818cf8", 0.25);
@@ -865,7 +911,7 @@
       },
       getShellUi() {
         return {
-          controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q), ${LABEL_W} (W), ${LABEL_E} (E), ${LABEL_R} (R \u2014 item deck can override R) | Pause: Space | After death: Enter retry`
+          controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q), ${LABEL_W} (W), ${LABEL_E} (E), ${LABEL_R} (R \u2014 item deck can override R) | Pause: Space | After death: Enter or Choose hero \u2192 character select`
         };
       },
       getDecoys() {
@@ -879,12 +925,12 @@
         return elapsed < burstUntil ? burstUntil : 0;
       },
       tick(ctx) {
-        const { elapsed, player, inventory } = ctx;
-        currentInventory = inventory;
-        const passive = collectPassive2(inventory);
-        const dashCd = effectiveCooldown2(passive, "dash", DASH_COOLDOWN, 0.25);
-        const burstCd = effectiveCooldown2(passive, "burst", BURST_COOLDOWN, 0.4);
-        const decoyCd = effectiveCooldown2(passive, "decoy", DECOY_COOLDOWN, 0.4);
+        const { elapsed, player, inventory: inventory2 } = ctx;
+        currentInventory = inventory2;
+        const passive = collectPassive2(inventory2);
+        const dashCd = effectiveCooldown2(passive, "dash", DASH_COOLDOWN, 0.25, inventory2);
+        const burstCd = effectiveCooldown2(passive, "burst", BURST_COOLDOWN, 0.4, inventory2);
+        const decoyCd = effectiveCooldown2(passive, "decoy", DECOY_COOLDOWN, 0.4, inventory2);
         dashChargesMax = 1 + passive.dashChargesBonus;
         dashCharges = Math.min(dashCharges, dashChargesMax);
         if (dashCharges >= dashChargesMax) {
@@ -900,8 +946,8 @@
           dashReadyAt = dashNextRechargeAt;
         }
         decoys = decoys.filter((d) => d.until > elapsed);
-        const burstLeg = elapsed < burstUntil || diamondSpeedEmpowerActive(passive, inventory);
-        player.speedBurstMult = burstLeg ? diamondSpeedEmpowerActive(passive, inventory) ? KNIGHT_DIAMOND_BURST_SPEED_MULT : BURST_SPEED_MULT : 1;
+        const burstLeg = elapsed < burstUntil || diamondSpeedEmpowerActive(passive, inventory2);
+        player.speedBurstMult = burstLeg ? diamondSpeedEmpowerActive(passive, inventory2) ? KNIGHT_DIAMOND_BURST_SPEED_MULT : BURST_SPEED_MULT : 1;
         player.speedPassiveMult = passive.speedMult;
         player.terrainTouchMult = passive.obstacleTouchMult;
         player.dodgeChanceWhenDashCd = passive.dodgeChanceWhenDashCd;
@@ -909,11 +955,11 @@
         player.frontShieldArcDeg = passive.heartsShieldArc;
         player.maxHp = Math.max(1, KNIGHT_MAX_HP + passive.maxHpBonus);
         player.hp = Math.min(player.hp, player.maxHp);
-        inventory.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
+        inventory2.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
         cdrHud.dash = cooldownIndicator2(DASH_COOLDOWN, dashCd);
         cdrHud.burst = cooldownIndicator2(BURST_COOLDOWN, burstCd);
         cdrHud.decoy = cooldownIndicator2(DECOY_COOLDOWN, decoyCd);
-        if (!getEquippedUltimateType(inventory)) inventory.aceUltimateReadyAt = 0;
+        if (!getEquippedUltimateType(inventory2)) inventory2.aceUltimateReadyAt = 0;
       },
       getAbilityHud(elapsed) {
         const dashChargesText = `${dashCharges}/${dashChargesMax}`;
@@ -989,9 +1035,9 @@
     if (left <= 0.05) return "READY";
     return `${left.toFixed(1)}s`;
   }
-  function collectSuits(inventory) {
+  function collectSuits(inventory2) {
     const suits = { diamonds: 0, hearts: 0, clubs: 0, spades: 0 };
-    forEachDeckCard(inventory, (card) => {
+    forEachDeckCard(inventory2, (card) => {
       if (!card?.suit) return;
       if (card.suit === "joker") {
         suits.diamonds += 1;
@@ -1004,7 +1050,7 @@
     });
     return suits;
   }
-  function collectPassive(inventory) {
+  function collectPassive(inventory2) {
     const p = {
       cooldownFlat: { dash: 0, burst: 0, decoy: 0 },
       cooldownPct: { dash: 0, burst: 0, decoy: 0 },
@@ -1018,7 +1064,7 @@
       maxHpBonus: 0,
       suits: { diamonds: 0, hearts: 0, clubs: 0, spades: 0 }
     };
-    forEachDeckCard(inventory, (card) => {
+    forEachDeckCard(inventory2, (card) => {
       if (!card?.suit) return;
       if (card.suit === "joker") {
         p.suits.diamonds += 1;
@@ -1043,10 +1089,13 @@
     });
     return p;
   }
-  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown) {
+  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown, inventory2) {
     const flat = passive.cooldownFlat[abilityId] || 0;
     const pct = clamp2(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-    return Math.max(minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const swQ = abilityId === "dash" ? inventory2?.swampBootlegCdDash ?? 0 : 0;
+    const swW = abilityId === "burst" ? inventory2?.swampBootlegCdBurst ?? 0 : 0;
+    return baseEff + swQ + swW;
   }
   function cooldownIndicator(baseCooldown, effectiveCooldownSec) {
     const reducedBy = Math.max(0, baseCooldown - effectiveCooldownSec);
@@ -1060,21 +1109,21 @@
     let currentInventory = null;
     let smokeUntil = 0;
     const cdrHud = { dash: "", burst: "", decoy: "" };
-    function currentDashRange(inventory) {
-      if (inventory?.rogueDiamondRangeBoost) {
-        const suits = collectSuits(inventory);
+    function currentDashRange(inventory2) {
+      if (inventory2?.rogueDiamondRangeBoost) {
+        const suits = collectSuits(inventory2);
         if (suits.diamonds >= 13) return DASH_RANGE_DIAMONDS_13;
         return DASH_RANGE_DIAMONDS;
       }
       return DASH_RANGE_BASE;
     }
     function tryExecuteDash(ctx) {
-      const { player, elapsed, resolvePlayer, circleHitsObstacle, spawnAttackRing, inventory } = ctx;
-      const passive = collectPassive(inventory);
-      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN2, 0.25);
+      const { player, elapsed, resolvePlayer, circleHitsObstacle, spawnAttackRing, inventory: inventory2 } = ctx;
+      const passive = collectPassive(inventory2);
+      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN2, 0.25, inventory2);
       if (elapsed < dashReadyAt) return;
       dashReadyAt = elapsed + dashCd;
-      const range = currentDashRange(inventory);
+      const range = currentDashRange(inventory2);
       const len = Math.hypot(player.facing.x, player.facing.y) || 1;
       const fx = player.facing.x / len;
       const fy = player.facing.y / len;
@@ -1092,25 +1141,25 @@
       player.x = res.x;
       player.y = res.y;
       spawnAttackRing?.(player.x, player.y, 26, "rgba(56, 189, 248, 0.35)", 0.1);
-      const qualifies = rogueWorld.stealthBlocksDamage(elapsed, inventory) || elapsed < (inventory.clubsInvisUntil ?? 0);
-      rogueWorld.onDashLanded(inventory, elapsed, qualifies);
+      const qualifies = rogueWorld.stealthBlocksDamage(elapsed, inventory2) || elapsed < (inventory2.clubsInvisUntil ?? 0);
+      rogueWorld.onDashLanded(inventory2, elapsed, qualifies);
     }
     function trySmoke(ctx) {
-      const { player, elapsed, inventory, spawnAttackRing } = ctx;
-      const passive = collectPassive(inventory);
-      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN2, 1);
+      const { player, elapsed, inventory: inventory2, spawnAttackRing } = ctx;
+      const passive = collectPassive(inventory2);
+      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN2, 1, inventory2);
       if (elapsed < burstReadyAt) return;
       burstReadyAt = elapsed + burstCd;
       const linger = SMOKE_DURATION + passive.invisOnBurst;
       smokeUntil = elapsed + linger;
-      rogueWorld.pushSmokeZone(player.x, player.y, elapsed, linger, inventory);
+      rogueWorld.pushSmokeZone(player.x, player.y, elapsed, linger, inventory2);
       spawnAttackRing?.(player.x, player.y, 72, "#94a3b8", 0.2);
       spawnAttackRing?.(player.x, player.y, 128, "#cbd5e1", 0.28);
     }
     function tryConsume(ctx) {
-      const { elapsed, player, inventory } = ctx;
-      const passive = collectPassive(inventory);
-      const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4);
+      const { elapsed, player, inventory: inventory2 } = ctx;
+      const passive = collectPassive(inventory2);
+      const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4, inventory2);
       if (elapsed < consumeReadyAt) return;
       consumeReadyAt = elapsed + consumeCd;
       rogueWorld.beginFoodSense(elapsed);
@@ -1126,7 +1175,7 @@
       },
       getShellUi() {
         return {
-          controlsHintLine: "Move: Arrows | Q hold aim / release dash, W Smoke, E Food sense, R Ultimate | Pause: Space | After death: Enter retry"
+          controlsHintLine: "Move: Arrows | Q hold aim / release dash, W Smoke, E Food sense, R Ultimate | Pause: Space | After death: Enter or Choose hero \u2192 character select"
         };
       },
       getDecoys() {
@@ -1139,12 +1188,12 @@
         return elapsed < smokeUntil ? smokeUntil : 0;
       },
       tick(ctx) {
-        const { inventory, player } = ctx;
-        currentInventory = inventory;
-        const passive = collectPassive(inventory);
-        const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN2, 0.25);
-        const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN2, 1);
-        const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4);
+        const { inventory: inventory2, player } = ctx;
+        currentInventory = inventory2;
+        const passive = collectPassive(inventory2);
+        const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN2, 0.25, inventory2);
+        const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN2, 1, inventory2);
+        const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4, inventory2);
         cdrHud.dash = cooldownIndicator(DASH_COOLDOWN2, dashCd);
         cdrHud.burst = cooldownIndicator(BURST_COOLDOWN2, burstCd);
         cdrHud.decoy = cooldownIndicator(CONSUME_COOLDOWN, consumeCd);
@@ -1156,14 +1205,14 @@
         player.dodgeChanceWhenDashCd = passive.dodgeChanceWhenDashCd;
         player.stunOnHitSecs = passive.stunOnHitSecs;
         player.frontShieldArcDeg = passive.heartsShieldArc;
-        inventory.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
-        if (!getEquippedUltimateType(inventory)) inventory.aceUltimateReadyAt = 0;
+        inventory2.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
+        if (!getEquippedUltimateType(inventory2)) inventory2.aceUltimateReadyAt = 0;
       },
       getAbilityHud(elapsed) {
         const passive = collectPassive(currentInventory ?? { deckByRank: {} });
-        const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN2, 0.25);
-        const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN2, 1);
-        const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4);
+        const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN2, 0.25, inventory);
+        const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN2, 1, inventory);
+        const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4, inventory);
         const ultimateHud = buildEquippedUltimateHud(currentInventory, elapsed, LABEL_R2, "#60a5fa");
         const aiming = rogueWorld.getDashAiming();
         return {
@@ -1365,7 +1414,7 @@
       },
       getShellUi() {
         return {
-          controlsHintLine: `Move: Arrows \xB7 Sprint: W \xB7 Roar: R (while sprinting) \xB7 Steer sprint: Q / E or Left / Right | Pause: Space | After death: Enter retry`
+          controlsHintLine: `Move: Arrows \xB7 Sprint: W \xB7 Roar: R (while sprinting) \xB7 Steer sprint: Q / E or Left / Right | Pause: Space | After death: Enter or Choose hero \u2192 character select`
         };
       },
       getInvulnUntil() {
@@ -1394,23 +1443,23 @@
         return false;
       },
       tick(ctx) {
-        const { elapsed, player, inventory, dt } = ctx;
-        currentInventory = inventory;
+        const { elapsed, player, inventory: inventory2, dt } = ctx;
+        currentInventory = inventory2;
         player.speedBurstMult = 1;
         player.speedPassiveMult = 1;
         player.terrainTouchMult = 1;
         player.dodgeChanceWhenDashCd = 0;
         player.stunOnHitSecs = 0;
         player.frontShieldArcDeg = 0;
-        inventory.heartsRegenPerSec = 0;
-        if (!getEquippedUltimateType(inventory)) inventory.aceUltimateReadyAt = 0;
+        inventory2.heartsRegenPerSec = 0;
+        if (!getEquippedUltimateType(inventory2)) inventory2.aceUltimateReadyAt = 0;
         if (player.hp > 0) {
-          inventory.lunaticRegenBank = (inventory.lunaticRegenBank ?? 0) + LUNATIC_PASSIVE_HP_PER_SEC * (dt ?? 0);
-          while ((inventory.lunaticRegenBank ?? 0) >= 1 && player.hp < player.maxHp) {
-            inventory.lunaticRegenBank -= 1;
+          inventory2.lunaticRegenBank = (inventory2.lunaticRegenBank ?? 0) + LUNATIC_PASSIVE_HP_PER_SEC * (dt ?? 0);
+          while ((inventory2.lunaticRegenBank ?? 0) >= 1 && player.hp < player.maxHp) {
+            inventory2.lunaticRegenBank -= 1;
             player.hp += 1;
           }
-          if (player.hp >= player.maxHp) inventory.lunaticRegenBank = 0;
+          if (player.hp >= player.maxHp) inventory2.lunaticRegenBank = 0;
         }
       },
       onAbilityPress(slot, ctx) {
@@ -1444,7 +1493,7 @@
           keys,
           steerLeft,
           steerRight,
-          inventory = {},
+          inventory: inventory2 = {},
           PLAYER_SPEED: PLAYER_SPEED2,
           ultimateSpeedUntil,
           laserSlowMult,
@@ -1515,7 +1564,7 @@
         const laserM = laserSlowMult;
         let sp = PLAYER_SPEED2 * (player.speedBurstMult ?? 1) * (player.speedPassiveMult ?? 1) * laserM * speedMult;
         if (simElapsed < ultimateSpeedUntil) sp *= 1.75;
-        if (simElapsed < (inventory?.spadesObstacleBoostUntil ?? 0)) {
+        if (simElapsed < (inventory2?.spadesObstacleBoostUntil ?? 0)) {
           sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
         }
         const yawRate = Math.min(LUNATIC_STEER_MAX_RAD_PER_SEC, sp / Math.max(1, LUNATIC_TURN_RADIUS_PX));
@@ -1679,9 +1728,9 @@ Stop ${fmtSec(stopCdRem)}`,
     if (left <= 0.05) return "READY";
     return `${left.toFixed(1)}s`;
   }
-  function sumInvisBurstSecondsFromDeck2(inventory) {
+  function sumInvisBurstSecondsFromDeck2(inventory2) {
     let s = 0;
-    forEachDeckCard(inventory, (c) => {
+    forEachDeckCard(inventory2, (c) => {
       if (c?.effect?.kind === "invisBurst" && typeof c.effect.value === "number") s += c.effect.value;
     });
     return s;
@@ -1693,7 +1742,7 @@ Stop ${fmtSec(stopCdRem)}`,
     let invulnUntil = 0;
     let currentInventory = null;
     const cdrHud = { dash: "", burst: "", decoy: "" };
-    function collectPassive2(inventory) {
+    function collectPassive2(inventory2) {
       const p = {
         cooldownFlat: { dash: 0, burst: 0, decoy: 0 },
         cooldownPct: { dash: 0, burst: 0, decoy: 0 },
@@ -1707,8 +1756,8 @@ Stop ${fmtSec(stopCdRem)}`,
         maxHpBonus: 0,
         suits: { diamonds: 0, hearts: 0, clubs: 0, spades: 0 }
       };
-      inventory.valiantElectricBoxChargeBonus = 0;
-      forEachDeckCard(inventory, (card) => {
+      inventory2.valiantElectricBoxChargeBonus = 0;
+      forEachDeckCard(inventory2, (card) => {
         if (!card?.suit) return;
         if (card.suit === "joker") {
           p.suits.diamonds += 1;
@@ -1729,57 +1778,66 @@ Stop ${fmtSec(stopCdRem)}`,
         else if (e.kind === "speed") p.speedMult += e.value;
         else if (e.kind === "terrainBoost") p.obstacleTouchMult += e.value;
         else if (e.kind === "dashCharge") {
-          if (card.suit === "spades" || card.suit === "joker") inventory.valiantElectricBoxChargeBonus += e.value;
+          if (card.suit === "spades" || card.suit === "joker") inventory2.valiantElectricBoxChargeBonus += e.value;
           else p.dashChargesBonus += e.value;
         } else if (e.kind === "frontShield") p.heartsShieldArc += e.arc;
       });
       return p;
     }
-    function effectiveCooldown2(passive, abilityId, baseCooldown, minCooldown) {
+    function effectiveCooldown2(passive, abilityId, baseCooldown, minCooldown, inventory2) {
       const flat = passive.cooldownFlat[abilityId] || 0;
       const pct = clamp4(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-      return Math.max(minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+      const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+      const swQ = abilityId === "dash" ? inventory2?.swampBootlegCdDash ?? 0 : 0;
+      const swW = abilityId === "burst" ? inventory2?.swampBootlegCdBurst ?? 0 : 0;
+      return baseEff + swQ + swW;
     }
     function cooldownIndicator2(baseCooldown, effectiveCooldownSec) {
       const reducedBy = Math.max(0, baseCooldown - effectiveCooldownSec);
       if (reducedBy <= 0.05) return "";
       return ` \u2193${reducedBy.toFixed(1)}s`;
     }
-    function effectiveRescueCd(passive) {
-      return effectiveCooldown2(passive, "decoy", VALIANT_RESCUE_COOLDOWN_SEC, 0.5);
+    function effectiveRescueCd(passive, inventory2) {
+      return effectiveCooldown2(passive, "decoy", VALIANT_RESCUE_COOLDOWN_SEC, 0.5, inventory2);
     }
     function trySurge(ctx) {
-      const { player, elapsed, inventory, spawnAttackRing } = ctx;
-      const passive = collectPassive2(inventory);
+      const { player, elapsed, inventory: inventory2, spawnAttackRing } = ctx;
+      const passive = collectPassive2(inventory2);
       if (elapsed < surgeReadyAt) return;
-      const cd = effectiveCooldown2(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC);
+      const cd = effectiveCooldown2(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC, inventory2);
       surgeReadyAt = elapsed + cd;
-      const diamondSurgeTuning = inventory.diamondEmpower === "valiantSpeed" && passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD || passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
+      const diamondSurgeTuning = inventory2.diamondEmpower === "valiantSpeed" && passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD || passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
       const durBonus = diamondSurgeTuning ? VALIANT_SURGE_DURATION_DIAMOND_BONUS_SEC : 0;
       surgeUntil = elapsed + VALIANT_SURGE_DURATION_SEC + durBonus;
-      const invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck2(inventory);
+      const invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck2(inventory2);
       if (invisSec > 0) {
-        inventory.clubsInvisUntil = Math.max(inventory.clubsInvisUntil ?? 0, elapsed + invisSec);
+        inventory2.clubsInvisUntil = Math.max(inventory2.clubsInvisUntil ?? 0, elapsed + invisSec);
       }
       spawnAttackRing?.(player.x, player.y, 58, "#38bdf8", 0.22);
       spawnAttackRing?.(player.x, player.y, 88, "#7dd3fc", 0.18);
     }
     function tryShock(ctx) {
-      const { player, elapsed, inventory, spawnAttackRing } = ctx;
-      const passive = collectPassive2(inventory);
-      const effBurst = effectiveCooldown2(passive, "burst", VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC);
+      const { player, elapsed, inventory: inventory2, spawnAttackRing } = ctx;
+      const passive = collectPassive2(inventory2);
+      const effBurst = effectiveCooldown2(
+        passive,
+        "burst",
+        VALIANT_SHOCK_ABILITY_COOLDOWN_SEC,
+        VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC,
+        inventory2
+      );
       const st = valiantWorld.getBoxChargeState();
       if (st.charges <= 0 && elapsed < burstReadyAt) return;
       if (st.charges <= 0) return;
       if (!valiantWorld.tryConsumeShockCharge(elapsed, effBurst)) return;
-      valiantWorld.placeShockField(player, inventory, elapsed, spawnAttackRing);
+      valiantWorld.placeShockField(player, inventory2, elapsed, spawnAttackRing);
       const st2 = valiantWorld.getBoxChargeState();
       if (st2.charges <= 0) burstReadyAt = elapsed + effBurst;
     }
     function tryRescue(ctx) {
-      const { player, elapsed, inventory, spawnAttackRing } = ctx;
-      const passive = collectPassive2(inventory);
-      valiantWorld.tryRescue(elapsed, inventory, player, effectiveRescueCd(passive), spawnAttackRing);
+      const { player, elapsed, inventory: inventory2, spawnAttackRing } = ctx;
+      const passive = collectPassive2(inventory2);
+      valiantWorld.tryRescue(elapsed, inventory2, player, effectiveRescueCd(passive, inventory2), spawnAttackRing);
     }
     return {
       id: "valiant",
@@ -1791,7 +1849,7 @@ Stop ${fmtSec(stopCdRem)}`,
       },
       getShellUi() {
         return {
-          controlsHintLine: `Move: Arrows | ${LABEL_Q4} (Q) Surge \xB7 ${LABEL_W4} (W) shock \xB7 ${LABEL_E4} (E) Rescue \xB7 ${LABEL_R4} (R) | Pause: Space`
+          controlsHintLine: `Move: Arrows | ${LABEL_Q4} (Q) Surge \xB7 ${LABEL_W4} (W) shock \xB7 ${LABEL_E4} (E) Rescue \xB7 ${LABEL_R4} (R) | Pause: Space | After death: Enter or Choose hero \u2192 character select`
         };
       },
       getDecoys() {
@@ -1829,14 +1887,14 @@ Stop ${fmtSec(stopCdRem)}`,
         valiantWorld.setRescueReadyAt(shrink(valiantWorld.getRescueReadyAt()));
       },
       tick(ctx) {
-        const { elapsed, player, inventory, dt } = ctx;
-        currentInventory = inventory;
-        const passive = collectPassive2(inventory);
-        inventory.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
+        const { elapsed, player, inventory: inventory2, dt } = ctx;
+        currentInventory = inventory2;
+        const passive = collectPassive2(inventory2);
+        inventory2.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
         const bonusSplit = [0, 0, 0];
         for (let k = 0; k < passive.maxHpBonus; k++) bonusSplit[k % 3]++;
         valiantWorld.setSlotBonusMax(bonusSplit);
-        valiantWorld.syncBoxMaxCharges(1 + (inventory.valiantElectricBoxChargeBonus ?? 0));
+        valiantWorld.syncBoxMaxCharges(1 + (inventory2.valiantElectricBoxChargeBonus ?? 0));
         valiantWorld.tickBoxRecharge(elapsed);
         player.maxHp = 1;
         player.hp = 1;
@@ -1845,27 +1903,39 @@ Stop ${fmtSec(stopCdRem)}`,
         player.dodgeChanceWhenDashCd = passive.dodgeChanceWhenDashCd;
         player.stunOnHitSecs = passive.stunOnHitSecs;
         player.frontShieldArcDeg = passive.heartsShieldArc;
-        const diamondSurgeTuning = inventory.diamondEmpower === "valiantSpeed" && passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD || passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
+        const diamondSurgeTuning = inventory2.diamondEmpower === "valiantSpeed" && passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD || passive.suits.diamonds >= SET_BONUS_SUIT_MAX;
         const surgeLeg = elapsed < surgeUntil || diamondSurgeTuning;
         player.speedBurstMult = surgeLeg ? diamondSurgeTuning ? VALIANT_SURGE_SPEED_MULT_DIAMOND : VALIANT_SURGE_SPEED_MULT : 1;
-        const rescueCd = effectiveRescueCd(passive);
+        const rescueCd = effectiveRescueCd(passive, inventory2);
         valiantWorld.tickWillDecay(dt ?? 0, { onWillDeath: ctx.onValiantWillDeath });
         valiantWorld.tickExpireEntities(elapsed);
         valiantWorld.tryPickupBunnies(player, elapsed);
         valiantWorld.updateRescueCooldownWhenNoRabbits(elapsed, rescueCd);
-        const dashCd = effectiveCooldown2(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC);
-        const burstCd = effectiveCooldown2(passive, "burst", VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC);
+        const dashCd = effectiveCooldown2(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC, inventory2);
+        const burstCd = effectiveCooldown2(
+          passive,
+          "burst",
+          VALIANT_SHOCK_ABILITY_COOLDOWN_SEC,
+          VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC,
+          inventory2
+        );
         cdrHud.dash = cooldownIndicator2(VALIANT_SURGE_COOLDOWN_SEC, dashCd);
         cdrHud.burst = cooldownIndicator2(VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, burstCd);
         cdrHud.decoy = cooldownIndicator2(VALIANT_RESCUE_COOLDOWN_SEC, rescueCd);
-        if (!getEquippedUltimateType(inventory)) inventory.aceUltimateReadyAt = 0;
+        if (!getEquippedUltimateType(inventory2)) inventory2.aceUltimateReadyAt = 0;
       },
       getAbilityHud(elapsed) {
         const inv = currentInventory ?? { deckByRank: {}, backpackSlots: [], valiantElectricBoxChargeBonus: 0 };
         const passive = collectPassive2(inv);
-        const dashCd = effectiveCooldown2(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC);
-        const burstCd = effectiveCooldown2(passive, "burst", VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC);
-        const rescueCd = effectiveRescueCd(passive);
+        const dashCd = effectiveCooldown2(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC, inv);
+        const burstCd = effectiveCooldown2(
+          passive,
+          "burst",
+          VALIANT_SHOCK_ABILITY_COOLDOWN_SEC,
+          VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC,
+          inv
+        );
+        const rescueCd = effectiveRescueCd(passive, inv);
         const st = valiantWorld.getBoxChargeState();
         const shockLabel = st.charges > 0 ? `${st.charges}/${st.maxCharges}` : cdRemaining5(burstReadyAt, elapsed) > 0 ? cdValue5(burstReadyAt, elapsed) : "READY";
         const ultimateHud = buildEquippedUltimateHud(currentInventory, elapsed, LABEL_R4, "#a5b4fc");
@@ -1933,7 +2003,7 @@ Stop ${fmtSec(stopCdRem)}`,
     let currentInventory = null;
     let nearFlagHud = false;
     const cdrHud = { dash: "", burst: "", decoy: "" };
-    function collectPassive2(inventory) {
+    function collectPassive2(inventory2) {
       const p = {
         cooldownFlat: { dash: 0, burst: 0, decoy: 0 },
         cooldownPct: { dash: 0, burst: 0, decoy: 0 },
@@ -1945,7 +2015,7 @@ Stop ${fmtSec(stopCdRem)}`,
         maxHpBonus: 0,
         suits: { diamonds: 0, hearts: 0, clubs: 0, spades: 0 }
       };
-      forEachDeckCard(inventory, (card) => {
+      forEachDeckCard(inventory2, (card) => {
         if (!card?.suit) return;
         if (card.suit === "joker") {
           p.suits.diamonds += 1;
@@ -1968,10 +2038,13 @@ Stop ${fmtSec(stopCdRem)}`,
       });
       return p;
     }
-    function effectiveCooldown2(passive, abilityId, baseCooldown, minCooldown) {
+    function effectiveCooldown2(passive, abilityId, baseCooldown, minCooldown, inventory2) {
       const flat = passive.cooldownFlat[abilityId] || 0;
       const pct = clamp5(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-      return Math.max(minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+      const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+      const swQ = abilityId === "dash" ? inventory2?.swampBootlegCdDash ?? 0 : 0;
+      const swW = abilityId === "burst" ? inventory2?.swampBootlegCdBurst ?? 0 : 0;
+      return baseEff + swQ + swW;
     }
     function cooldownIndicator2(baseCooldown, effectiveCooldownSec) {
       const reducedBy = Math.max(0, baseCooldown - effectiveCooldownSec);
@@ -2047,12 +2120,12 @@ Stop ${fmtSec(stopCdRem)}`,
       }
     }
     function tryCharge(ctx) {
-      const { player, elapsed, inventory, spawnAttackRing } = ctx;
-      const passive = collectPassive2(inventory);
+      const { player, elapsed, inventory: inventory2, spawnAttackRing } = ctx;
+      const passive = collectPassive2(inventory2);
       if (chargeActive) return;
       if (elapsed < chargeReadyAt) return;
       const baseCd = chargeBaseCd(player);
-      const effCd = effectiveCooldown2(passive, "dash", baseCd, 0.35);
+      const effCd = effectiveCooldown2(passive, "dash", baseCd, 0.35, inventory2);
       chargeReadyAt = elapsed + effCd;
       const fl = Math.hypot(player.facing.x, player.facing.y) || 1;
       chargeDirX = player.facing.x / fl;
@@ -2066,11 +2139,11 @@ Stop ${fmtSec(stopCdRem)}`,
       spawnAttackRing?.(player.x, player.y, player.r + 28, "rgba(203, 213, 225, 0.22)", 0.16);
     }
     function tryParry(ctx) {
-      const { player, elapsed, inventory, spawnAttackRing, bulwarkParryPushHunters, bumpScreenShake } = ctx;
-      const passive = collectPassive2(inventory);
+      const { player, elapsed, inventory: inventory2, spawnAttackRing, bulwarkParryPushHunters, bumpScreenShake } = ctx;
+      const passive = collectPassive2(inventory2);
       if (elapsed < parryReadyAt) return;
       const baseCd = parryBaseCd(player);
-      const effCd = effectiveCooldown2(passive, "burst", baseCd, 0.35);
+      const effCd = effectiveCooldown2(passive, "burst", baseCd, 0.35, inventory2);
       parryReadyAt = elapsed + effCd;
       parryUntil = elapsed + BULWARK_PARRY_DURATION_SEC;
       bulwarkParryPushHunters?.(player.x, player.y, BULWARK_PARRY_PUSH_RADIUS, BULWARK_PARRY_PUSH_DIST);
@@ -2114,7 +2187,7 @@ Stop ${fmtSec(stopCdRem)}`,
       },
       getShellUi() {
         return {
-          controlsHintLine: `Move: Arrows | ${LABEL_Q5} (Q), ${LABEL_W5} (W), ${LABEL_E5} (E) plant/pick flag | ${LABEL_R5} (R) | Pause: Space`
+          controlsHintLine: `Move: Arrows | ${LABEL_Q5} (Q), ${LABEL_W5} (W), ${LABEL_E5} (E) plant/pick flag | ${LABEL_R5} (R) | Pause: Space | After death: Enter or Choose hero \u2192 character select`
         };
       },
       getDecoys() {
@@ -2133,16 +2206,16 @@ Stop ${fmtSec(stopCdRem)}`,
         return bulwarkWorld;
       },
       tick(ctx) {
-        const { elapsed, player, inventory } = ctx;
-        currentInventory = inventory;
-        const passive = collectPassive2(inventory);
+        const { elapsed, player, inventory: inventory2 } = ctx;
+        currentInventory = inventory2;
+        const passive = collectPassive2(inventory2);
         nearFlagHud = bulwarkWorld.isNearPlantedFlag(player);
         bulwarkWorld.tick(elapsed, ctx.dt ?? 0);
         tickBulwarkCharge(ctx);
         const qBase = chargeBaseCd(player);
         const wBase = parryBaseCd(player);
-        const qCd = effectiveCooldown2(passive, "dash", qBase, 0.35);
-        const wCd = effectiveCooldown2(passive, "burst", wBase, 0.35);
+        const qCd = effectiveCooldown2(passive, "dash", qBase, 0.35, inventory2);
+        const wCd = effectiveCooldown2(passive, "burst", wBase, 0.35, inventory2);
         cdrHud.dash = cooldownIndicator2(qBase, qCd);
         cdrHud.burst = cooldownIndicator2(wBase, wCd);
         player.speedBurstMult = 1;
@@ -2158,16 +2231,16 @@ Stop ${fmtSec(stopCdRem)}`,
         }
         player.maxHp = Math.max(1, BULWARK_MAX_HP + passive.maxHpBonus);
         player.hp = Math.min(player.hp, player.maxHp);
-        inventory.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
-        if (!getEquippedUltimateType(inventory)) inventory.aceUltimateReadyAt = 0;
+        inventory2.heartsRegenPerSec = passive.suits.hearts >= SET_BONUS_SUIT_THRESHOLD ? 0.3 : 0;
+        if (!getEquippedUltimateType(inventory2)) inventory2.aceUltimateReadyAt = 0;
       },
       getAbilityHud(elapsed) {
         const inv = currentInventory ?? { deckByRank: {}, backpackSlots: [] };
         const passive = collectPassive2(inv);
         const qBase = nearFlagHud ? BULWARK_CHARGE_COOLDOWN_NEAR_FLAG_SEC : BULWARK_CHARGE_COOLDOWN_SEC;
         const wBase = nearFlagHud ? BULWARK_PARRY_COOLDOWN_NEAR_FLAG_SEC : BULWARK_PARRY_COOLDOWN_SEC;
-        const qCd = effectiveCooldown2(passive, "dash", qBase, 0.35);
-        const wCd = effectiveCooldown2(passive, "burst", wBase, 0.35);
+        const qCd = effectiveCooldown2(passive, "dash", qBase, 0.35, inv);
+        const wCd = effectiveCooldown2(passive, "burst", wBase, 0.35, inv);
         const ultimateHud = buildEquippedUltimateHud(inv, elapsed, LABEL_R5, "#94a3b8");
         const carried = bulwarkWorld.isFlagCarried();
         const fd = bulwarkWorld.getPlantedFlagDecoy();
@@ -2426,22 +2499,22 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const dy = a.y - b.y;
     return dx * dx + dy * dy;
   }
-  function countSuitInDeck(inventory, suit) {
+  function countSuitInDeck(inventory2, suit) {
     let n = 0;
-    forEachDeckCard(inventory, (card) => {
+    forEachDeckCard(inventory2, (card) => {
       if (!card?.suit) return;
       if (card.suit === "joker") n += 1;
       else if (card.suit === suit) n += 1;
     });
     return n;
   }
-  function syncRogueDiamondRangeBoost(inventory) {
+  function syncRogueDiamondRangeBoost(inventory2) {
     let diamonds = 0;
-    forEachDeckCard(inventory, (card) => {
+    forEachDeckCard(inventory2, (card) => {
       if (!card?.suit) return;
       if (card.suit === "joker" || card.suit === "diamonds") diamonds += 1;
     });
-    inventory.rogueDiamondRangeBoost = diamonds >= SET_BONUS_SUIT_THRESHOLD;
+    inventory2.rogueDiamondRangeBoost = diamonds >= SET_BONUS_SUIT_THRESHOLD;
   }
   function createRogueWorld() {
     const smokeZones = [];
@@ -2508,14 +2581,14 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       return false;
     }
-    function smokeRadiusForInventory(inventory) {
-      const d = countSuitInDeck(inventory, "diamonds");
+    function smokeRadiusForInventory(inventory2) {
+      const d = countSuitInDeck(inventory2, "diamonds");
       if (d >= SET_BONUS_SUIT_MAX) return 300;
-      if (inventory.rogueDiamondRangeBoost) return 260;
+      if (inventory2.rogueDiamondRangeBoost) return 260;
       return 180;
     }
-    function clubsPhaseThroughObstacles(inventory, px, py, elapsed) {
-      if (countSuitInDeck(inventory, "clubs") < SET_BONUS_SUIT_THRESHOLD) return false;
+    function clubsPhaseThroughObstacles(inventory2, px, py, elapsed) {
+      if (countSuitInDeck(inventory2, "clubs") < SET_BONUS_SUIT_THRESHOLD) return false;
       return playerInsideSmoke(px, py, elapsed);
     }
     function updateEnemyLos(hunterEntities, elapsed, player, hasLineOfSight) {
@@ -2525,7 +2598,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       let seen = false;
       for (const h of hunterEntities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" && h.cryptDisguised)
+          continue;
         if (elapsed < (h.stunnedUntil || 0)) continue;
         if (hasLineOfSight(h, player)) {
           seen = true;
@@ -2540,7 +2614,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         simDt,
         simElapsed,
         player,
-        inventory,
+        inventory: inventory2,
         obstacles,
         moving: _moving,
         touchedObstacle,
@@ -2549,7 +2623,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         spawnWorldPopup
       } = deps;
       void _moving;
-      syncRogueDiamondRangeBoost(inventory);
+      syncRogueDiamondRangeBoost(inventory2);
       for (let i = smokeZones.length - 1; i >= 0; i--) {
         if (simElapsed >= smokeZones[i].expiresAt) smokeZones.splice(i, 1);
       }
@@ -2607,8 +2681,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       prunePopups(simElapsed);
     }
-    function pushSmokeZone(x, y, elapsed, durationSec, inventory) {
-      const r = smokeRadiusForInventory(inventory);
+    function pushSmokeZone(x, y, elapsed, durationSec, inventory2) {
+      const r = smokeRadiusForInventory(inventory2);
       smokeZones.push({
         x,
         y,
@@ -2620,8 +2694,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function beginFoodSense(elapsed) {
       foodSenseUntil = Math.max(foodSenseUntil, elapsed + ROGUE_FOOD_SENSE_DURATION);
     }
-    function pickRogueHunterTarget(hunter, player, inventory, nearestDecoy, hasLOS, fallback, simElapsed) {
-      if (simElapsed < (inventory.spadesLandingStealthUntil ?? 0)) return nearestDecoy(hunter) || fallback;
+    function pickRogueHunterTarget(hunter, player, inventory2, nearestDecoy, hasLOS, fallback, simElapsed) {
+      if (simElapsed < (inventory2.spadesLandingStealthUntil ?? 0)) return nearestDecoy(hunter) || fallback;
       if (stealthActive) return nearestDecoy(hunter) || fallback;
       if (hasLOS(hunter, player)) {
         lastSeenAt = simElapsed;
@@ -2631,13 +2705,13 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       return lastKnownPlayerPos && Number.isFinite(lastKnownPlayerPos.x) ? lastKnownPlayerPos : fallback;
     }
-    function onDashLanded(inventory, elapsed, qualifiesForSpadesDashBonus) {
-      const spades = countSuitInDeck(inventory, "spades");
+    function onDashLanded(inventory2, elapsed, qualifiesForSpadesDashBonus) {
+      const spades = countSuitInDeck(inventory2, "spades");
       if (spades < SET_BONUS_SUIT_THRESHOLD || !qualifiesForSpadesDashBonus) return;
       stealthActive = true;
       stealthOpenUntil = Math.max(stealthOpenUntil, elapsed + ROGUE_STEALTH_OPEN_GRACE + 0.12);
-      inventory.spadesLandingStealthUntil = Math.max(
-        inventory.spadesLandingStealthUntil ?? 0,
+      inventory2.spadesLandingStealthUntil = Math.max(
+        inventory2.spadesLandingStealthUntil ?? 0,
         stealthOpenUntil
       );
     }
@@ -2645,9 +2719,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const hungerLeftRatio = clamp6(hunger / Math.max(1e-3, hungerMax), 0, 1);
       return (1 - hungerLeftRatio) * ROGUE_DESPERATION_SPEED_MAX;
     }
-    function stealthBlocksDamage(elapsed, inventory) {
+    function stealthBlocksDamage(elapsed, inventory2) {
       if (stealthActive) return true;
-      if (elapsed < (inventory.spadesLandingStealthUntil ?? 0)) return true;
+      if (elapsed < (inventory2.spadesLandingStealthUntil ?? 0)) return true;
       return false;
     }
     function drawSmokeAndFood(ctx, elapsed) {
@@ -2981,16 +3055,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       suits.spades += 1;
     } else if (suits[card.suit] != null) suits[card.suit] += 1;
   }
-  function countSuitsAcrossAllStowed(inventory, pendingCard) {
+  function countSuitsAcrossAllStowed(inventory2, pendingCard) {
     const suits = { diamonds: 0, hearts: 0, clubs: 0, spades: 0 };
     addSuitCount(suits, pendingCard);
-    forEachDeckCard(inventory, (c) => addSuitCount(suits, c));
-    for (const c of inventory.backpackSlots) addSuitCount(suits, c);
+    forEachDeckCard(inventory2, (c) => addSuitCount(suits, c));
+    for (const c of inventory2.backpackSlots) addSuitCount(suits, c);
     return suits;
   }
-  function countSuitsInActiveSlots(inventory) {
+  function countSuitsInActiveSlots(inventory2) {
     const suits = { diamonds: 0, hearts: 0, clubs: 0, spades: 0 };
-    forEachDeckCard(inventory, (c) => addSuitCount(suits, c));
+    forEachDeckCard(inventory2, (c) => addSuitCount(suits, c));
     return suits;
   }
   function suitDisplayNameForModal(suit) {
@@ -3012,8 +3086,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     if (!el) return;
     for (const c of CARD_SET_GLOW_CLASSES) el.classList.remove(c);
   }
-  function getModalSetBonusProgressLines(inventory, pendingCard, itemRules) {
-    const suits = countSuitsInActiveSlots(inventory);
+  function getModalSetBonusProgressLines(inventory2, pendingCard, itemRules) {
+    const suits = countSuitsInActiveSlots(inventory2);
     const lines = [];
     for (const suit of MODAL_SET_SUIT_ORDER) {
       const n = suits[suit];
@@ -3052,10 +3126,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     let rabbitFx = [];
     let floatPopups = [];
     const boxChargeState = { charges: 1, maxCharges: 1, nextRechargeAt: 0 };
-    function shockBoxScale(inventory) {
-      if (!inventory) return 1;
-      if (inventory.diamondEmpower === "valiantBox") return VALIANT_DIAMOND_BOX_SCALE;
-      const suits = countSuitsInActiveSlots(inventory);
+    function shockBoxScale(inventory2) {
+      if (!inventory2) return 1;
+      if (inventory2.diamondEmpower === "valiantBox") return VALIANT_DIAMOND_BOX_SCALE;
+      const suits = countSuitsInActiveSlots(inventory2);
       if (suits.diamonds >= SET_BONUS_SUIT_MAX) return VALIANT_DIAMOND_BOX_SCALE;
       return 1;
     }
@@ -3176,8 +3250,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       return true;
     }
-    function placeShockField(player, inventory, elapsed, spawnAttackRing) {
-      const scale = shockBoxScale(inventory);
+    function placeShockField(player, inventory2, elapsed, spawnAttackRing) {
+      const scale = shockBoxScale(inventory2);
       const w = VALIANT_SHOCK_BOX_W * scale;
       const h = VALIANT_SHOCK_BOX_H * scale;
       const cx = player.x;
@@ -3192,7 +3266,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       spawnAttackRing?.(cx, cy, Math.max(w, h) * 0.55, "#38bdf8", 0.28);
       spawnAttackRing?.(cx, cy, Math.max(w, h) * 0.38, "#bae6fd", 0.22);
     }
-    function tryRescue(elapsed, inventory, player, effectiveRescueCd, spawnAttackRing) {
+    function tryRescue(elapsed, inventory2, player, effectiveRescueCd, spawnAttackRing) {
       if (elapsed < rescueReadyAt) return;
       const slot = lowestHpOccupiedSlot();
       if (slot < 0) return;
@@ -3200,7 +3274,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       rabbitSlots[slot] = null;
       rescueReadyAt = elapsed + effectiveRescueCd;
       let willBump = VALIANT_RESCUE_WILL_RESTORE;
-      if (inventory.diamondEmpower === "valiantRescue" || countSuitsInActiveSlots(inventory).diamonds >= SET_BONUS_SUIT_MAX) {
+      if (inventory2.diamondEmpower === "valiantRescue" || countSuitsInActiveSlots(inventory2).diamonds >= SET_BONUS_SUIT_MAX) {
         willBump += VALIANT_DIAMOND_RESCUE_WILL_BONUS;
       }
       will = Math.min(1, will + willBump);
@@ -3421,11 +3495,37 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           root.style.borderColor = "#475569";
         }
       }
+      const mobileBtn = doc.getElementById(`mobile-btn-${slot}`);
+      if (mobileBtn) {
+        const keyEl = mobileBtn.querySelector(".mobile-action-key");
+        const labelEl2 = mobileBtn.querySelector(".mobile-action-label");
+        const valueEl2 = mobileBtn.querySelector(".mobile-action-value");
+        const fillEl2 = mobileBtn.querySelector(".mobile-action-fill");
+        if (keyEl) keyEl.textContent = slot.toUpperCase();
+        if (labelEl2) labelEl2.textContent = cell.label;
+        if (valueEl2) valueEl2.textContent = cell.value;
+        if (fillEl2) {
+          const idleBorder = mobileBtn.classList.contains("mobile-action-btn--ultimate") ? "rgba(249, 115, 22, 0.95)" : "#475569";
+          const f = cell.fill;
+          if (f && f.duration > 1e-4) {
+            const cooldownProgress = clamp8(1 - f.remaining / f.duration, 0, 1);
+            fillEl2.style.width = `${Math.round(cooldownProgress * 100)}%`;
+            fillEl2.style.background = f.color;
+            fillEl2.style.opacity = String(0.2 + cooldownProgress * 0.75);
+            mobileBtn.style.borderColor = f.color;
+          } else {
+            fillEl2.style.width = "100%";
+            fillEl2.style.background = "#64748b";
+            fillEl2.style.opacity = "0.35";
+            mobileBtn.style.borderColor = idleBorder;
+          }
+        }
+      }
     }
   }
 
   // src/escape/hud/shellUi.js
-  var GENERIC_CONTROLS_HINT = "Move: Arrows | Abilities: Q, W, E, R (labels from your hero) | Pause: Space | After death: Enter retry";
+  var GENERIC_CONTROLS_HINT = "Move: Arrows | Abilities: Q, W, E, R (labels from your hero) | Pause: Space | After death: Enter or Choose hero \u2192 character select";
   function applyShellUiFromCharacter(doc, character) {
     const el = doc.getElementById("game-controls-hint");
     if (!el) return;
@@ -3643,7 +3743,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const sim = getSimElapsed();
       if (sim < SPECIAL_PROCEDURAL_GRACE_SEC) return;
       if (sim < spawnLockUntilSim) return;
-      for (const d of HEX_DIRS) {
+      for (const d of HEX_DIRS2) {
         if (getVisualKind(q + d.q, r + d.r) !== null) return;
       }
       rouletteSpent.delete(k);
@@ -3946,13 +4046,31 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
   function drawHealPickup(ctx, p, elapsed, opts = {}) {
     const maxHpCrystal = !!opts.lunaticMaxHpCrystal;
+    const bootlegSwamp = !!opts.bootlegSwampCrystal;
     const pulse = 0.94 + 0.06 * (0.5 + 0.5 * Math.sin(elapsed * 5));
     const h = (p.plusHalf ?? HEAL_PICKUP_PLUS_HALF) * pulse;
     const t = p.plusThick ?? HEAL_PICKUP_ARM_THICK;
     const { x, y } = p;
     ctx.save();
     ctx.translate(x, y);
-    if (maxHpCrystal) {
+    if (bootlegSwamp) {
+      ctx.shadowColor = "rgba(202, 138, 4, 0.75)";
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = "#713f12";
+      ctx.fillRect(-h, -t / 2, 2 * h, t);
+      ctx.fillRect(-t / 2, -h, t, 2 * h);
+      ctx.shadowBlur = 11;
+      ctx.fillStyle = "#a16207";
+      ctx.fillRect(-h + 0.8, -t / 2 + 0.5, 2 * h - 1.6, t - 1);
+      ctx.fillRect(-t / 2 + 0.5, -h + 0.8, t - 1, 2 * h - 1.6);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = "#fde047";
+      ctx.fillRect(-h * 0.52, -t * 0.32, h * 1.04, t * 0.64);
+      ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "rgba(254, 240, 138, 0.55)";
+    } else if (maxHpCrystal) {
       ctx.shadowColor = "rgba(251, 191, 36, 0.9)";
       ctx.shadowBlur = 20;
       ctx.fillStyle = "#92400e";
@@ -3998,21 +4116,30 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const barY = h + 8;
     ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
     ctx.fillRect(-barW / 2, barY, barW, barH);
-    ctx.fillStyle = maxHpCrystal ? frac > 0.35 ? "rgba(251, 191, 36, 0.95)" : "rgba(248, 113, 113, 0.95)" : frac > 0.35 ? "rgba(110, 231, 183, 0.95)" : "rgba(251, 146, 60, 0.95)";
+    ctx.fillStyle = bootlegSwamp ? frac > 0.35 ? "rgba(250, 204, 21, 0.92)" : "rgba(217, 119, 6, 0.9)" : maxHpCrystal ? frac > 0.35 ? "rgba(251, 191, 36, 0.95)" : "rgba(248, 113, 113, 0.95)" : frac > 0.35 ? "rgba(110, 231, 183, 0.95)" : "rgba(251, 146, 60, 0.95)";
     ctx.fillRect(-barW / 2, barY, barW * frac, barH);
-    ctx.strokeStyle = maxHpCrystal ? "rgba(254, 243, 199, 0.75)" : "rgba(236, 253, 245, 0.7)";
+    ctx.strokeStyle = bootlegSwamp ? "rgba(253, 224, 71, 0.65)" : maxHpCrystal ? "rgba(254, 243, 199, 0.75)" : "rgba(236, 253, 245, 0.7)";
     ctx.lineWidth = 1;
     ctx.strokeRect(-barW / 2, barY, barW, barH);
     ctx.restore();
   }
-  function drawObstacles(ctx, obstacles) {
-    ctx.fillStyle = "#334155";
-    ctx.strokeStyle = "#94a3b8";
+  function drawObstacles(ctx, obstacles, opts = {}) {
+    const fill = opts.fill ?? "#334155";
+    const stroke = opts.stroke ?? "#94a3b8";
+    const glowColor = opts.glowColor ?? null;
+    const glowBlur = Math.max(0, Number(opts.glowBlur ?? 0));
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
     ctx.lineWidth = 2;
+    if (glowColor && glowBlur > 0) {
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = glowBlur;
+    }
     for (const o of obstacles) {
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.strokeRect(o.x, o.y, o.w, o.h);
     }
+    if (glowColor && glowBlur > 0) ctx.shadowBlur = 0;
   }
   function fillPointyHexCell(ctx, cx, cy, vertexRadius, fillStyle, strokeStyle = "rgba(148, 163, 184, 0.35)") {
     const fillBleed = 0.85;
@@ -4097,6 +4224,42 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     ctx.fillText(`Wave: ${wave}`, 14, 72);
     ctx.fillText(`Hunters: ${hunterCount}`, 14, 92);
     ctx.restore();
+  }
+  function drawSwampBootlegCursesHud(ctx, viewW, viewH, rows) {
+    if (!rows?.length) return;
+    const pad = 12;
+    const x = viewW - pad;
+    const maxW = Math.min(240, viewW * 0.34);
+    ctx.save();
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    let y = 10;
+    ctx.font = "600 11px ui-sans-serif, system-ui, Arial, sans-serif";
+    ctx.fillStyle = "rgba(217, 249, 157, 0.95)";
+    ctx.fillText("BOG DEBTS", x, y);
+    y += 15;
+    ctx.font = "11px ui-sans-serif, system-ui, Arial, sans-serif";
+    for (const r of rows) {
+      if (y > viewH - 100) break;
+      const eff = truncateHudLine(ctx, r.effect, maxW);
+      const pur = truncateHudLine(ctx, r.purge, maxW);
+      ctx.fillStyle = "#ecfccb";
+      ctx.fillText(eff, x, y);
+      y += 13;
+      ctx.fillStyle = "rgba(203, 213, 225, 0.92)";
+      ctx.fillText(pur, x, y);
+      y += 16;
+    }
+    ctx.restore();
+  }
+  function truncateHudLine(ctx, text, maxW) {
+    if (ctx.measureText(text).width <= maxW) return text;
+    const ell = "\u2026";
+    let s = text;
+    while (s.length > 0 && ctx.measureText(s + ell).width > maxW) {
+      s = s.slice(0, -1);
+    }
+    return s + ell;
   }
   function drawPlayerBody(ctx, x, y, radius, facing = { x: 1, y: 0 }, hurt01 = 0, bodyAlpha = 1) {
     const e = Math.max(0, Math.min(1, hurt01)) * 0.65;
@@ -5101,13 +5264,17 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     if (suit === "clubs") {
       const picks = ["dodge", "stun", "invisBurst"];
       const pick = picks[Math.floor(Math.random() * picks.length)];
-      if (pick === "dodge") return { kind: "dodge", value: (5 + 0.1 * rank) / 100 };
+      if (pick === "dodge") return { kind: "dodge", value: (2 + rank) / 100 };
       if (pick === "stun") return { kind: "stun", value: 0.2 * rank };
-      return { kind: "invisBurst", value: 0.1 * rank };
+      return { kind: "invisBurst", value: invisBurstDurationSeconds(rank) };
     }
     if (rank >= 11) return { kind: "dashCharge", value: 1 };
     if (Math.random() < 0.5) return { kind: "speed", value: Math.min(0.18, 0.018 * rank) };
     return { kind: "terrainBoost", value: Math.min(0.36, 0.036 * rank) };
+  }
+  function invisBurstDurationSeconds(rank) {
+    if (rank <= 6) return 0.2;
+    return Math.max(0.2, (rank - 4) / 10);
   }
   function describeDefaultCardEffect(card, helpers) {
     const e = card.effect;
@@ -5133,9 +5300,6 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     else if (e.kind === "terrainBoost") base = `+${Math.round(e.value * 100)}% terrain-touch speed boost`;
     else if (e.kind === "dashCharge") base = `+${e.value} dash charge`;
     else base = "Passive effect";
-    if (card?.suit === "joker") {
-      return `${base} (Joker \u2014 Contributes towards all set bonuses).`;
-    }
     return base;
   }
 
@@ -5226,7 +5390,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const e = card?.effect;
         if (e?.kind === "invisBurst") {
           const base = `Smoke lingers +${e.value.toFixed(1)}s`;
-          if (card?.suit === "joker") return `${base} (Joker \u2014 Contributes towards all set bonuses).`;
+          if (card?.suit === "joker") return base;
           return `${base} (clubs)`;
         }
         return describeDefaultCardEffect(card, {
@@ -5420,12 +5584,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
 
   // src/escape/items/cardPickupModal.js
-  function rankDeckIsCompletelyEmpty(inventory) {
-    for (let rank = 1; rank <= 13; rank++) if (inventory.deckByRank[rank]) return false;
+  function rankDeckIsCompletelyEmpty(inventory2) {
+    for (let rank = 1; rank <= 13; rank++) if (inventory2.deckByRank[rank]) return false;
     return true;
   }
   function cardModalInventoryDragHintHtml() {
-    return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Click and hold</strong> a card, then <b>drag</b> it to a slot and <b>release</b> to drop, either in the relevant card slot, or the <b>backpack</b>.</p></aside>`;
+    return `<aside class="card-face-hint" aria-label="How to use inventory"><strong>Using inventory</strong><p><strong>Desktop:</strong> click and hold, then <b>drag</b> a card to a slot and release.<br><strong>Touch:</strong> press and <b>drag</b> a card onto another slot (same as desktop).</p></aside>`;
+  }
+  function preferTouchPointerDrag() {
+    return window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
   }
   function cardFaceNameHtml(card) {
     const red = card?.suit === "hearts" || card?.suit === "diamonds";
@@ -5439,20 +5606,52 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       cardSwapRow,
       modalSetBonusStatusEl,
       cardCloseButton,
-      inventory,
+      inventory: inventory2,
       getItemRules,
       syncDeckSlots,
       onPausedChange = (
         /** @param {boolean} _ */
         () => {
         }
-      )
+      ),
+      onDiamondEmpowerPicked = () => {
+      }
     } = opts;
     let inventoryModalOpen = false;
     let cardPickupFlowActive = false;
     let pendingCard = null;
+    let setBonusChoicePendingSuit = null;
     let pickupTargetRank = null;
     let dragIntentRank = null;
+    let tapSwapSourceZoneId = null;
+    let touchDragSession = null;
+    function clearDropZoneHoverHighlights() {
+      if (!cardSwapRow) return;
+      for (const el of cardSwapRow.querySelectorAll(".drop-zone.over")) el.classList.remove("over");
+    }
+    function dropZoneFromClientPoint(clientX, clientY) {
+      const stack = typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(clientX, clientY) : [document.elementFromPoint(clientX, clientY)];
+      for (const node of stack) {
+        if (!(node instanceof Element)) continue;
+        const z = node.closest("[data-zone-id].drop-zone");
+        if (z && cardSwapRow?.contains(z)) return z;
+      }
+      return null;
+    }
+    function endTouchDragSession() {
+      if (!touchDragSession) return;
+      window.removeEventListener("pointermove", touchDragSession.onMove);
+      window.removeEventListener("pointerup", touchDragSession.onUp);
+      window.removeEventListener("pointercancel", touchDragSession.onUp);
+      if (cardModal && "releasePointerCapture" in cardModal) {
+        try {
+          cardModal.releasePointerCapture(touchDragSession.pointerId);
+        } catch {
+        }
+      }
+      touchDragSession = null;
+      clearDropZoneHoverHighlights();
+    }
     function effectivePickupRank() {
       if (pendingCard?.rank != null) return pendingCard.rank;
       if (dragIntentRank != null) return dragIntentRank;
@@ -5473,19 +5672,19 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function getCardByZone(zoneId) {
       if (zoneId === "pickup") return pendingCard;
       const dr = parseDeckZoneId(zoneId);
-      if (dr != null) return inventory.deckByRank[dr] || null;
+      if (dr != null) return inventory2.deckByRank[dr] || null;
       const bi = parseBpZoneId(zoneId);
-      if (bi != null) return inventory.backpackSlots[bi] || null;
+      if (bi != null) return inventory2.backpackSlots[bi] || null;
       return null;
     }
     function setCardByZone(zoneId, card) {
       if (zoneId === "pickup") pendingCard = card;
       else {
         const dr = parseDeckZoneId(zoneId);
-        if (dr != null) inventory.deckByRank[dr] = card || null;
+        if (dr != null) inventory2.deckByRank[dr] = card || null;
         else {
           const bi = parseBpZoneId(zoneId);
-          if (bi != null) inventory.backpackSlots[bi] = card || null;
+          if (bi != null) inventory2.backpackSlots[bi] = card || null;
         }
       }
     }
@@ -5544,6 +5743,21 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       renderCardModal();
       syncDeckSlots();
     }
+    function clearTapSwapSelection() {
+      tapSwapSourceZoneId = null;
+      if (!cardSwapRow) return;
+      const highlighted = cardSwapRow.querySelectorAll(".drop-zone.over");
+      for (const el of highlighted) el.classList.remove("over");
+    }
+    function markTapSwapSelection(zoneId) {
+      if (!cardSwapRow) return;
+      const zones = cardSwapRow.querySelectorAll("[data-zone-id]");
+      for (const zoneEl of zones) {
+        if (!(zoneEl instanceof HTMLElement)) continue;
+        zoneEl.classList.toggle("over", zoneEl.dataset.zoneId === zoneId);
+      }
+      tapSwapSourceZoneId = zoneId;
+    }
     function wireDropZone(zoneEl, zoneId) {
       zoneEl.dataset.zoneId = zoneId;
       zoneEl.addEventListener("dragover", (event) => {
@@ -5557,18 +5771,80 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const from = event.dataTransfer?.getData("text/plain");
         if (!from) return;
         swapCardsBetweenZones(from, zoneId);
+        clearTapSwapSelection();
       });
+      if (!preferTouchPointerDrag()) {
+        zoneEl.addEventListener("click", () => {
+          if (!tapSwapSourceZoneId) return;
+          if (tapSwapSourceZoneId === zoneId) {
+            clearTapSwapSelection();
+            return;
+          }
+          const from = tapSwapSourceZoneId;
+          clearTapSwapSelection();
+          swapCardsBetweenZones(from, zoneId);
+        });
+      }
+    }
+    function beginTouchDragFromZone(zoneId, card, pointerId) {
+      if (touchDragSession) return;
+      clearTapSwapSelection();
+      if (cardPickupFlowActive && card?.rank != null) {
+        const fromBp = parseBpZoneId(zoneId) != null;
+        const fromDeck = parseDeckZoneId(zoneId) != null;
+        if (fromBp || fromDeck) {
+          dragIntentRank = card.rank;
+          refreshRankTargetUiDuringDrag();
+        }
+      }
+      const fromZoneId = zoneId;
+      const onMove = (ev) => {
+        if (ev.pointerId !== pointerId) return;
+        ev.preventDefault();
+        clearDropZoneHoverHighlights();
+        const drop = dropZoneFromClientPoint(ev.clientX, ev.clientY);
+        if (drop) drop.classList.add("over");
+      };
+      const onUp = (ev) => {
+        if (ev.pointerId !== pointerId) return;
+        ev.preventDefault();
+        const drop = dropZoneFromClientPoint(ev.clientX, ev.clientY);
+        const to = drop?.dataset?.zoneId;
+        if (to && to !== fromZoneId) {
+          swapCardsBetweenZones(fromZoneId, to);
+          clearTapSwapSelection();
+        } else if (dragIntentRank != null) {
+          dragIntentRank = null;
+          renderCardModal();
+        }
+        endTouchDragSession();
+      };
+      touchDragSession = { pointerId, onMove, onUp };
+      window.addEventListener("pointermove", onMove, { passive: false });
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+      if (cardModal && "setPointerCapture" in cardModal) {
+        try {
+          cardModal.setPointerCapture(pointerId);
+        } catch {
+        }
+      }
     }
     function appendCardToZone(zoneEl, zoneId, card, compact, itemRules) {
-      const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+      const suitsAll = countSuitsAcrossAllStowed(inventory2, pendingCard);
+      const usePointerDrag = preferTouchPointerDrag();
       if (card) {
         const cardEl = document.createElement("div");
         cardEl.className = "zone-card";
-        cardEl.draggable = true;
+        cardEl.draggable = !usePointerDrag;
         const glow = suitInventoryGlowClass(card, suitsAll);
         if (glow) cardEl.classList.add(glow);
-        cardEl.textContent = compact ? formatCardName(card) : `${formatCardName(card)} \u2014 ${itemRules.describeCardEffect(card)}`;
+        cardEl.textContent = compact ? formatCardName(card) : `${cardRankText(card.rank)}${formatCardHudSuitGlyph(card)} \u2014 ${itemRules.describeCardEffect(card)}`;
         cardEl.addEventListener("dragstart", (event) => {
+          if (usePointerDrag) {
+            event.preventDefault();
+            return;
+          }
           event.dataTransfer?.setData("text/plain", zoneId);
           if (cardPickupFlowActive && card?.rank != null) {
             const fromBp = parseBpZoneId(zoneId) != null;
@@ -5585,6 +5861,24 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             renderCardModal();
           }
         });
+        if (usePointerDrag) {
+          cardEl.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0) return;
+            if (touchDragSession) return;
+            event.preventDefault();
+            beginTouchDragFromZone(zoneId, card, event.pointerId);
+          });
+        } else {
+          cardEl.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (tapSwapSourceZoneId === zoneId) {
+              clearTapSwapSelection();
+              return;
+            }
+            markTapSwapSelection(zoneId);
+          });
+        }
         zoneEl.appendChild(cardEl);
       } else {
         const emptyEl = document.createElement("div");
@@ -5597,14 +5891,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const cell = document.createElement("div");
       cell.className = ["modal-deck-cell", extraClass].filter(Boolean).join(" ");
       for (const c of CARD_SET_GLOW_CLASSES) cell.classList.remove(c);
-      cell.innerHTML = `<div class="modal-deck-cell-label">${cardRankText(rank)}</div>`;
-      const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+      const rankLabelText = card ? cardRankText(card.rank) : cardRankText(rank);
+      cell.innerHTML = `<div class="modal-deck-cell-label">${rankLabelText}</div>`;
+      const suitsAll = countSuitsAcrossAllStowed(inventory2, pendingCard);
       if (card) {
         const glow = suitInventoryGlowClass(card, suitsAll);
         if (glow) cell.classList.add(glow);
         const t = document.createElement("div");
         t.className = "modal-deck-cell-card";
-        t.textContent = formatCardName(card);
+        t.textContent = formatCardHudSuitGlyph(card);
         cell.appendChild(t);
       } else {
         const e = document.createElement("div");
@@ -5618,14 +5913,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const cell = document.createElement("div");
       cell.className = "modal-deck-cell modal-deck-cell--bp";
       for (const c of CARD_SET_GLOW_CLASSES) cell.classList.remove(c);
-      cell.innerHTML = `<div class="modal-deck-cell-label">Pack ${packIndex + 1}</div>`;
-      const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+      const bpLabel = card ? cardRankText(card.rank) : `Pack ${packIndex + 1}`;
+      cell.innerHTML = `<div class="modal-deck-cell-label">${bpLabel}</div>`;
+      const suitsAll = countSuitsAcrossAllStowed(inventory2, pendingCard);
       if (card) {
         const glow = suitInventoryGlowClass(card, suitsAll);
         if (glow) cell.classList.add(glow);
         const t = document.createElement("div");
         t.className = "modal-deck-cell-card";
-        t.textContent = formatCardName(card);
+        t.textContent = formatCardHudSuitGlyph(card);
         cell.appendChild(t);
       } else {
         const e = document.createElement("div");
@@ -5651,12 +5947,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       zoneEl.className = "drop-zone drop-zone--swap drop-zone--main-slot";
       zoneEl.innerHTML = `<div class="zone-label">Card slot: ${cardRankText(r)}</div>`;
       wireDropZone(zoneEl, newDeckId);
-      appendCardToZone(zoneEl, newDeckId, inventory.deckByRank[r] || null, false, itemRules);
+      appendCardToZone(zoneEl, newDeckId, inventory2.deckByRank[r] || null, false, itemRules);
       pickupEl.insertAdjacentElement("afterend", zoneEl);
     }
     function renderPickupFlowFaceHtml(itemRules, r) {
-      const showCard = pendingCard || inventory.deckByRank[r] || null;
-      const showFirstCardHint = rankDeckIsCompletelyEmpty(inventory);
+      const showCard = pendingCard || inventory2.deckByRank[r] || null;
+      const showFirstCardHint = rankDeckIsCompletelyEmpty(inventory2);
       if (showCard) {
         cardModalFace.classList.remove("compact");
         if (showFirstCardHint) {
@@ -5673,9 +5969,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
     }
     function renderCardModal() {
+      endTouchDragSession();
       const itemRules = getItemRules();
       if (!cardModal || !cardModalFace || !cardSwapRow) return;
       dragIntentRank = null;
+      tapSwapSourceZoneId = null;
       if (modalDeckStripEl) modalDeckStripEl.innerHTML = "";
       if (!inventoryModalOpen) {
         cardModal.classList.remove("open");
@@ -5696,13 +5994,13 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         wings.setAttribute("aria-label", "Read-only deck and backpack preview");
         const aceWing = document.createElement("div");
         aceWing.className = "modal-deck-ace-wing";
-        appendModalDeckDisplayCell(aceWing, 1, inventory.deckByRank[1] || null, "modal-deck-cell--ace");
+        appendModalDeckDisplayCell(aceWing, 1, inventory2.deckByRank[1] || null, "modal-deck-cell--ace");
         const mid = document.createElement("div");
         mid.className = "modal-deck-middle-twelve";
-        for (let r = 2; r <= 13; r++) appendModalDeckDisplayCell(mid, r, inventory.deckByRank[r] || null);
+        for (let r = 2; r <= 13; r++) appendModalDeckDisplayCell(mid, r, inventory2.deckByRank[r] || null);
         const bpWing = document.createElement("div");
         bpWing.className = "modal-deck-backpack-wing";
-        for (let i = 0; i < 3; i++) appendModalBackpackDisplayCell(bpWing, i, inventory.backpackSlots[i] || null);
+        for (let i = 0; i < 3; i++) appendModalBackpackDisplayCell(bpWing, i, inventory2.backpackSlots[i] || null);
         wings.appendChild(aceWing);
         wings.appendChild(mid);
         wings.appendChild(bpWing);
@@ -5713,7 +6011,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (r != null) {
           renderPickupFlowFaceHtml(itemRules, r);
         } else {
-          const showFirstHintNoRank = cardPickupFlowActive && rankDeckIsCompletelyEmpty(inventory);
+          const showFirstHintNoRank = cardPickupFlowActive && rankDeckIsCompletelyEmpty(inventory2);
           if (showFirstHintNoRank) {
             cardModalFace.classList.remove("compact");
             cardModalFace.innerHTML = `<div class="card-face-layout"><div class="card-face-primary"><div class="desc">Drag a card into <strong>New pickup</strong> from a backpack slot or the rank row above, or <strong>Leave</strong>.</div></div>${cardModalInventoryDragHintHtml()}</div>`;
@@ -5739,7 +6037,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           zones.push({
             id: `deck-${deckR}`,
             label: `Card slot: ${cardRankText(deckR)}`,
-            card: inventory.deckByRank[deckR] || null,
+            card: inventory2.deckByRank[deckR] || null,
             kind: "rank"
           });
         }
@@ -5747,7 +6045,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         zones.push({ id: "pickup", label: "New pickup", card: pendingCard, kind: "pickup" });
       }
       for (let i = 0; i < 3; i++) {
-        zones.push({ id: `bp-${i}`, label: `Backpack ${i + 1}`, card: inventory.backpackSlots[i] || null, kind: "bp" });
+        zones.push({ id: `bp-${i}`, label: `Backpack ${i + 1}`, card: inventory2.backpackSlots[i] || null, kind: "bp" });
       }
       for (const zone of zones) {
         const zoneEl = document.createElement("div");
@@ -5760,14 +6058,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         appendCardToZone(zoneEl, zone.id, zone.card, false, itemRules);
         cardSwapRow.appendChild(zoneEl);
       }
-      const leaveBtn = document.createElement("button");
-      leaveBtn.type = "button";
-      leaveBtn.className = "leave-button";
-      leaveBtn.textContent = "Leave";
-      leaveBtn.addEventListener("click", () => continueAfterLoadout());
-      cardSwapRow.appendChild(leaveBtn);
+      {
+        const leaveBtn = document.createElement("button");
+        leaveBtn.type = "button";
+        leaveBtn.className = "leave-button";
+        leaveBtn.textContent = "Leave";
+        leaveBtn.addEventListener("click", () => continueAfterLoadout());
+        cardSwapRow.appendChild(leaveBtn);
+      }
       if (modalSetBonusStatusEl) {
-        const progress = getModalSetBonusProgressLines(inventory, pendingCard, itemRules);
+        const progress = getModalSetBonusProgressLines(inventory2, pendingCard, itemRules);
         modalSetBonusStatusEl.textContent = progress.length ? progress.join("\n") : "";
       }
       syncDeckSlots();
@@ -5779,11 +6079,13 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       cardPickupFlowActive = false;
       pickupTargetRank = null;
       dragIntentRank = null;
+      tapSwapSourceZoneId = null;
       if (wasOpen) onPausedChange(false);
       renderCardModal();
     }
     function continueAfterLoadout() {
       pendingCard = null;
+      clearTapSwapSelection();
       closeCardModal();
     }
     function openCardPickup(card) {
@@ -5795,19 +6097,42 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       renderCardModal();
     }
     function resetAll() {
-      for (let r = 1; r <= 13; r++) inventory.deckByRank[r] = null;
-      for (let i = 0; i < 3; i++) inventory.backpackSlots[i] = null;
+      for (let r = 1; r <= 13; r++) inventory2.deckByRank[r] = null;
+      for (let i = 0; i < 3; i++) inventory2.backpackSlots[i] = null;
       continueAfterLoadout();
     }
-    const onCloseClick = () => continueAfterLoadout();
+    const onCloseClick = () => {
+      if (setBonusChoicePendingSuit === "diamonds" && !inventory2.diamondEmpower) return;
+      continueAfterLoadout();
+    };
     if (cardCloseButton) cardCloseButton.addEventListener("click", onCloseClick);
     function onGlobalKeydown(e) {
+      const needsDiamondChoice = setBonusChoicePendingSuit === "diamonds" && !inventory2.diamondEmpower;
+      if (needsDiamondChoice && inventoryModalOpen) {
+        const k = String(e.key || "").toLowerCase();
+        if (k === "q" || k === "w" || k === "e") {
+          e.preventDefault();
+          if (k === "q") applyDiamondEmpowerChoice("dash2x");
+          else if (k === "w") applyDiamondEmpowerChoice("speedPassive");
+          else applyDiamondEmpowerChoice("decoyFortify");
+          return;
+        }
+      }
       if (e.key !== "Escape") return;
       if (!inventoryModalOpen) return;
+      if (needsDiamondChoice) return;
       e.preventDefault();
       continueAfterLoadout();
     }
     window.addEventListener("keydown", onGlobalKeydown);
+    function applyDiamondEmpowerChoice(id) {
+      if (setBonusChoicePendingSuit !== "diamonds") return;
+      if (inventory2.diamondEmpower) return;
+      inventory2.diamondEmpower = id;
+      setBonusChoicePendingSuit = null;
+      renderCardModal();
+      onDiamondEmpowerPicked();
+    }
     return {
       openCardPickup,
       isPaused: () => inventoryModalOpen,
@@ -5815,7 +6140,31 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       renderCardModal,
       /** @returns {object | null} */
       getPendingCard: () => pendingCard,
+      openSetBonusChoice(suit) {
+        if (suit !== "diamonds") return;
+        if (inventory2.diamondEmpower) return;
+        if (setBonusChoicePendingSuit === "diamonds" && inventoryModalOpen) return;
+        setBonusChoicePendingSuit = "diamonds";
+        inventoryModalOpen = true;
+        cardPickupFlowActive = false;
+        pendingCard = null;
+        pickupTargetRank = null;
+        dragIntentRank = null;
+        onPausedChange(true);
+        renderCardModal();
+      },
+      clearSetBonusChoice(suit = null) {
+        if (suit != null && setBonusChoicePendingSuit !== suit) return;
+        if (setBonusChoicePendingSuit == null) return;
+        const wasDiamonds = setBonusChoicePendingSuit === "diamonds";
+        setBonusChoicePendingSuit = null;
+        renderCardModal();
+        if (wasDiamonds) onDiamondEmpowerPicked();
+      },
+      applyDiamondEmpowerChoice,
+      isDiamondSetBonusChoicePending: () => setBonusChoicePendingSuit === "diamonds" && !inventory2.diamondEmpower,
       dispose() {
+        endTouchDragSession();
         if (cardCloseButton) cardCloseButton.removeEventListener("click", onCloseClick);
         window.removeEventListener("keydown", onGlobalKeydown);
       }
@@ -5823,9 +6172,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
 
   // src/escape/items/deckHudSync.js
-  function fillDeckSlotEl(el, rank, card, inventory, pendingCard, itemRules, forgeHudDragSources) {
+  function preferTouchPointerDrag2() {
+    return window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+  }
+  function fillDeckSlotEl(el, rank, card, inventory2, pendingCard, itemRules, forgeHudDragSources) {
     if (!el) return;
-    const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+    const suitsAll = countSuitsAcrossAllStowed(inventory2, pendingCard);
     clearCardGlowClasses(el);
     el.classList.toggle("filled", !!card);
     el.dataset.rank = String(rank);
@@ -5837,30 +6189,29 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     const glow = suitInventoryGlowClass(card, suitsAll);
     if (glow) el.classList.add(glow);
-    el.innerHTML = `<span class="deck-rank-label">${cardRankText(rank)}</span><div><span class="title">${formatCardName(
-      card
-    )}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
+    const red = card.suit === "hearts" || card.suit === "diamonds";
+    el.innerHTML = `<div class="card-slot-headline"><span class="card-slot-rank-suit${red ? " card-slot-rank-suit--red" : ""}">${formatCardName(card)}</span></div><div class="card-slot-copy"><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
     if (forgeHudDragSources && card.suit !== "joker") {
-      el.draggable = true;
+      el.draggable = !preferTouchPointerDrag2();
       el.dataset.forgeRef = JSON.stringify({ kind: "deck", rank });
     } else {
       el.removeAttribute("draggable");
       delete el.dataset.forgeRef;
     }
   }
-  function syncDeckSlotsFromInventory(deckRankSlotEls, backpackSlotEls, inventory, pendingCard, itemRules, forgeHudDragSources = false) {
+  function syncDeckSlotsFromInventory(deckRankSlotEls, backpackSlotEls, inventory2, pendingCard, itemRules, forgeHudDragSources = false) {
     if (deckRankSlotEls?.length) {
       for (let r = 1; r <= 13; r++) {
         const el = deckRankSlotEls[r - 1];
-        fillDeckSlotEl(el, r, inventory.deckByRank[r] || null, inventory, pendingCard, itemRules, forgeHudDragSources);
+        fillDeckSlotEl(el, r, inventory2.deckByRank[r] || null, inventory2, pendingCard, itemRules, forgeHudDragSources);
       }
     }
-    const suitsAll = countSuitsAcrossAllStowed(inventory, pendingCard);
+    const suitsAll = countSuitsAcrossAllStowed(inventory2, pendingCard);
     if (backpackSlotEls?.length) {
       for (let i = 0; i < 3; i++) {
         const slot = backpackSlotEls[i];
         if (!slot) continue;
-        const card = inventory.backpackSlots[i] || null;
+        const card = inventory2.backpackSlots[i] || null;
         clearCardGlowClasses(slot);
         slot.classList.toggle("filled", !!card);
         slot.dataset.bpIdx = String(i);
@@ -5872,11 +6223,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         }
         const glow = suitInventoryGlowClass(card, suitsAll);
         if (glow) slot.classList.add(glow);
-        slot.innerHTML = `<span class="deck-rank-label">Pack ${i + 1}</span><div><span class="title">${formatCardName(
+        const red = card.suit === "hearts" || card.suit === "diamonds";
+        slot.innerHTML = `<div class="card-slot-headline"><span class="card-slot-rank-suit${red ? " card-slot-rank-suit--red" : ""}">${formatCardName(
           card
-        )}</span><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
+        )}</span></div><div class="card-slot-copy"><span class="meta">${itemRules.describeCardEffect(card)}</span></div>`;
         if (forgeHudDragSources && card.suit !== "joker") {
-          slot.draggable = true;
+          slot.draggable = !preferTouchPointerDrag2();
           slot.dataset.forgeRef = JSON.stringify({ kind: "bp", idx: i });
         } else {
           slot.removeAttribute("draggable");
@@ -6011,6 +6363,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
 
   // src/escape/specials/forgeModal.js
+  function preferTouchPointerDrag3() {
+    return window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+  }
   function forgeRefKey(ref) {
     if (!ref) return "";
     return ref.kind === "deck" ? `d:${ref.rank}` : `b:${ref.idx}`;
@@ -6044,7 +6399,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   function createForgeWorldModal(deps) {
     const {
       doc,
-      inventory,
+      inventory: inventory2,
       getItemRules,
       syncDeckSlots,
       getOpenCardPickup,
@@ -6073,15 +6428,44 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     function cardAtForgeRef(ref) {
       if (!ref) return null;
-      if (ref.kind === "deck") return inventory.deckByRank[ref.rank] || null;
-      return inventory.backpackSlots[ref.idx] || null;
+      if (ref.kind === "deck") return inventory2.deckByRank[ref.rank] || null;
+      return inventory2.backpackSlots[ref.idx] || null;
     }
     function clearForgeRefSlot(ref) {
       if (!ref) return;
-      if (ref.kind === "deck") inventory.deckByRank[ref.rank] = null;
-      else inventory.backpackSlots[ref.idx] = null;
+      if (ref.kind === "deck") inventory2.deckByRank[ref.rank] = null;
+      else inventory2.backpackSlots[ref.idx] = null;
+    }
+    let forgeTouchSession = null;
+    function clearForgeDropHover() {
+      forgeSlotLeft?.classList.remove("forge-drop-slot--hover");
+      forgeSlotRight?.classList.remove("forge-drop-slot--hover");
+    }
+    function forgeDropSlotFromClientPoint(clientX, clientY) {
+      const stack = typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(clientX, clientY) : [document.elementFromPoint(clientX, clientY)];
+      for (const node of stack) {
+        if (!(node instanceof Element)) continue;
+        const z = node.closest(".forge-drop-slot[data-slot]");
+        if (z && forgeModal?.contains(z)) return z;
+      }
+      return null;
+    }
+    function endForgeTouchSession() {
+      if (!forgeTouchSession) return;
+      window.removeEventListener("pointermove", forgeTouchSession.onMove);
+      window.removeEventListener("pointerup", forgeTouchSession.onUp);
+      window.removeEventListener("pointercancel", forgeTouchSession.onUp);
+      if (forgeModal && "releasePointerCapture" in forgeModal) {
+        try {
+          forgeModal.releasePointerCapture(forgeTouchSession.pointerId);
+        } catch {
+        }
+      }
+      forgeTouchSession = null;
+      clearForgeDropHover();
     }
     function closeUi() {
+      endForgeTouchSession();
       const had = mode;
       mode = false;
       forgeRefA = null;
@@ -6188,8 +6572,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         rank,
         effect: rules.makeCardEffect(suit, rank)
       };
-      const dest = !inventory.deckByRank[rank] ? { kind: "deck", rank } : (() => {
-        const i = inventory.backpackSlots.findIndex((s) => !s);
+      const dest = !inventory2.deckByRank[rank] ? { kind: "deck", rank } : (() => {
+        const i = inventory2.backpackSlots.findIndex((s) => !s);
         return i >= 0 ? { kind: "bp", idx: i } : null;
       })();
       if (!dest) {
@@ -6257,7 +6641,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       } else {
         forgePendingSuit = null;
         if (forgeModalHint) {
-          forgeModalHint.textContent = "Drag two cards from your deck and backpack above into the side slots, then confirm.";
+          forgeModalHint.textContent = preferTouchPointerDrag3() ? "Press and drag two cards from the deck row above into the side slots, then confirm." : "Drag two cards from your deck and backpack above into the side slots, then confirm.";
         }
       }
       renderForgeSlotContents();
@@ -6265,17 +6649,57 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     function onForgeHudDragStart(e) {
       if (!mode) return;
+      if (preferTouchPointerDrag3()) {
+        e.preventDefault();
+        return;
+      }
       const t = e.target;
       const src = t instanceof Element ? t.closest("[data-forge-ref]") : null;
       if (!src?.dataset.forgeRef) return;
       e.dataTransfer?.setData("application/json", src.dataset.forgeRef);
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy";
     }
+    function onForgeModalPointerDownCapture(e) {
+      if (!mode || !preferTouchPointerDrag3() || e.button !== 0) return;
+      const src = e.target instanceof Element ? e.target.closest("[data-forge-ref]") : null;
+      if (!src?.dataset?.forgeRef || !forgeModal?.contains(src)) return;
+      if (forgeTouchSession) return;
+      e.preventDefault();
+      const refJson = src.dataset.forgeRef;
+      const pointerId = e.pointerId;
+      const onMove = (ev) => {
+        if (ev.pointerId !== pointerId) return;
+        ev.preventDefault();
+        clearForgeDropHover();
+        const drop = forgeDropSlotFromClientPoint(ev.clientX, ev.clientY);
+        if (drop) drop.classList.add("forge-drop-slot--hover");
+      };
+      const onUp = (ev) => {
+        if (ev.pointerId !== pointerId) return;
+        ev.preventDefault();
+        const drop = forgeDropSlotFromClientPoint(ev.clientX, ev.clientY);
+        const slot = drop?.dataset?.slot;
+        const ref = parseForgeRefFromDataset(refJson);
+        if (ref && (slot === "left" || slot === "right")) assignForgeToSlot(slot, ref);
+        endForgeTouchSession();
+      };
+      forgeTouchSession = { pointerId, onMove, onUp };
+      window.addEventListener("pointermove", onMove, { passive: false });
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+      if ("setPointerCapture" in forgeModal) {
+        try {
+          forgeModal.setPointerCapture(pointerId);
+        } catch {
+        }
+      }
+    }
     function wireForgeModalDragDropOnce() {
       if (!forgeModal || forgeModal.dataset.forgeDragWired === "1") return;
       if (!forgeSlotLeft || !forgeSlotRight) return;
       forgeModal.dataset.forgeDragWired = "1";
       doc.addEventListener("dragstart", onForgeHudDragStart, true);
+      forgeModal.addEventListener("pointerdown", onForgeModalPointerDownCapture, true);
       for (const slotEl of [forgeSlotLeft, forgeSlotRight]) {
         slotEl.addEventListener("dragenter", (e) => {
           e.preventDefault();
@@ -6311,15 +6735,18 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       forgeModal.hidden = false;
       if (forgeModalTitle) forgeModalTitle.textContent = "Forge";
       if (forgeModalSub) {
-        forgeModalSub.textContent = "Use your normal deck row above. Drag two cards into the side slots. The center is the forged rank (sum of ranks, capped at 13).";
+        forgeModalSub.textContent = preferTouchPointerDrag3() ? "Use your normal deck row above. Press and drag two cards into the side slots. The center is the forged rank (sum of ranks, capped at 13)." : "Use your normal deck row above. Drag two cards into the side slots. The center is the forged rank (sum of ranks, capped at 13).";
       }
       mountDeckPanelIntoForgeModal();
       syncForgeMergeUi();
       syncDeckSlots();
     }
     function dispose() {
+      endForgeTouchSession();
       doc.defaultView?.removeEventListener("keydown", onGlobalKeydown);
       doc.removeEventListener("dragstart", onForgeHudDragStart, true);
+      forgeModal?.removeEventListener("pointerdown", onForgeModalPointerDownCapture, true);
+      if (forgeModal) delete forgeModal.dataset.forgeDragWired;
     }
     return {
       isForgePaused,
@@ -6524,7 +6951,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   function createRouletteModal(deps) {
     const {
       doc,
-      inventory,
+      inventory: inventory2,
       getItemRules,
       getPendingCard,
       getWorldCardPickups,
@@ -6692,8 +7119,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         ...chosen,
         id: `${Date.now()}-${Math.floor(Math.random() * 1e6)}`
       };
-      if (ref.kind === "deck") inventory.deckByRank[ref.rank] = placed;
-      else if (ref.kind === "bp") inventory.backpackSlots[ref.idx] = placed;
+      if (ref.kind === "deck") inventory2.deckByRank[ref.rank] = placed;
+      else if (ref.kind === "bp") inventory2.backpackSlots[ref.idx] = placed;
       syncDeckSlots();
       onSuccessComplete?.();
       closeUi();
@@ -6702,7 +7129,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const rules = getItemRules();
       const pair = buildRoulettePairFromSource(
         sourceCard,
-        inventory,
+        inventory2,
         getPendingCard() ?? null,
         getWorldCardPickups(),
         rules
@@ -6732,9 +7159,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const rules = getItemRules();
       let pickCount = 0;
       for (let r = 1; r <= 13; r++) {
-        const c = inventory.deckByRank[r];
+        const c = inventory2.deckByRank[r];
         if (!c || c.suit === "joker") continue;
-        if (!buildRoulettePairFromSource(c, inventory, getPendingCard() ?? null, getWorldCardPickups(), rules)) continue;
+        if (!buildRoulettePairFromSource(c, inventory2, getPendingCard() ?? null, getWorldCardPickups(), rules)) continue;
         const b = doc.createElement("button");
         b.type = "button";
         b.className = "leave-button";
@@ -6744,9 +7171,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         pickCount += 1;
       }
       for (let i = 0; i < 3; i++) {
-        const c = inventory.backpackSlots[i];
+        const c = inventory2.backpackSlots[i];
         if (!c || c.suit === "joker") continue;
-        if (!buildRoulettePairFromSource(c, inventory, getPendingCard() ?? null, getWorldCardPickups(), rules)) continue;
+        if (!buildRoulettePairFromSource(c, inventory2, getPendingCard() ?? null, getWorldCardPickups(), rules)) continue;
         const b = doc.createElement("button");
         b.type = "button";
         b.className = "leave-button";
@@ -6817,6 +7244,435 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       tickWallClock,
       dispose
     };
+  }
+
+  // src/escape/specials/swampBootlegCrystalModal.js
+  function createSwampBootlegCrystalModal(opts) {
+    const onPausedChange = opts.onPausedChange ?? (() => {
+    });
+    const root = document.getElementById("swamp-bootleg-crystal-modal");
+    const flavorEl = document.getElementById("swamp-bootleg-flavor");
+    const btnA = document.getElementById("swamp-bootleg-choice-a");
+    const btnB = document.getElementById("swamp-bootleg-choice-b");
+    let open = false;
+    let resolvePick = null;
+    function setHidden(hidden) {
+      if (!root) return;
+      root.hidden = hidden;
+      root.setAttribute("aria-hidden", hidden ? "true" : "false");
+    }
+    function close() {
+      const needUnpause = open || resolvePick != null;
+      open = false;
+      resolvePick = null;
+      setHidden(true);
+      if (needUnpause) onPausedChange(false);
+    }
+    function openModal(payload) {
+      if (!root || !flavorEl || !btnA || !btnB) {
+        return Promise.resolve("a");
+      }
+      open = true;
+      setHidden(false);
+      onPausedChange(true);
+      flavorEl.textContent = payload.flavor;
+      btnA.innerHTML = formatChoiceHtml(payload.left);
+      btnB.innerHTML = formatChoiceHtml(payload.right);
+      return new Promise((resolve) => {
+        resolvePick = resolve;
+      });
+    }
+    function formatChoiceHtml(offer) {
+      return `<span class="swamp-bootleg-choice__title">${escapeHtml(offer.title)}</span><span class="swamp-bootleg-choice__body">${offer.bodyLines.map(escapeHtml).join("<br/>")}</span>`;
+    }
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+    function onChoose(side) {
+      if (!open || !resolvePick) return;
+      const res = resolvePick;
+      resolvePick = null;
+      open = false;
+      setHidden(true);
+      onPausedChange(false);
+      res(side);
+    }
+    if (btnA) btnA.addEventListener("click", () => onChoose("a"));
+    if (btnB) btnB.addEventListener("click", () => onChoose("b"));
+    return {
+      openModal,
+      close,
+      isPaused: () => open
+    };
+  }
+
+  // src/escape/swamp/swampBootlegCrystalPool.js
+  function rollBootlegPurge(rand) {
+    const u = rand();
+    if (u < 1 / 3) {
+      return { kind: "nextCrystal", label: "Curse ends when you touch the next health crystal." };
+    }
+    if (u < 2 / 3) {
+      const n = 1 + Math.floor(rand() * 3);
+      return { kind: "damageHits", n, label: `Curse ends after you take damage ${n} more time(s).` };
+    }
+    const sec = 5 + Math.floor(rand() * 11);
+    return { kind: "timer", sec, label: `Curse ends after ${sec} seconds.` };
+  }
+  var FLAVOR_LINES = [
+    "You hear the sound of distant maniacal laughter, slowly getting closer.",
+    "The bog remembers other footsteps \u2014 none of them left.",
+    "Something under the water counts your heartbeats, one\u2026 two\u2026"
+  ];
+  function pickBootlegFlavor(rand) {
+    return FLAVOR_LINES[Math.floor(rand() * FLAVOR_LINES.length)];
+  }
+  function resolvePurgeAtApply(spec, simElapsed) {
+    if (spec.kind === "nextCrystal") return { kind: "nextCrystal" };
+    if (spec.kind === "damageHits") return { kind: "damageHits", left: spec.n };
+    return { kind: "timer", until: simElapsed + spec.sec };
+  }
+  var RANDOM_PURGE_EFFECT_IDS = ["tax_q", "tax_w", "mud_legs", "murk_vision", "brittle", "wrong_footing"];
+  var ALL_EFFECT_IDS = ["blood_bargain", "stingy", "silence_feast", "honest_two", ...RANDOM_PURGE_EFFECT_IDS];
+  function buildOfferForEffect(effectId, purgeSpec, simElapsed) {
+    switch (effectId) {
+      case "blood_bargain":
+        return {
+          id: "blood_bargain",
+          title: "Blood bargain",
+          bodyLines: [
+            "Restore 5 HP now.",
+            "Lose 1 HP every 5 seconds for 20 seconds (four bites). Net +1 if you survive the toll."
+          ],
+          heal: 5,
+          bloodTax: { intervalSec: 5, ticks: 4, damagePerTick: 1 },
+          curse: null
+        };
+      case "stingy":
+        return {
+          id: "stingy",
+          title: "Stingy sip",
+          bodyLines: ["Only restore 1 HP.", "No curse hangs on after this \u2014 the bog barely gives."],
+          heal: 1,
+          curse: null
+        };
+      case "silence_feast": {
+        const paired = (
+          /** @type {const} */
+          { kind: "timer", sec: 6, label: "" }
+        );
+        return {
+          id: "silence_feast",
+          title: "Heavy meal",
+          bodyLines: [
+            "Restore 3 HP.",
+            "You cannot use Q, W, or E for 6 seconds \u2014 the same window ends the bargain."
+          ],
+          heal: 3,
+          spellSilenceSec: 6,
+          curse: {
+            clearsWithSpellSilence: true,
+            purge: resolvePurgeAtApply(paired, simElapsed)
+          }
+        };
+      }
+      case "honest_two":
+        return {
+          id: "honest_two",
+          title: "Honest glint",
+          bodyLines: ["Restore 2 HP.", "No curse \u2014 this one is almost real."],
+          heal: 2,
+          curse: null
+        };
+      case "tax_q":
+        return {
+          id: "tax_q",
+          title: "Q toll",
+          bodyLines: ["Restore 2 HP.", `Your Q ability cooldown is +1s (after reductions). ${purgeSpec.label}`],
+          heal: 2,
+          curse: { extraDashCd: 1, purge: resolvePurgeAtApply(purgeSpec, simElapsed) }
+        };
+      case "tax_w":
+        return {
+          id: "tax_w",
+          title: "W toll",
+          bodyLines: ["Restore 2 HP.", `Your W ability cooldown is +3s (after reductions). ${purgeSpec.label}`],
+          heal: 2,
+          curse: { extraBurstCd: 3, purge: resolvePurgeAtApply(purgeSpec, simElapsed) }
+        };
+      case "mud_legs":
+        return {
+          id: "mud_legs",
+          title: "Mud legs",
+          bodyLines: ["Restore 2 HP.", `Move speed \u221215%. ${purgeSpec.label}`],
+          heal: 2,
+          curse: { moveSlow: true, purge: resolvePurgeAtApply(purgeSpec, simElapsed) }
+        };
+      case "murk_vision":
+        return {
+          id: "murk_vision",
+          title: "Murk vision",
+          bodyLines: [
+            "Restore 2 HP.",
+            `Colourblind murk: every hunter reads the same grey-green shade. ${purgeSpec.label}`
+          ],
+          heal: 2,
+          curse: { colourblind: true, purge: resolvePurgeAtApply(purgeSpec, simElapsed) }
+        };
+      case "brittle":
+        return {
+          id: "brittle",
+          title: "Brittle glass",
+          bodyLines: ["Restore 2 HP.", `Fragile: you take +1 damage from each hit. ${purgeSpec.label}`],
+          heal: 2,
+          curse: { fragile: true, purge: resolvePurgeAtApply(purgeSpec, simElapsed) }
+        };
+      case "wrong_footing":
+        return {
+          id: "wrong_footing",
+          title: "Wrong footing",
+          bodyLines: ["Restore 2 HP.", `Movement controls are inverted. ${purgeSpec.label}`],
+          heal: 2,
+          curse: { invertMove: true, purge: resolvePurgeAtApply(purgeSpec, simElapsed) }
+        };
+      default:
+        return {
+          id: "honest_two",
+          title: "Honest glint",
+          bodyLines: ["Restore 2 HP.", "No curse \u2014 this one is almost real."],
+          heal: 2,
+          curse: null
+        };
+    }
+  }
+  function rollEffectId(rand) {
+    return ALL_EFFECT_IDS[Math.floor(rand() * ALL_EFFECT_IDS.length)];
+  }
+  function rollDistinctEffectId(rand, excludeId) {
+    let id = rollEffectId(rand);
+    let guard = 0;
+    while (id === excludeId && guard++ < 64) {
+      id = rollEffectId(rand);
+    }
+    if (id === excludeId) {
+      const idx = ALL_EFFECT_IDS.indexOf(excludeId);
+      id = ALL_EFFECT_IDS[(idx + 1) % ALL_EFFECT_IDS.length];
+    }
+    return id;
+  }
+  function composeOffer(effectId, rand, simElapsed) {
+    if (RANDOM_PURGE_EFFECT_IDS.includes(effectId)) {
+      const purgeSpec = rollBootlegPurge(rand);
+      return buildOfferForEffect(effectId, purgeSpec, simElapsed);
+    }
+    const dummyPurge = { kind: "nextCrystal", label: "" };
+    return buildOfferForEffect(effectId, dummyPurge, simElapsed);
+  }
+  function rollTwoBootlegOffers(rand, simElapsed) {
+    const leftId = rollEffectId(rand);
+    const rightId = rollDistinctEffectId(rand, leftId);
+    const flavor = pickBootlegFlavor(rand);
+    return {
+      flavor,
+      left: composeOffer(leftId, rand, simElapsed),
+      right: composeOffer(rightId, rand, simElapsed)
+    };
+  }
+
+  // src/escape/swamp/swampBootlegRuntime.js
+  function swampBootlegPurgeIsActive(row, simElapsed) {
+    const p = row.purge;
+    if (!p) return false;
+    if (p.kind === "nextCrystal") return true;
+    if (p.kind === "timer") return simElapsed < p.until;
+    if (p.kind === "damageHits") return p.left > 0;
+    return false;
+  }
+  function recalcSwampBootlegCdMirror(inventory2, simElapsed) {
+    let d = 0;
+    let b = 0;
+    const list = inventory2.swampBootlegCurses;
+    if (Array.isArray(list)) {
+      for (const row of list) {
+        if (!swampBootlegPurgeIsActive(row, simElapsed)) continue;
+        d += row.extraDashCd || 0;
+        b += row.extraBurstCd || 0;
+      }
+    }
+    inventory2.swampBootlegCdDash = d;
+    inventory2.swampBootlegCdBurst = b;
+  }
+  function tickSwampBootlegCurses(inventory2, simElapsed) {
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list) || list.length === 0) {
+      recalcSwampBootlegCdMirror(inventory2, simElapsed);
+      return;
+    }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const row = list[i];
+      const p = row.purge;
+      if (!p) {
+        list.splice(i, 1);
+        continue;
+      }
+      if (p.kind === "timer" && simElapsed >= p.until) {
+        if (row.clearsWithSpellSilence) {
+          inventory2.swampBootlegSpellSilenceUntil = 0;
+        }
+        list.splice(i, 1);
+        continue;
+      }
+      if (p.kind === "damageHits" && p.left <= 0) {
+        list.splice(i, 1);
+        continue;
+      }
+    }
+    if ((inventory2.swampBootlegSpellSilenceUntil ?? 0) > 0 && simElapsed >= inventory2.swampBootlegSpellSilenceUntil) {
+      inventory2.swampBootlegSpellSilenceUntil = 0;
+    }
+    recalcSwampBootlegCdMirror(inventory2, simElapsed);
+  }
+  function purgeSwampBootlegNextCrystalCurses(inventory2) {
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list)) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].purge?.kind === "nextCrystal") list.splice(i, 1);
+    }
+  }
+  function onSwampBootlegPlayerDamageHit(inventory2, simElapsed) {
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list)) return;
+    for (const row of list) {
+      const p = row.purge;
+      if (!p || p.kind !== "damageHits") continue;
+      if (!swampBootlegPurgeIsActive(row, simElapsed)) continue;
+      p.left = Math.max(0, (p.left ?? 0) - 1);
+    }
+  }
+  function getSwampBootlegMoveSpeedMult(inventory2, simElapsed) {
+    let m = 1;
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list)) return m;
+    for (const row of list) {
+      if (row.moveSlow && swampBootlegPurgeIsActive(row, simElapsed)) m *= 0.85;
+    }
+    return m;
+  }
+  function getSwampBootlegColourblind(inventory2, simElapsed) {
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list)) return false;
+    for (const row of list) {
+      if (row.colourblind && swampBootlegPurgeIsActive(row, simElapsed)) return true;
+    }
+    return false;
+  }
+  function getSwampBootlegInvertMove(inventory2, simElapsed) {
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list)) return false;
+    for (const row of list) {
+      if (row.invertMove && swampBootlegPurgeIsActive(row, simElapsed)) return true;
+    }
+    return false;
+  }
+  function getSwampBootlegFragileExtra(inventory2, simElapsed) {
+    let n = 0;
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list)) return 0;
+    for (const row of list) {
+      if (row.fragile && swampBootlegPurgeIsActive(row, simElapsed)) n += 1;
+    }
+    return n;
+  }
+  function tickSwampBootlegBloodTax(inventory2, simElapsed, damageFn) {
+    const t = inventory2.swampBootlegBloodTax;
+    if (!t || t.ticksLeft <= 0) {
+      inventory2.swampBootlegBloodTax = null;
+      return;
+    }
+    if (simElapsed < t.nextAt) return;
+    damageFn(t.damagePerTick ?? 1);
+    t.ticksLeft -= 1;
+    if (t.ticksLeft <= 0) {
+      inventory2.swampBootlegBloodTax = null;
+      return;
+    }
+    t.nextAt = simElapsed + (t.intervalSec ?? 5);
+  }
+  function applySwampBootlegOffer(inventory2, offer, simElapsed, nextUid) {
+    if (!Array.isArray(inventory2.swampBootlegCurses)) inventory2.swampBootlegCurses = [];
+    if (offer.bloodTax) {
+      const { intervalSec, ticks, damagePerTick } = offer.bloodTax;
+      inventory2.swampBootlegBloodTax = {
+        nextAt: simElapsed + intervalSec,
+        ticksLeft: ticks,
+        intervalSec,
+        damagePerTick
+      };
+    }
+    if (offer.spellSilenceSec) {
+      inventory2.swampBootlegSpellSilenceUntil = simElapsed + offer.spellSilenceSec;
+    }
+    const curse = offer.curse;
+    if (curse && curse.purge) {
+      inventory2.swampBootlegCurses.push({
+        uid: nextUid(),
+        extraDashCd: curse.extraDashCd,
+        extraBurstCd: curse.extraBurstCd,
+        moveSlow: curse.moveSlow,
+        colourblind: curse.colourblind,
+        fragile: curse.fragile,
+        invertMove: curse.invertMove,
+        clearsWithSpellSilence: curse.clearsWithSpellSilence,
+        purge: curse.purge
+      });
+    }
+    recalcSwampBootlegCdMirror(inventory2, simElapsed);
+  }
+  function resetSwampBootlegState(inventory2) {
+    inventory2.swampBootlegCurses = [];
+    inventory2.swampBootlegCdDash = 0;
+    inventory2.swampBootlegCdBurst = 0;
+    inventory2.swampBootlegSpellSilenceUntil = 0;
+    inventory2.swampBootlegBloodTax = null;
+  }
+  function bootlegCurseEffectLabel(row) {
+    if (row.extraBurstCd) return `W +${row.extraBurstCd}s cooldown`;
+    if (row.extraDashCd) return `Q +${row.extraDashCd}s cooldown`;
+    if (row.moveSlow) return "Move speed \u221215%";
+    if (row.colourblind) return "Murk vision (grey hunters)";
+    if (row.fragile) return "Fragile (+1 damage taken)";
+    if (row.invertMove) return "Inverted movement";
+    if (row.clearsWithSpellSilence) return "Spell lock (Q/W/E)";
+    return "Curse";
+  }
+  function bootlegCursePurgeLabel(purge, simElapsed) {
+    if (!purge) return "\u2014";
+    if (purge.kind === "nextCrystal") return "Ends: next health crystal";
+    if (purge.kind === "damageHits") return `Ends: ${purge.left} more hit(s)`;
+    const rem = Math.max(0, purge.until - simElapsed);
+    if (rem >= 120) return `Ends: ${(rem / 60).toFixed(1)} min`;
+    return `Ends: ${rem.toFixed(1)}s`;
+  }
+  function getSwampBootlegSidebarRows(inventory2, simElapsed) {
+    const rows = [];
+    const blood = inventory2.swampBootlegBloodTax;
+    if (blood && (blood.ticksLeft ?? 0) > 0) {
+      const nextIn = Math.max(0, blood.nextAt - simElapsed);
+      rows.push({
+        effect: "Blood toll",
+        purge: `${blood.ticksLeft} drain(s) \xB7 \u2212${blood.damagePerTick ?? 1} HP in ${nextIn.toFixed(1)}s`
+      });
+    }
+    const list = inventory2.swampBootlegCurses;
+    if (!Array.isArray(list)) return rows;
+    for (const row of list) {
+      if (!swampBootlegPurgeIsActive(row, simElapsed)) continue;
+      rows.push({
+        effect: bootlegCurseEffectLabel(row),
+        purge: bootlegCursePurgeLabel(row.purge, simElapsed)
+      });
+    }
+    return rows;
   }
 
   // src/escape/specials/safehouseHexFlow.js
@@ -7063,7 +7919,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     };
   }
 
-  // src/escape/WorldGeneration/eventTiles/Arena.js
+  // src/escape/WorldGeneration/eventTiles/innerHexZone.js
   var SQRT34 = Math.sqrt(3);
   function pointInsidePointyHex3(px, py, cx, cy, vertexRadius) {
     const dx = Math.abs(px - cx);
@@ -7071,9 +7927,42 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     if (dx > SQRT34 / 2 * vertexRadius) return false;
     return dy <= vertexRadius - dx / SQRT34;
   }
-  function vertexRadiusFromApothem(apothem) {
-    return 2 * apothem / SQRT34;
+  function innerInteractionVertexRadius(playerR) {
+    return HEX_SIZE * ARENA_NEXUS_INNER_HEX_SCALE + playerR;
   }
+  var SEGMENT_INNER_STEPS = 22;
+  function crossedIntoExpandedInnerHex(prevX, prevY, currX, currY, cx, cy, vr) {
+    const prevIn = pointInsidePointyHex3(prevX, prevY, cx, cy, vr);
+    const currIn = pointInsidePointyHex3(currX, currY, cx, cy, vr);
+    if (currIn && !prevIn) return true;
+    if (prevIn || currIn) return false;
+    for (let i = 1; i < SEGMENT_INNER_STEPS; i++) {
+      const t = i / SEGMENT_INNER_STEPS;
+      const sx = prevX + (currX - prevX) * t;
+      const sy = prevY + (currY - prevY) * t;
+      if (pointInsidePointyHex3(sx, sy, cx, cy, vr)) return true;
+    }
+    return false;
+  }
+  function clampPlayerCenterToExpandedInnerHex(player, cx, cy, vr) {
+    if (pointInsidePointyHex3(player.x, player.y, cx, cy, vr)) return;
+    let lo = 0;
+    let hi = 1;
+    const px = player.x;
+    const py = player.y;
+    for (let k = 0; k < 22; k++) {
+      const mid = (lo + hi) * 0.5;
+      const tx = cx + (px - cx) * mid;
+      const ty = cy + (py - cy) * mid;
+      if (pointInsidePointyHex3(tx, ty, cx, cy, vr)) lo = mid;
+      else hi = mid;
+    }
+    const t = Math.max(0, lo - 1e-5);
+    player.x = cx + (px - cx) * t;
+    player.y = cy + (py - cy) * t;
+  }
+
+  // src/escape/WorldGeneration/eventTiles/Arena.js
   function createArenaHexEvent(deps) {
     const {
       getSimElapsed,
@@ -7096,6 +7985,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     let nextLaserEnemyAt = 0;
     let nextSniperEnemyAt = 0;
     let cardRewardAt = 0;
+    let arenaRewardPendingOnUnpause = false;
     function reset() {
       phase = 0;
       siegeQ = 0;
@@ -7104,13 +7994,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       nextLaserEnemyAt = 0;
       nextSniperEnemyAt = 0;
       cardRewardAt = 0;
+      arenaRewardPendingOnUnpause = false;
     }
     function worldCenter() {
       return hexToWorld(siegeQ, siegeR);
-    }
-    function siegeInnerMaxCenterDistPx() {
-      const player = getPlayer();
-      return Math.max(6, ARENA_NEXUS_INNER_APOTHEM - player.r - 0.75);
     }
     function beginSiege() {
       const player = getPlayer();
@@ -7129,6 +8016,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function finishSiege() {
       phase = 2;
       cleanupArenaNexusSiegeCombat();
+      arenaRewardPendingOnUnpause = false;
       cardRewardAt = getSimElapsed() + ARENA_NEXUS_REWARD_MODAL_DELAY_SEC;
       markProceduralArenaHexSpent(siegeQ, siegeR);
     }
@@ -7154,36 +8042,44 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (phase !== 1) return;
       const player = getPlayer();
       const { x: cx, y: cy } = worldCenter();
-      const dx = player.x - cx;
-      const dy = player.y - cy;
-      const d = Math.hypot(dx, dy) || 1;
-      const maxD = siegeInnerMaxCenterDistPx();
-      if (d <= maxD) return;
-      player.x = cx + dx / d * maxD;
-      player.y = cy + dy / d * maxD;
+      clampPlayerCenterToExpandedInnerHex(player, cx, cy, innerInteractionVertexRadius(player.r));
     }
     function clampPlayerSegment(player) {
       if (phase !== 1) return;
       const { x: cx, y: cy } = worldCenter();
-      const dx = player.x - cx;
-      const dy = player.y - cy;
-      const d = Math.hypot(dx, dy) || 1;
-      const maxD = siegeInnerMaxCenterDistPx();
-      if (d > maxD) {
-        player.x = cx + dx / d * maxD;
-        player.y = cy + dy / d * maxD;
-      }
+      clampPlayerCenterToExpandedInnerHex(player, cx, cy, innerInteractionVertexRadius(player.r));
     }
-    function tick() {
+    function tick(dt = 1 / 60) {
       const elapsed = getSimElapsed();
       const player = getPlayer();
       const cardPaused = isCardPickupPaused();
       const ph = worldToHex(player.x, player.y);
-      if (phase === 2 && cardRewardAt > 0 && elapsed >= cardRewardAt && !cardPaused) {
+      const pdt = Math.max(1e-5, dt);
+      if (phase === 2 && cardRewardAt > 0 && elapsed >= cardRewardAt) {
+        if (!cardPaused) {
+          cardRewardAt = 0;
+          arenaRewardPendingOnUnpause = false;
+          dropSpecialEventJokerReward();
+        } else {
+          arenaRewardPendingOnUnpause = true;
+        }
+      }
+      if (!cardPaused && phase === 2 && arenaRewardPendingOnUnpause) {
+        arenaRewardPendingOnUnpause = false;
         cardRewardAt = 0;
         dropSpecialEventJokerReward();
       }
       if (phase === 2 && (ph.q !== siegeQ || ph.r !== siegeR)) {
+        if (cardRewardAt > 0) {
+          if (!cardPaused) {
+            dropSpecialEventJokerReward();
+            cardRewardAt = 0;
+            arenaRewardPendingOnUnpause = false;
+          } else {
+            arenaRewardPendingOnUnpause = true;
+            return;
+          }
+        }
         reset();
         return;
       }
@@ -7201,8 +8097,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (phase !== 0) return;
       if (!isArenaHexInteractive(ph.q, ph.r)) return;
       const c = hexToWorld(ph.q, ph.r);
-      const innerVertexR = vertexRadiusFromApothem(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-      if (pointInsidePointyHex3(player.x, player.y, c.x, c.y, innerVertexR)) beginSiege();
+      const vr = innerInteractionVertexRadius(player.r);
+      const prevX = player.x - (player.velX || 0) * pdt;
+      const prevY = player.y - (player.velY || 0) * pdt;
+      if (pointInsidePointyHex3(player.x, player.y, c.x, c.y, vr) || crossedIntoExpandedInnerHex(prevX, prevY, player.x, player.y, c.x, c.y, vr)) {
+        beginSiege();
+      }
     }
     function postHunterTick() {
       if (phase === 1) {
@@ -7237,15 +8137,6 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
 
   // src/escape/WorldGeneration/eventTiles/Gauntlet.js
   var SQRT35 = Math.sqrt(3);
-  function pointInsidePointyHex4(px, py, cx, cy, vertexRadius) {
-    const dx = Math.abs(px - cx);
-    const dy = Math.abs(py - cy);
-    if (dx > SQRT35 / 2 * vertexRadius) return false;
-    return dy <= vertexRadius - dx / SQRT35;
-  }
-  function vertexRadiusFromApothem2(apothem) {
-    return 2 * apothem / SQRT35;
-  }
   function createGauntletHexEvent(deps) {
     const {
       getSimElapsed,
@@ -7452,10 +8343,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       player.x = c.x + dx / d * maxD;
       player.y = c.y + dy / d * maxD;
     }
-    function tick() {
+    function tick(dt = 1 / 60) {
       const elapsed = getSimElapsed();
       const player = getPlayer();
       const cardPaused = isCardPickupPaused();
+      const pdt = Math.max(1e-5, dt);
       if (!cardPaused && phase === 3 && rewardPendingOnUnpause) {
         rewardPendingOnUnpause = false;
         dropSpecialEventJokerReward();
@@ -7495,18 +8387,22 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       if (phase === 1 && ph.q === lockQ && ph.r === lockR) {
         const c = hexToWorld(lockQ, lockR);
-        const innerVertexR = vertexRadiusFromApothem2(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-        if (pointInsidePointyHex4(player.x, player.y, c.x, c.y, innerVertexR)) {
+        const vr = innerInteractionVertexRadius(player.r);
+        const prevX = player.x - (player.velX || 0) * pdt;
+        const prevY = player.y - (player.velY || 0) * pdt;
+        if (pointInsidePointyHex3(player.x, player.y, c.x, c.y, vr) || crossedIntoExpandedInnerHex(prevX, prevY, player.x, player.y, c.x, c.y, vr)) {
           beginGauntletActive();
         }
       }
       if (phase === 3 && ph.q === lockQ && ph.r === lockR) {
         const c = hexToWorld(lockQ, lockR);
-        const innerVertexR = vertexRadiusFromApothem2(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-        const insideInner = pointInsidePointyHex4(player.x, player.y, c.x, c.y, innerVertexR);
-        const crossedIntoInner = insideInner && !wasInsideInnerRewardHex;
+        const vr = innerInteractionVertexRadius(player.r);
+        const prevX = player.x - (player.velX || 0) * pdt;
+        const prevY = player.y - (player.velY || 0) * pdt;
+        const insideInner = pointInsidePointyHex3(player.x, player.y, c.x, c.y, vr);
+        const crossedIntoInner = eligibleForInnerExitReward && (crossedIntoExpandedInnerHex(prevX, prevY, player.x, player.y, c.x, c.y, vr) || insideInner && !wasInsideInnerRewardHex);
         wasInsideInnerRewardHex = insideInner;
-        if (eligibleForInnerExitReward && crossedIntoInner) {
+        if (crossedIntoInner) {
           eligibleForInnerExitReward = false;
           if (cardPaused) {
             rewardPendingOnUnpause = true;
@@ -7530,14 +8426,23 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (wave > SURGE_HEX_WAVES) {
           phase = 3;
           awaitMode = "idle";
-          eligibleForInnerExitReward = true;
           rewardPendingOnUnpause = false;
-          {
-            const c = hexToWorld(lockQ, lockR);
-            const innerVertexR = vertexRadiusFromApothem2(ARENA_NEXUS_INNER_APOTHEM) + player.r;
-            wasInsideInnerRewardHex = pointInsidePointyHex4(player.x, player.y, c.x, c.y, innerVertexR);
-          }
           markProceduralSurgeHexSpent(lockQ, lockR);
+          const c = hexToWorld(lockQ, lockR);
+          const vr = innerInteractionVertexRadius(player.r);
+          const insideNow = pointInsidePointyHex3(player.x, player.y, c.x, c.y, vr);
+          wasInsideInnerRewardHex = insideNow;
+          if (insideNow) {
+            eligibleForInnerExitReward = false;
+            if (cardPaused) {
+              rewardPendingOnUnpause = true;
+            } else {
+              dropSpecialEventJokerReward();
+              phase = 4;
+            }
+          } else {
+            eligibleForInnerExitReward = true;
+          }
         } else {
           beginTravelWave();
         }
@@ -7566,7 +8471,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       return phase;
     }
     function isSurgeLockBarrierWorldPoint(px, py) {
-      if (phase !== 1 && phase !== 2) return false;
+      if (phase !== 1 && phase !== 2 && phase !== 3) return false;
       const h = worldToHex(px, py);
       if (h.q !== lockQ || h.r !== lockR) return false;
       const c = hexToWorld(h.q, h.r);
@@ -7674,10 +8579,17 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
 
   // src/escape/Hunters/hunterDraw.js
+  var FROG_SPLASH_GROW_SEC = 0.88;
+  function frogMudPoolGrowScale(bornAt, now) {
+    const u = clamp7((now - bornAt) / FROG_SPLASH_GROW_SEC, 0, 1);
+    return 1 - Math.pow(1 - u, 2.45);
+  }
   function hunterPalette(type) {
     switch (type) {
       case "chaser":
         return { light: "#fecaca", core: "#dc2626", shadow: "#7f1d1d", rim: "#fca5a5", mark: "#fff1f2" };
+      case "frogChaser":
+        return { light: "#86efac", core: "#166534", shadow: "#14532d", rim: "#4ade80", mark: "#ecfccb" };
       case "cutter":
         return { light: "#fde68a", core: "#d97706", shadow: "#78350f", rim: "#fcd34d", mark: "#fffbeb" };
       case "sniper":
@@ -7690,35 +8602,123 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         return { light: "#fecdd3", core: "#e11d48", shadow: "#881337", rim: "#fb7185", mark: "#fff1f2" };
       case "airSpawner":
         return { light: "#ddd6fe", core: "#7c3aed", shadow: "#4c1d95", rim: "#a78bfa", mark: "#f5f3ff" };
+      case "cryptSpawner":
+        return { light: "#f8fafc", core: "#e2e8f0", shadow: "#475569", rim: "#f1f5f9", mark: "#ffffff" };
       case "ranged":
         return { light: "#bae6fd", core: "#0284c7", shadow: "#0c4a6e", rim: "#38bdf8", mark: "#f0f9ff" };
       case "fast":
         return { light: "#fed7aa", core: "#ea580c", shadow: "#7c2d12", rim: "#fb923c", mark: "#fff7ed" };
+      case "ghost":
+        return { light: "#f3f4f6", core: "#cbd5e1", shadow: "#6b7280", rim: "#e5e7eb", mark: "#ffffff" };
       default:
         return { light: "#ddd6fe", core: "#7c3aed", shadow: "#3b0764", rim: "#c4b5fd", mark: "#f5f3ff" };
     }
   }
-  function drawHunterBody(ctx, h) {
-    const pal = hunterPalette(h.type);
+  function drawHunterBody(ctx, h, opts = {}) {
+    if (h.type === "cryptSpawner" && h.cryptDisguised) {
+      const s = 35;
+      const pulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + h.x * 0.01 + h.y * 0.01) * 4.2);
+      ctx.save();
+      ctx.fillStyle = "#1b1d24";
+      ctx.strokeStyle = "#8b95a8";
+      ctx.lineWidth = 2;
+      ctx.fillRect(h.x - s / 2, h.y - s / 2, s, s);
+      ctx.strokeRect(h.x - s / 2, h.y - s / 2, s, s);
+      ctx.strokeStyle = `rgba(226, 232, 240, ${0.18 + pulse * 0.18})`;
+      ctx.lineWidth = 1.4;
+      ctx.strokeRect(h.x - s / 2 + 1.8, h.y - s / 2 + 1.8, s - 3.6, s - 3.6);
+      ctx.restore();
+      return;
+    }
+    const boneSwarmGhostFast = h.type === "fast" && !!h.boneSwarmPhasing;
+    const swampMudFast = h.type === "fast" && !!h.swampMudSpawn;
+    const colourblind = !!opts.colourblind;
+    const pal = colourblind ? { light: "#9ca89a", core: "#5a6658", shadow: "#3a4239", rim: "#6b7569", mark: "#b4c0b0" } : boneSwarmGhostFast ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" } : swampMudFast ? { light: "#5c4a3a", core: "#342a1f", shadow: "#120e0a", rim: "#3d3024", mark: "#2a2218" } : hunterPalette(h.type);
     const { x, y, r } = h;
-    const g = ctx.createRadialGradient(x - r * 0.38, y - r * 0.42, r * 0.08, x, y, r);
+    const alpha = clamp7(Number(h.opacity ?? 1), 0, 1);
+    const cryptRevealU = h.type === "cryptSpawner" ? clamp7(Number(h.cryptRevealU ?? 1), 0, 1) : 1;
+    const cryptRevealPulse = h.type === "cryptSpawner" ? 1 + (1 - cryptRevealU) * 0.22 : 1;
+    const ghostTelegraph = h.type === "ghost" && (h.ghostPhase === "telegraph1" || h.ghostPhase === "telegraph2");
+    const teleU = ghostTelegraph ? clamp7(Number(h.ghostTelegraphU ?? 0), 0, 1) : 0;
+    const rBase = ghostTelegraph ? r * (1 - 0.12 * Math.sin(teleU * Math.PI)) : r;
+    const rBody = rBase * cryptRevealPulse;
+    if (h.type === "ghost" && Array.isArray(h.motionTrail)) {
+      for (const tr of h.motionTrail) {
+        const ta = clamp7(Number(tr.alpha ?? 0), 0, 1) * 0.55 * alpha;
+        if (ta <= 0.01) continue;
+        drawCircle2(ctx, tr.x, tr.y, tr.r ?? r, "#9ca3af", ta);
+      }
+    }
+    if (ghostTelegraph) {
+      const dx = Number(h.ghostDashDir?.x ?? 1);
+      const dy = Number(h.ghostDashDir?.y ?? 0);
+      const lenFull = Math.max(40, Number(h.ghostTelegraphLineLen ?? 200));
+      const len = lenFull * Math.max(1e-3, teleU);
+      const x2 = x + dx * len;
+      const y2 = y + dy * len;
+      const lineA = 0.42 + teleU * 0.48;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = `rgba(226, 232, 240, ${lineA})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(148, 163, 184, ${lineA * 0.38})`;
+      ctx.lineWidth = 11;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (h.type === "ghost") {
+      const aura = clamp7(Number(h.ghostAura ?? 0.75), 0, 1);
+      drawCircle2(ctx, x, y, rBody + 11 + aura * 3, "#cbd5e1", 0.13 + aura * 0.08);
+      drawCircle2(ctx, x, y, rBody + 6 + aura * 2, "#94a3b8", 0.1 + aura * 0.06);
+    }
+    if (boneSwarmGhostFast) {
+      const pulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + x * 0.01 + y * 0.01) * 6);
+      drawCircle2(ctx, x, y, rBody + 6 + pulse * 3, "#e2e8f0", 0.16 + pulse * 0.12);
+      drawCircle2(ctx, x, y, rBody + 2 + pulse * 1.5, "#cbd5e1", 0.18 + pulse * 0.14);
+    }
+    if (h.type === "cryptSpawner" && cryptRevealU < 1) {
+      const flash = 1 - cryptRevealU;
+      drawCircle2(ctx, x, y, rBody + 24 + flash * 11, "#ffffff", 0.1 + flash * 0.24);
+      drawCircle2(ctx, x, y, rBody + 15 + flash * 8, "#e2e8f0", 0.14 + flash * 0.2);
+    }
+    if (h.type === "cryptSpawner") {
+      const pulse = 0.5 + 0.5 * Math.sin((Number(h.cryptRevealU ?? 1) + x * 4e-3 + y * 4e-3) * 8.5);
+      drawCircle2(ctx, x, y, rBody + 9 + pulse * 3, "#cbd5e1", 0.12 + pulse * 0.1);
+      drawCircle2(ctx, x, y, rBody + 4 + pulse * 2, "#f8fafc", 0.08 + pulse * 0.08);
+    }
+    const g = ctx.createRadialGradient(x - rBody * 0.38, y - rBody * 0.42, rBody * 0.08, x, y, rBody);
     g.addColorStop(0, pal.light);
     g.addColorStop(0.55, pal.core);
     g.addColorStop(1, pal.shadow);
     ctx.save();
+    ctx.globalAlpha = alpha;
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, TAU);
+    ctx.arc(x, y, rBody, 0, TAU);
     ctx.fillStyle = g;
     ctx.fill();
     ctx.strokeStyle = pal.rim;
     ctx.lineWidth = 2;
     ctx.stroke();
-    const mx = h.dir.x * r * 0.38;
-    const my = h.dir.y * r * 0.38;
+    if (h.fireGlow) {
+      ctx.strokeStyle = "rgba(248, 113, 113, 0.45)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, rBody + 4.5, 0, TAU);
+      ctx.stroke();
+    }
+    const mx = h.dir.x * rBody * 0.38;
+    const my = h.dir.y * rBody * 0.38;
     ctx.fillStyle = pal.mark;
     ctx.globalAlpha = 0.45;
     ctx.beginPath();
-    ctx.arc(x + mx, y + my, r * 0.22, 0, TAU);
+    ctx.arc(x + mx, y + my, rBody * 0.22, 0, TAU);
     ctx.fill();
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -7733,6 +8733,22 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     ctx.restore();
   }
   function drawProjectileBody(ctx, p) {
+    if (p.fireCone) {
+      const gFire = ctx.createRadialGradient(p.x - p.r * 0.32, p.y - p.r * 0.32, 0.5, p.x, p.y, p.r);
+      gFire.addColorStop(0, "#fee2e2");
+      gFire.addColorStop(0.4, "#fb7185");
+      gFire.addColorStop(1, "#7f1d1d");
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, TAU);
+      ctx.fillStyle = gFire;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(248, 113, 113, 0.9)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     const g = ctx.createRadialGradient(p.x - 1, p.y - 1, 0.5, p.x, p.y, p.r);
     g.addColorStop(0, "#fef3c7");
     g.addColorStop(0.4, "#f59e0b");
@@ -7755,6 +8771,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const len = Math.hypot(x2 - x1, y2 - y1) || 1;
     const ang = Math.atan2(y2 - y1, x2 - x1);
     const blue = !!beam.blueLaser;
+    const boneGhostGrey = !!beam.boneGhostBeam && !blue;
+    const boneGhostPaleBlue = !!beam.boneGhostBlueBeam && blue;
     const pulse = 0.5 + 0.5 * Math.sin(now * (beam.warning ? 26 : 16));
     ctx.save();
     ctx.translate(x1, y1);
@@ -7763,32 +8781,110 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     if (beam.warning) {
       const t = clamp7((now - beam.bornAt) / Math.max(1e-3, beam.expiresAt - beam.bornAt), 0, 1);
       const fade = 0.42 + 0.48 * (1 - t * 0.4);
-      ctx.shadowBlur = blue ? 20 : 16;
-      ctx.shadowColor = blue ? "rgba(56, 189, 248, 0.75)" : "rgba(248, 113, 113, 0.7)";
-      const gWide = ctx.createLinearGradient(0, 0, len, 0);
-      if (blue) {
-        gWide.addColorStop(0, `rgba(191, 219, 254, ${0.12 * fade})`);
-        gWide.addColorStop(0.35, `rgba(96, 165, 250, ${0.38 * fade + 0.12 * pulse})`);
-        gWide.addColorStop(1, `rgba(30, 64, 175, ${0.35 * fade})`);
+      if (boneGhostPaleBlue) {
+        ctx.shadowBlur = 22;
+        ctx.shadowColor = "rgba(186, 230, 253, 0.65)";
+        const gWide = ctx.createLinearGradient(0, 0, len, 0);
+        gWide.addColorStop(0, `rgba(255, 255, 255, ${0.16 * fade})`);
+        gWide.addColorStop(0.35, `rgba(224, 242, 254, ${0.42 * fade + 0.14 * pulse})`);
+        gWide.addColorStop(1, `rgba(125, 211, 252, ${0.36 * fade})`);
+        ctx.strokeStyle = gWide;
+        ctx.lineWidth = 11 + pulse * 5;
+        ctx.setLineDash([16, 9]);
+        ctx.lineDashOffset = -now * 130;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(len, 0);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(255, 255, 255, ${0.4 + 0.38 * pulse})`;
+        ctx.lineWidth = 3.2 + pulse * 1.8;
+        ctx.setLineDash([9, 11]);
+        ctx.lineDashOffset = now * 100;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
+      } else if (boneGhostGrey) {
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = "rgba(203, 213, 225, 0.55)";
+        const gWide = ctx.createLinearGradient(0, 0, len, 0);
+        gWide.addColorStop(0, `rgba(248, 250, 252, ${0.12 * fade})`);
+        gWide.addColorStop(0.35, `rgba(226, 232, 240, ${0.4 * fade + 0.14 * pulse})`);
+        gWide.addColorStop(1, `rgba(100, 116, 139, ${0.34 * fade})`);
+        ctx.strokeStyle = gWide;
+        ctx.lineWidth = 11 + pulse * 5;
+        ctx.setLineDash([16, 9]);
+        ctx.lineDashOffset = -now * 130;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(len, 0);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(255, 255, 255, ${0.34 + 0.4 * pulse})`;
+        ctx.lineWidth = 3.2 + pulse * 1.8;
+        ctx.setLineDash([9, 11]);
+        ctx.lineDashOffset = now * 100;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
       } else {
-        gWide.addColorStop(0, `rgba(254, 226, 226, ${0.14 * fade})`);
-        gWide.addColorStop(0.35, `rgba(248, 113, 113, ${0.42 * fade + 0.18 * pulse})`);
-        gWide.addColorStop(1, `rgba(127, 29, 29, ${0.38 * fade})`);
+        ctx.shadowBlur = blue ? 20 : 16;
+        ctx.shadowColor = blue ? "rgba(56, 189, 248, 0.75)" : "rgba(248, 113, 113, 0.7)";
+        const gWide = ctx.createLinearGradient(0, 0, len, 0);
+        if (blue) {
+          gWide.addColorStop(0, `rgba(191, 219, 254, ${0.12 * fade})`);
+          gWide.addColorStop(0.35, `rgba(96, 165, 250, ${0.38 * fade + 0.12 * pulse})`);
+          gWide.addColorStop(1, `rgba(30, 64, 175, ${0.35 * fade})`);
+        } else {
+          gWide.addColorStop(0, `rgba(254, 226, 226, ${0.14 * fade})`);
+          gWide.addColorStop(0.35, `rgba(248, 113, 113, ${0.42 * fade + 0.18 * pulse})`);
+          gWide.addColorStop(1, `rgba(127, 29, 29, ${0.38 * fade})`);
+        }
+        ctx.strokeStyle = gWide;
+        ctx.lineWidth = 11 + pulse * 5;
+        ctx.setLineDash([16, 9]);
+        ctx.lineDashOffset = -now * 130;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(len, 0);
+        ctx.stroke();
+        ctx.strokeStyle = blue ? `rgba(224, 242, 254, ${0.35 + 0.4 * pulse})` : `rgba(254, 249, 239, ${0.38 + 0.42 * pulse})`;
+        ctx.lineWidth = 3.2 + pulse * 1.8;
+        ctx.setLineDash([9, 11]);
+        ctx.lineDashOffset = now * 100;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
       }
-      ctx.strokeStyle = gWide;
-      ctx.lineWidth = 11 + pulse * 5;
-      ctx.setLineDash([16, 9]);
-      ctx.lineDashOffset = -now * 130;
+    } else if (boneGhostPaleBlue) {
+      ctx.shadowBlur = 26;
+      ctx.shadowColor = "rgba(186, 230, 253, 0.75)";
+      const gBody = ctx.createLinearGradient(0, 0, len, 0);
+      gBody.addColorStop(0, "rgba(255, 255, 255, 0.96)");
+      gBody.addColorStop(0.2, "rgba(240, 249, 255, 0.96)");
+      gBody.addColorStop(0.45, "rgba(186, 230, 253, 0.95)");
+      gBody.addColorStop(0.72, "rgba(125, 211, 252, 0.92)");
+      gBody.addColorStop(1, "rgba(56, 189, 248, 0.78)");
+      ctx.strokeStyle = gBody;
+      ctx.lineWidth = 9;
       ctx.beginPath();
       ctx.moveTo(0, 0);
       ctx.lineTo(len, 0);
       ctx.stroke();
-      ctx.strokeStyle = blue ? `rgba(224, 242, 254, ${0.35 + 0.4 * pulse})` : `rgba(254, 249, 239, ${0.38 + 0.42 * pulse})`;
-      ctx.lineWidth = 3.2 + pulse * 1.8;
-      ctx.setLineDash([9, 11]);
-      ctx.lineDashOffset = now * 100;
+      ctx.shadowBlur = 0;
+    } else if (boneGhostGrey) {
+      ctx.shadowBlur = 22;
+      ctx.shadowColor = "rgba(226, 232, 240, 0.7)";
+      const gBody = ctx.createLinearGradient(0, 0, len, 0);
+      gBody.addColorStop(0, "rgba(255, 255, 255, 0.96)");
+      gBody.addColorStop(0.22, "rgba(241, 245, 249, 0.96)");
+      gBody.addColorStop(0.5, "rgba(203, 213, 225, 0.95)");
+      gBody.addColorStop(0.78, "rgba(148, 163, 184, 0.9)");
+      gBody.addColorStop(1, "rgba(71, 85, 105, 0.82)");
+      ctx.strokeStyle = gBody;
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(len, 0);
       ctx.stroke();
-      ctx.setLineDash([]);
       ctx.shadowBlur = 0;
     } else {
       ctx.shadowBlur = blue ? 28 : 24;
@@ -7841,16 +8937,27 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (!zone.exploded) {
         const pulse = 1 + Math.sin(now * 20) * 0.08;
         const radius = zone.r * pulse;
-        drawCircle2(ctx, zone.x, zone.y, radius, "#ef4444", 0.25 + life * 0.4);
-        ctx.strokeStyle = "#f87171";
+        const firePath = !!zone.firePath;
+        drawCircle2(ctx, zone.x, zone.y, radius, firePath ? "#dc2626" : "#ef4444", 0.25 + life * 0.4);
+        ctx.strokeStyle = firePath ? "#fb7185" : "#f87171";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, radius, 0, TAU);
         ctx.stroke();
+        if (firePath) {
+          const inner = radius * (0.58 + 0.08 * Math.sin(now * 9));
+          drawCircle2(ctx, zone.x, zone.y, inner, "#fb7185", 0.16 + 0.1 * life);
+          ctx.strokeStyle = "rgba(254, 226, 226, 0.55)";
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, radius * 0.78, 0, TAU);
+          ctx.stroke();
+        }
       } else if (lingering) {
         const r = zone.r;
-        drawCircle2(ctx, zone.x, zone.y, r, "#9f1239", 0.38);
-        ctx.strokeStyle = "rgba(248, 113, 113, 0.95)";
+        const firePath = !!zone.firePath;
+        drawCircle2(ctx, zone.x, zone.y, r, firePath ? "#991b1b" : "#9f1239", firePath ? 0.46 : 0.38);
+        ctx.strokeStyle = firePath ? "rgba(251, 113, 133, 0.95)" : "rgba(248, 113, 113, 0.95)";
         ctx.lineWidth = 2.5;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, r, 0, TAU);
@@ -7860,10 +8967,188 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, r * 0.72, 0, TAU);
         ctx.stroke();
+        if (firePath) {
+          const swirl = now * 2.6;
+          const ringR = r * (0.5 + 0.08 * Math.sin(now * 7));
+          ctx.strokeStyle = "rgba(252, 165, 165, 0.45)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, ringR, swirl, swirl + Math.PI * 1.5);
+          ctx.stroke();
+          ctx.strokeStyle = "rgba(254, 242, 242, 0.28)";
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, r * 0.9, -swirl * 0.9, -swirl * 0.9 + Math.PI * 1.2);
+          ctx.stroke();
+        }
         if (inBang) {
           const u = clamp7(tSinceDet / sniperBangDuration, 0, 1);
           drawArtilleryDetonationBang(ctx, zone, u);
         }
+      }
+    }
+  }
+  function drawSniperFireArcs(ctx, fireArcs, now) {
+    for (const arc of fireArcs) {
+      const t = clamp7((now - arc.bornAt) / Math.max(1e-3, arc.life), 0, 1);
+      const fade = 1 - t * 0.35;
+      const start = arc.a - arc.halfA;
+      const end = arc.a + arc.halfA;
+      const outerR = arc.radius + arc.width * 0.52;
+      const innerR = Math.max(1, arc.radius - arc.width * 0.52);
+      ctx.save();
+      ctx.fillStyle = `rgba(251, 113, 133, ${0.72 * fade})`;
+      ctx.shadowBlur = 14;
+      ctx.shadowColor = "rgba(220, 38, 38, 0.65)";
+      ctx.beginPath();
+      ctx.arc(arc.x, arc.y, outerR, start, end);
+      ctx.arc(arc.x, arc.y, innerR, end, start, true);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = `rgba(251, 113, 133, ${0.98 * fade})`;
+      ctx.lineWidth = Math.max(2, arc.width * 0.34);
+      ctx.beginPath();
+      ctx.arc(arc.x, arc.y, outerR, start, end);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(254, 226, 226, ${0.92 * fade})`;
+      ctx.lineWidth = Math.max(1.5, arc.width * 0.2);
+      ctx.beginPath();
+      ctx.arc(arc.x, arc.y, innerR, start, end);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  function drawSwampPools(ctx, pools, now) {
+    for (const p of pools) {
+      const life = clamp7((now - p.bornAt) / Math.max(1e-3, p.expiresAt - p.bornAt), 0, 1);
+      const fade = 1 - life * 0.75;
+      const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(now * 5 + p.x * 0.01 + p.y * 0.01));
+      const R = p.r;
+      if (p.frogMudPool) {
+        ctx.save();
+        const grow = frogMudPoolGrowScale(p.bornAt, now);
+        const drawR = Math.max(2, R * grow);
+        const g = ctx.createRadialGradient(p.x, p.y - drawR * 0.12, drawR * 0.06, p.x, p.y, drawR);
+        g.addColorStop(0, `rgba(36, 44, 30, ${0.9 * fade})`);
+        g.addColorStop(0.28, `rgba(44, 36, 24, ${0.88 * fade})`);
+        g.addColorStop(0.55, `rgba(32, 40, 28, ${0.78 * fade})`);
+        g.addColorStop(0.78, `rgba(22, 30, 22, ${0.62 * fade})`);
+        g.addColorStop(0.94, `rgba(16, 22, 18, ${0.45 * fade})`);
+        g.addColorStop(1, `rgba(10, 14, 12, ${0.28 * fade})`);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, drawR, 0, TAU);
+        ctx.fillStyle = g;
+        ctx.fill();
+        const gSheen = ctx.createRadialGradient(
+          p.x - drawR * 0.22,
+          p.y - drawR * 0.28,
+          0,
+          p.x,
+          p.y,
+          drawR * 0.52
+        );
+        gSheen.addColorStop(0, `rgba(62, 54, 42, ${0.22 * fade})`);
+        gSheen.addColorStop(0.45, `rgba(40, 34, 26, ${0.12 * fade})`);
+        gSheen.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, drawR * 0.98, 0, TAU);
+        ctx.fillStyle = gSheen;
+        ctx.fill();
+        ctx.strokeStyle = `rgba(6, 8, 6, ${0.72 * fade})`;
+        ctx.lineWidth = 3.8;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(1.5, drawR - 1.2), 0, TAU);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(153, 27, 27, ${(0.62 + pulse * 0.18) * fade})`;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(1.2, drawR - 0.6), 0, TAU);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(254, 202, 202, ${0.14 * fade})`;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(1, drawR - 2.4), 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        drawCircle2(ctx, p.x, p.y, R, "#2d1f12", 0.5 * fade);
+        drawCircle2(ctx, p.x, p.y, R * 0.78, "#3f2f1e", (0.2 + 0.12 * pulse) * fade);
+        ctx.strokeStyle = `rgba(161, 98, 7, ${(0.45 + pulse * 0.2) * fade})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, R * (0.9 + 0.05 * pulse), 0, TAU);
+        ctx.stroke();
+      }
+    }
+  }
+  function drawSwampBlastBursts(ctx, bursts, now) {
+    for (const b of bursts) {
+      const t = clamp7((now - b.bornAt) / Math.max(1e-3, b.life), 0, 1);
+      const fade = 1 - t * 0.2;
+      if (b.frogWave) {
+        const ease = 1 - Math.pow(1 - t, 2.45);
+        const rr = b.r * (0.02 + 0.98 * ease);
+        const vis = Math.pow(Math.sin(Math.min(1, t / 0.9) * Math.PI), 0.75);
+        const aMul = vis * (0.88 + 0.12 * (1 - t));
+        ctx.save();
+        const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, Math.max(rr, 2));
+        g.addColorStop(0, `rgba(30, 44, 32, ${0.5 * aMul})`);
+        g.addColorStop(0.38, `rgba(48, 40, 28, ${0.4 * aMul})`);
+        g.addColorStop(0.72, `rgba(26, 38, 30, ${0.2 * aMul})`);
+        g.addColorStop(1, "rgba(8, 12, 10, 0)");
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, rr, 0, TAU);
+        ctx.fillStyle = g;
+        ctx.fill();
+        const edgeA = 0.55 * aMul * (0.35 + 0.65 * ease);
+        ctx.strokeStyle = `rgba(140, 28, 28, ${0.82 * edgeA})`;
+        ctx.lineWidth = 1.6 + (1 - ease) * 1.4;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, rr, 0, TAU);
+        ctx.stroke();
+        const rippleStart = 0.58;
+        if (t >= rippleStart) {
+          const rip = clamp7((t - rippleStart) / (1 - rippleStart), 0, 1);
+          const decay = (1 - rip) * (1 - rip);
+          const baseR = b.r;
+          for (let ring = 0; ring < 3; ring++) {
+            const lag = ring * 0.16;
+            const uRing = clamp7((rip - lag) / Math.max(1e-3, 1 - lag), 0, 1);
+            if (uRing <= 0.02) continue;
+            const ringR = baseR * (0.72 + 0.32 * uRing);
+            const ra = 0.38 * decay * (1 - ring * 0.18);
+            ctx.strokeStyle = `rgba(48, 36, 26, ${ra})`;
+            ctx.lineWidth = 5 + (1 - uRing) * 6;
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, ringR, 0, TAU);
+            ctx.stroke();
+          }
+          ctx.strokeStyle = `rgba(28, 44, 32, ${0.22 * decay})`;
+          ctx.lineWidth = 3.2;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, baseR * (0.68 + 0.36 * rip), 0, TAU);
+          ctx.stroke();
+          ctx.strokeStyle = `rgba(185, 45, 45, ${0.2 * decay})`;
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, baseR * (0.82 + 0.28 * rip), 0, TAU);
+          ctx.stroke();
+        }
+        ctx.restore();
+      } else {
+        const rr = b.r * (0.2 + 0.95 * t);
+        drawCircle2(ctx, b.x, b.y, rr, "#a16207", 0.22 * fade);
+        ctx.strokeStyle = `rgba(217, 119, 6, ${0.75 * fade})`;
+        ctx.lineWidth = 3.2 - t * 1.8;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, rr, 0, TAU);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(254, 243, 199, ${0.5 * fade})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, rr * (0.72 + 0.15 * (1 - t)), 0, TAU);
+        ctx.stroke();
       }
     }
   }
@@ -7877,7 +9162,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
   function drawSpawnerChargeClocks(ctx, hunters, now) {
     for (const h of hunters) {
-      if (h.type !== "spawner" && h.type !== "airSpawner") continue;
+      if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") continue;
+      if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
       if (now >= h.spawnDelayUntil) continue;
       const delayTotal = h.type === "airSpawner" ? 2.1 : 2;
       const elapsedSinceBorn = now - h.bornAt;
@@ -7886,8 +9172,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const clockR = h.r + 28 + remaining * 6;
       const pulse = 1 + Math.sin(now * 10) * 0.04;
       const alpha = 0.1 + remaining * 0.18;
-      const ringCol = h.type === "airSpawner" ? "#a78bfa" : "#fb7185";
-      const handCol = h.type === "airSpawner" ? "#7c3aed" : "#f43f5e";
+      const ringCol = h.type === "airSpawner" ? "#a78bfa" : h.type === "cryptSpawner" ? "#e2e8f0" : "#fb7185";
+      const handCol = h.type === "airSpawner" ? "#7c3aed" : h.type === "cryptSpawner" ? "#cbd5e1" : "#f43f5e";
       ctx.save();
       ctx.translate(h.x, h.y);
       ctx.globalAlpha = alpha;
@@ -7911,6 +9197,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
   function drawHunterLifeBars(ctx, hunters, now) {
     for (const h of hunters) {
+      if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
       const total = h.life || Math.max(1e-4, h.dieAt - h.bornAt);
       const lifeLeft = clamp7((h.dieAt - now) / total, 0, 1);
       const barW = h.r * 2.6;
@@ -7932,6 +9219,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
 
   // src/escape/Hunters/hunterRuntime.js
+  var SWAMP_FROG_BLAST_R = 105;
+  var SWAMP_FROG_LAND_EXPLODE_DIST = SWAMP_FROG_BLAST_R + 24;
   function createHunterRuntime(deps) {
     const {
       getSimElapsed,
@@ -7955,11 +9244,14 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       isWorldPointOnSafehouseBarrierDisk: safehouseBarrierDep,
       clampHunterOutsideSafehouseDisk: clampSafehouseDep,
       isWorldPointOnForgeRouletteBarrierTile: forgeRouletteBarrierDep,
+      getActivePathId: getActivePathIdDep,
       getInventory: getInventoryDep,
       getPlayerUntargetableUntil: getPlayerUntargetableUntilDep,
       pickRogueHunterTarget: pickRogueHunterTargetDep,
       collidesValiantEnemyShockField: collidesValiantEnemyShockFieldDep,
-      getBulwarkPlantedFlag: getBulwarkPlantedFlagDep
+      getBulwarkPlantedFlag: getBulwarkPlantedFlagDep,
+      getDebugHunterTypeFilter: getDebugHunterTypeFilterDep,
+      getSwampBootlegColourblind: getSwampBootlegColourblindDep
     } = deps;
     const worldToHex = worldToHexDep ?? (() => ({ q: 0, r: 0 }));
     const hexToWorld = hexToWorldDep ?? ((q, r) => ({ x: 0, y: 0 }));
@@ -7974,10 +9266,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const clampHunterOutsideSafehouseDisk = clampSafehouseDep ?? (() => {
     });
     const isWorldPointOnForgeRouletteBarrierTile = forgeRouletteBarrierDep ?? (() => false);
+    const getActivePathId = getActivePathIdDep ?? (() => null);
     const getInventory = getInventoryDep ?? (() => ({}));
     const getPlayerUntargetableUntil = getPlayerUntargetableUntilDep ?? (() => 0);
     const pickRogueHunterTarget = pickRogueHunterTargetDep ?? null;
     const getBulwarkPlantedFlag = getBulwarkPlantedFlagDep ?? (() => null);
+    const getDebugHunterTypeFilter = getDebugHunterTypeFilterDep ?? (() => null);
+    const getSwampBootlegColourblind2 = getSwampBootlegColourblindDep ?? (() => false);
+    const GHOST_PRED_OVERSHOOT_PX = 40;
+    const GHOST_DASH_LEN_MIN = 72;
     const entities = {
       /** @type {any[]} */
       hunters: [],
@@ -7988,7 +9285,13 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       /** @type {any[]} */
       dangerZones: [],
       /** @type {any[]} */
-      bullets: []
+      bullets: [],
+      /** @type {any[]} */
+      fireArcs: [],
+      /** @type {any[]} */
+      swampPools: [],
+      /** @type {any[]} */
+      swampBursts: []
     };
     let suppressRangedAttacksNow = false;
     let nextLaserBeamDamageId = 1;
@@ -8000,6 +9303,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       spawnScheduled: []
     };
     let spawnDifficultyAnchorSurvival = 0;
+    let boneGhostNextSpawnAt = null;
     function relDifficultySurvivalSec() {
       return Math.max(0, getDifficultyClockSec() - spawnDifficultyAnchorSurvival);
     }
@@ -8032,6 +9336,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     function spades13AuraEnemyDtMult() {
       return 1;
+    }
+    function bonePathActive() {
+      return getActivePathId() === "bone";
+    }
+    function boneEnemySpeedMult() {
+      return bonePathActive() ? 1.2 : 1;
     }
     function collidesAnyObstacle(circle) {
       for (const obstacle of getObstacles()) {
@@ -8142,7 +9452,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       const target = player;
       if (!getDecoys().length) return target;
-      if (hunter.type === "chaser" || hunter.type === "fast") {
+      if (hunter.type === "chaser" || hunter.type === "frogChaser" || hunter.type === "fast") {
         return nearestDecoy(hunter) || target;
       }
       if (hunter.type === "cutter") {
@@ -8156,7 +9466,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const player = getPlayer();
       for (const h of entities.hunters) {
         if (h === excludedHunter) continue;
-        if (h.type === "spawner" || h.type === "airSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" && h.cryptDisguised)
+          continue;
         if (elapsed < (h.stunnedUntil || 0)) continue;
         if (hasLineOfSight(h, player)) return true;
       }
@@ -8193,20 +9504,40 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (er < 0.055) return "airSpawner";
         if (er < 0.11) return "laserBlue";
       }
+      const boneCrypt = bonePathActive() && getRunLevel() >= 2;
+      const cryptChance = boneCrypt ? 0.22 + 0.55 * getDangerRamp01() : 0;
+      if (boneCrypt && Math.random() < cryptChance) return "cryptSpawner";
       const roll = Math.random();
-      if (roll < 0.25) return "chaser";
+      if (roll < 0.25) return getActivePathId() === "swamp" ? "frogChaser" : "chaser";
       if (roll < 0.44) return "cutter";
-      if (roll < 0.61) return "sniper";
+      if (roll < 0.61) {
+        const swampL3Plus = getActivePathId() === "swamp" && getRunLevel() >= 2;
+        if (swampL3Plus && Math.random() > SWAMP_L3PLUS_SNIPER_WAVE_KEEP_FRACTION) {
+          const r2 = Math.random();
+          if (r2 < 0.45) return "frogChaser";
+          if (r2 < 0.8) return "cutter";
+          return "ranged";
+        }
+        return "sniper";
+      }
       if (roll < 0.78) return "ranged";
       if (roll < 0.93) return "laser";
+      if (boneCrypt) return "cryptSpawner";
       return "spawner";
+    }
+    function pickWaveHunterType() {
+      const forced = getDebugHunterTypeFilter();
+      if (typeof forced === "string" && forced) return forced;
+      return pickRegularHunterType();
     }
     function hunterRadiusForType(type) {
       if (type === "sniper") return 12;
-      if (type === "spawner") return 18;
+      if (type === "ghost") return 14;
+      if (type === "spawner" || type === "cryptSpawner") return 18;
       if (type === "airSpawner") return 26;
       if (type === "laser" || type === "laserBlue") return 13;
       if (type === "fast") return 9;
+      if (type === "frogChaser") return 11;
       return 10;
     }
     function randomOpenPointAround(cx, cy, radiusMin, radiusMax, r, attempts = 40, opts = {}) {
@@ -8244,6 +9575,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const ideal = randomOpenPointAround(h.x, h.y, h.r + 12, h.r + 40, fastR, 56, { excludeSpecialHex: true });
       return nearestLegalPointForSmallHunter(ideal.x, ideal.y, fastR);
     }
+    function scheduleNextBoneGhostSpawn(fromElapsed, isRespawn) {
+      if (isRespawn) boneGhostNextSpawnAt = fromElapsed + rand(1.5, 8);
+      else if (getRunLevel() >= 2) boneGhostNextSpawnAt = fromElapsed + 0.02;
+      else boneGhostNextSpawnAt = fromElapsed + 60;
+    }
     function spawnHunter(type, customX, customY, opts) {
       const elapsed = getSimElapsed();
       const player = getPlayer();
@@ -8271,6 +9607,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         lastShotAt = elapsed + rand(0.3, 1.1);
         h.chaserDashPhase = "chase";
         h.chaserDashNextReady = elapsed + rand(0.35, 1);
+      } else if (type === "frogChaser") {
+        r = 11;
+        life = 8;
+        lastShotAt = elapsed + rand(0.3, 1.1);
+        h.chaserDashPhase = "chase";
+        h.chaserDashNextReady = elapsed;
       } else if (type === "cutter") {
         r = 10;
         life = 8;
@@ -8305,13 +9647,26 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         r = 9;
         life = 2;
         lastShotAt = elapsed + 999;
+        if (opts?.boneSwarmPhasing) h.boneSwarmPhasing = true;
+        if (opts?.swampMudSpawn) h.swampMudSpawn = true;
       } else if (type === "spawner") {
         r = 18;
         life = 8;
         lastShotAt = elapsed + 999;
-        h.spawnDelayUntil = elapsed + 2;
+        h.spawnDelayUntil = elapsed + (bonePathActive() ? 0.4 : 2);
         h.spawnActiveUntil = elapsed + 8;
         h.nextSwarmAt = h.spawnDelayUntil;
+        h.swarmInterval = 0.6;
+        h.swarmN = 5;
+        h.fastR = 10;
+      } else if (type === "cryptSpawner") {
+        r = 18;
+        life = 20;
+        lastShotAt = elapsed + 999;
+        h.cryptDisguised = true;
+        h.spawnDelayUntil = elapsed + 9999;
+        h.spawnActiveUntil = elapsed + 9999;
+        h.nextSwarmAt = elapsed + 9999;
         h.swarmInterval = 0.6;
         h.swarmN = 5;
         h.fastR = 10;
@@ -8325,6 +9680,21 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         h.swarmInterval = 0.62;
         h.swarmN = 5;
         h.fastR = 10;
+      } else if (type === "ghost") {
+        r = 14;
+        life = 20;
+        lastShotAt = elapsed + 999;
+        h.ghostPhase = "windup1";
+        h.ghostWindupEnd = elapsed + 0.76;
+        h.ghostDash1Total = 0;
+        h.ghostDash2Total = 0;
+        h.ghostDashSpeed = 980;
+        h.ghostDashDir = { x: 1, y: 0 };
+        h.ghostDamageLockUntil = 0;
+        h.opacity = 1;
+        h.motionTrail = [];
+        h.ghostAnchorPlayerX = player.x;
+        h.ghostAnchorPlayerY = player.y;
       }
       h.r = r;
       h.life = life;
@@ -8348,7 +9718,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (customX != null && customY != null) {
         h.x = customX;
         h.y = customY;
-        if (type === "spawner" || type === "airSpawner") {
+        if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
           for (let attempt = 0; attempt < 56; attempt++) {
             ejectSpawnerHunterFromSpecialHexFootprint(h);
             const circ = { x: h.x, y: h.y, r: h.r };
@@ -8363,7 +9733,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         entities.hunters.push(h);
         return;
       }
-      if (type === "spawner" || type === "airSpawner") {
+      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
         for (let attempt = 0; attempt < 64; attempt++) {
           const ang2 = Math.random() * Math.PI * 2;
           const d2 = rand(320, 760);
@@ -8380,7 +9750,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const d = rand(320, 760);
       h.x = player.x + Math.cos(ang) * d;
       h.y = player.y + Math.sin(ang) * d;
-      if (type === "spawner" || type === "airSpawner") ejectSpawnerHunterFromSpecialHexFootprint(h);
+      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner")
+        ejectSpawnerHunterFromSpecialHexFootprint(h);
       relocateIfForbidden();
       entities.hunters.push(h);
     }
@@ -8390,7 +9761,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const player = getPlayer();
       for (let i = 0; i < nJobs; i++) {
         jobs.push(() => {
-          const type = pickRegularHunterType();
+          const type = pickWaveHunterType();
           const ang = Math.random() * Math.PI * 2;
           const d = rand(300, 780);
           const x = player.x + Math.cos(ang) * d;
@@ -8462,17 +9833,22 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           h.lastShotAt = elapsed;
           continue;
         }
+        const firePath = getActivePathId() === "fire";
+        const zoneR = firePath ? 54 : 28;
+        const lingerDur = firePath ? 4.6 : 1.8;
+        const tickInterval = firePath ? 0.22 : 0.3;
         entities.dangerZones.push({
           x: aimX,
           y: aimY,
-          r: 28,
+          r: zoneR,
           bornAt: elapsed,
           detonateAt: elapsed + windup,
-          lingerUntil: elapsed + windup + 1.8,
+          lingerUntil: elapsed + windup + lingerDur,
           nextTickAt: elapsed + windup + 0.25,
-          tickInterval: 0.3,
+          tickInterval,
           windup,
-          exploded: false
+          exploded: false,
+          firePath
         });
         const dist = Math.hypot(aimX - h.x, aimY - h.y) || 1;
         entities.bullets.push({
@@ -8511,14 +9887,29 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           zone.exploded = true;
           if (!hitDecoyIfAny(zone, zone.r, { artilleryKind: "detonation", damage: 1 })) {
             const rr = zone.r + player.r;
-            if (distSq3(zone, player) <= rr * rr) damagePlayer(2, { sourceX: zone.x, sourceY: zone.y });
+            if (distSq3(zone, player) <= rr * rr) {
+              damagePlayer(2, {
+                sourceX: zone.x,
+                sourceY: zone.y,
+                ...zone.firePath ? { fireApplyIgnite: true } : {}
+              });
+            }
+          }
+          if (getActivePathId() === "swamp" && getRunLevel() >= 2 && !zone.firePath) {
+            applySwampFrogExplosionAt(zone.x, zone.y, elapsed);
           }
         }
         if (zone.exploded && elapsed < (zone.lingerUntil ?? zone.detonateAt) && elapsed >= (zone.nextTickAt ?? Infinity)) {
           zone.nextTickAt += zone.tickInterval ?? 0.3;
           if (!hitDecoyIfAny(zone, zone.r * 0.92, { artilleryKind: "linger" })) {
             const rr = zone.r * 0.92 + player.r;
-            if (distSq3(zone, player) <= rr * rr) damagePlayer(1, { sourceX: zone.x, sourceY: zone.y });
+            if (distSq3(zone, player) <= rr * rr) {
+              damagePlayer(1, {
+                sourceX: zone.x,
+                sourceY: zone.y,
+                ...zone.firePath ? { fireApplyIgnite: true } : {}
+              });
+            }
           }
         }
         const zu = zone.windup != null ? zone.windup : 0.8;
@@ -8526,11 +9917,75 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (elapsed - zone.bornAt > lingerTotal) entities.dangerZones.splice(i, 1);
       }
     }
+    function applySwampFrogExplosionAt(wx, wy, elapsed) {
+      const player = getPlayer();
+      const blastR = SWAMP_FROG_BLAST_R;
+      const center = { x: wx, y: wy };
+      if (!hitDecoyIfAny(center, blastR, { damage: 1 })) {
+        const rr = blastR + player.r;
+        if (distSq3(center, player) <= rr * rr) {
+          damagePlayer(1, {
+            sourceX: wx,
+            sourceY: wy,
+            swampApplyInfection: true
+          });
+        }
+      }
+      entities.swampPools.push({
+        x: wx,
+        y: wy,
+        r: blastR,
+        bornAt: elapsed,
+        expiresAt: elapsed + 4,
+        nextTickAt: elapsed + 0.22,
+        tickInterval: 0.48,
+        frogMudPool: true
+      });
+      entities.swampBursts.push({
+        x: wx,
+        y: wy,
+        r: blastR,
+        bornAt: elapsed,
+        life: FROG_SPLASH_GROW_SEC,
+        frogWave: true
+      });
+      const fastR = 10;
+      const swarmN = 5;
+      for (let i = 0; i < swarmN; i++) {
+        const open = randomOpenPointAround(wx, wy, 40, 78, fastR, 34, { excludeSpecialHex: true });
+        spawnHunter("fast", open.x, open.y, { swampMudSpawn: true });
+      }
+    }
+    function triggerSwampFrogExplosion(h, elapsed) {
+      applySwampFrogExplosionAt(h.x, h.y, elapsed);
+      h._removeNow = true;
+    }
     function moveHunters(dt) {
       const elapsed = getSimElapsed();
       const player = getPlayer();
       for (const h of entities.hunters) {
-        if (h.type === "spawner") continue;
+        if (h.type === "cryptSpawner" && h.cryptDisguised) {
+          const ddx = h.x - player.x;
+          const ddy = h.y - player.y;
+          if (ddx * ddx + ddy * ddy > 160 * 160) continue;
+          h.cryptDisguised = false;
+          h.life = 3;
+          h.dieAt = elapsed + 3;
+          h.cryptRevealStartAt = elapsed;
+          h.cryptRevealEndAt = elapsed + 0.35;
+          h.cryptRevealU = 0;
+          h.spawnDelayUntil = elapsed;
+          h.spawnActiveUntil = elapsed + 3;
+          h.nextSwarmAt = elapsed;
+          h.fireGlow = true;
+        }
+        if (h.type === "cryptSpawner" && !h.cryptDisguised) {
+          const t0 = Number(h.cryptRevealStartAt ?? 0);
+          const t1 = Number(h.cryptRevealEndAt ?? 0);
+          if (t1 > t0) h.cryptRevealU = clamp7((elapsed - t0) / Math.max(1e-4, t1 - t0), 0, 1);
+          else h.cryptRevealU = 1;
+        }
+        if (h.type === "spawner" || h.type === "cryptSpawner") continue;
         if (elapsed < (h.stunnedUntil || 0)) continue;
         const spDt = dt * spades13AuraEnemyDtMult();
         if (h.type === "airSpawner") {
@@ -8540,7 +9995,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           const am = runLevelEnemyAccelMult();
           const airSteer = Math.min(0.88, 0.78 * am);
           const airInertia = 1 - airSteer;
-          const airSpeed = AIR_SPAWNER_CHASE_SPEED * sm2 * midgameEnemySpeedMult();
+          const airSpeed = AIR_SPAWNER_CHASE_SPEED * sm2 * midgameEnemySpeedMult() * boneEnemySpeedMult();
           h.dir.x = h.dir.x * airInertia + desired2.x * airSteer;
           h.dir.y = h.dir.y * airInertia + desired2.y * airSteer;
           const alen = Math.hypot(h.dir.x, h.dir.y) || 1;
@@ -8550,6 +10005,128 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           ejectSpawnerHunterFromSpecialHexFootprint(h);
           continue;
         }
+        if (h.type === "ghost") {
+          const target = pickTargetForHunter(h);
+          const ghostSpeed = h.ghostDashSpeed * boneEnemySpeedMult();
+          const trail = h.motionTrail || (h.motionTrail = []);
+          h.ghostAura = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(elapsed * 9 + h.x * 0.02));
+          for (let i = trail.length - 1; i >= 0; i--) {
+            trail[i].alpha *= 0.78;
+            if (trail[i].alpha < 0.05) trail.splice(i, 1);
+          }
+          if (h.ghostPhase === "windup1") {
+            const ax = Number(h.ghostAnchorPlayerX ?? player.x);
+            const ay = Number(h.ghostAnchorPlayerY ?? player.y);
+            h.x += player.x - ax;
+            h.y += player.y - ay;
+            h.ghostAnchorPlayerX = player.x;
+            h.ghostAnchorPlayerY = player.y;
+          }
+          if (h.ghostPhase === "windup1") {
+            const lead = 0.34;
+            const tx = target.x + (target.velX ?? 0) * lead;
+            const ty = target.y + (target.velY ?? 0) * lead;
+            h.ghostDashDir = vectorToTarget(h, { x: tx, y: ty });
+            h.dir = { x: h.ghostDashDir.x, y: h.ghostDashDir.y };
+            h.opacity = 1;
+            if (elapsed >= (h.ghostWindupEnd ?? 0)) {
+              const reach = Math.hypot(tx - h.x, ty - h.y);
+              h.ghostDash1Total = Math.max(GHOST_DASH_LEN_MIN, reach + GHOST_PRED_OVERSHOOT_PX);
+              h.ghostTelegraphLineLen = h.ghostDash1Total;
+              h.ghostPhase = "telegraph1";
+              h.ghostTelegraphStart = elapsed;
+              h.ghostTelegraphDur = 0.18;
+              h.ghostTelegraphU = 0;
+            }
+            continue;
+          }
+          if (h.ghostPhase === "telegraph1") {
+            const dur = Math.max(1e-4, h.ghostTelegraphDur ?? 0.18);
+            h.ghostTelegraphU = Math.min(1, (elapsed - (h.ghostTelegraphStart ?? elapsed)) / dur);
+            h.opacity = 0.86 + 0.14 * Math.sin(h.ghostTelegraphU * Math.PI);
+            if (h.ghostTelegraphU >= 1 - 1e-5) {
+              h.ghostPhase = "dash1";
+              h.ghostDashRemain = Math.max(1, h.ghostDash1Total || GHOST_DASH_LEN_MIN);
+              h.opacity = 1;
+            }
+            continue;
+          }
+          if (h.ghostPhase === "dash1") {
+            const step = Math.min(ghostSpeed * spDt, h.ghostDashRemain ?? 0);
+            const prevX = h.x;
+            const prevY = h.y;
+            h.x += h.ghostDashDir.x * step;
+            h.y += h.ghostDashDir.y * step;
+            h.ghostDashRemain -= step;
+            trail.push({ x: prevX, y: prevY, r: h.r * 0.95, alpha: 0.55 });
+            if (elapsed >= (h.ghostDamageLockUntil ?? 0)) {
+              const hitDist = pointToSegmentDistance(player.x, player.y, prevX, prevY, h.x, h.y);
+              if (hitDist <= player.r + h.r * 0.9) {
+                damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+                h.ghostDamageLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
+              }
+            }
+            if ((h.ghostDashRemain ?? 0) <= 1e-4) {
+              h.ghostPhase = "pause2";
+              h.ghostPause2End = elapsed + 0.26;
+            }
+            continue;
+          }
+          if (h.ghostPhase === "pause2") {
+            h.opacity = 1;
+            if (elapsed >= (h.ghostPause2End ?? 0)) {
+              const lead2 = 0.18;
+              const tx = target.x + (target.velX ?? 0) * lead2;
+              const ty = target.y + (target.velY ?? 0) * lead2;
+              h.ghostDashDir = vectorToTarget(h, { x: tx, y: ty });
+              h.dir = { x: h.ghostDashDir.x, y: h.ghostDashDir.y };
+              const reach2 = Math.hypot(tx - h.x, ty - h.y);
+              h.ghostDash2Total = Math.max(GHOST_DASH_LEN_MIN, reach2 + GHOST_PRED_OVERSHOOT_PX);
+              h.ghostTelegraphLineLen = h.ghostDash2Total;
+              h.ghostPhase = "telegraph2";
+              h.ghostTelegraphStart = elapsed;
+              h.ghostTelegraphDur = 0.13;
+              h.ghostTelegraphU = 0;
+            }
+            continue;
+          }
+          if (h.ghostPhase === "telegraph2") {
+            const dur = Math.max(1e-4, h.ghostTelegraphDur ?? 0.13);
+            h.ghostTelegraphU = Math.min(1, (elapsed - (h.ghostTelegraphStart ?? elapsed)) / dur);
+            h.opacity = 0.84 + 0.16 * Math.sin(h.ghostTelegraphU * Math.PI);
+            if (h.ghostTelegraphU >= 1 - 1e-5) {
+              h.ghostPhase = "dash2";
+              h.ghostDashRemain = Math.max(1, h.ghostDash2Total || GHOST_DASH_LEN_MIN);
+              h.ghostDash2Start = h.ghostDashRemain;
+              h.opacity = 1;
+            }
+            continue;
+          }
+          if (h.ghostPhase === "dash2") {
+            const start = Math.max(1, h.ghostDash2Start ?? Math.max(1, h.ghostDash2Total || 1));
+            const step = Math.min(ghostSpeed * spDt, h.ghostDashRemain ?? 0);
+            const prevX = h.x;
+            const prevY = h.y;
+            h.x += h.ghostDashDir.x * step;
+            h.y += h.ghostDashDir.y * step;
+            h.ghostDashRemain -= step;
+            const traveledU = 1 - (h.ghostDashRemain ?? 0) / start;
+            h.opacity = clamp7(1 - traveledU, 0, 1);
+            trail.push({ x: prevX, y: prevY, r: h.r * 0.95, alpha: 0.48 * h.opacity });
+            if (traveledU <= 0.75 && elapsed >= (h.ghostDamageLockUntil ?? 0)) {
+              const hitDist = pointToSegmentDistance(player.x, player.y, prevX, prevY, h.x, h.y);
+              if (hitDist <= player.r + h.r * 0.9) {
+                damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+                h.ghostDamageLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
+              }
+            }
+            if ((h.ghostDashRemain ?? 0) <= 1e-4) {
+              h._removeNow = true;
+              scheduleNextBoneGhostSpawn(elapsed, true);
+            }
+            continue;
+          }
+        }
         const lifeSpan = h.life || Math.max(1e-4, h.dieAt - h.bornAt);
         const age = clamp7((elapsed - h.bornAt) / lifeSpan, 0, 1);
         const speedFactor = 1 + age * HUNTER_SPEED_AGE_COEFF;
@@ -8557,7 +10134,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const sm = runLevelEnemySpeedMult();
         const steerW = Math.min(0.42, 0.26 * runLevelEnemyAccelMult());
         const inertiaW = 1 - steerW;
-        let speed = baseSpeed * sm * speedFactor * midgameEnemySpeedMult();
+        let speed = baseSpeed * sm * speedFactor * midgameEnemySpeedMult() * boneEnemySpeedMult();
         let desired;
         if (h.type === "cutter") {
           const target = pickTargetForHunter(h);
@@ -8599,6 +10176,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                 continue;
               }
               const laserDamageId = nextLaserBeamDamageId++;
+              const bone = bonePathActive();
               entities.laserBeams.push({
                 x1: aim.x1,
                 y1: aim.y1,
@@ -8609,14 +10187,25 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                 warning: false,
                 active: true,
                 blueLaser: isBlue,
-                damageId: laserDamageId
+                damageId: laserDamageId,
+                ...bone && !isBlue ? { boneGhostBeam: true } : {},
+                ...bone && isBlue ? { boneGhostBlueBeam: true } : {}
               });
               if (!hitDecoyAlongSegment(aim.x1, aim.y1, aim.x2, aim.y2, 5, { laserOneShotId: laserDamageId })) {
                 const hitDist = pointToSegmentDistance(player.x, player.y, aim.x1, aim.y1, aim.x2, aim.y2);
                 if (hitDist <= player.r + 5) {
                   damagePlayer(
                     2,
-                    isBlue ? { laserBlueSlow: true, sourceX: aim.x1, sourceY: aim.y1 } : { sourceX: aim.x1, sourceY: aim.y1 }
+                    isBlue ? {
+                      laserBlueSlow: true,
+                      sourceX: aim.x1,
+                      sourceY: aim.y1,
+                      swampDamageInstanceId: `laser-${laserDamageId}`
+                    } : {
+                      sourceX: aim.x1,
+                      sourceY: aim.y1,
+                      swampDamageInstanceId: `laser-${laserDamageId}`
+                    }
                   );
                 }
               }
@@ -8633,6 +10222,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             h.laserAim = { x1: h.x, y1: h.y, x2: endpoint.x, y2: endpoint.y };
             h.laserState = "aim";
             h.aimStartedAt = elapsed;
+            const boneW = bonePathActive();
             entities.laserBeams.push({
               x1: h.laserAim.x1,
               y1: h.laserAim.y1,
@@ -8642,7 +10232,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               expiresAt: elapsed + h.laserWarning,
               warning: true,
               active: false,
-              blueLaser: isBlue
+              blueLaser: isBlue,
+              ...boneW && !isBlue ? { boneGhostBeam: true } : {},
+              ...boneW && isBlue ? { boneGhostBlueBeam: true } : {}
             });
             continue;
           }
@@ -8694,6 +10286,65 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             h.dir.y = toT.y;
             continue;
           }
+        } else if (h.type === "frogChaser") {
+          const target = pickTargetForHunter(h);
+          const toT = vectorToTarget(h, target);
+          const dist = Math.hypot(target.x - h.x, target.y - h.y);
+          if (h.chaserDashPhase === "swampExplodeWindup") {
+            if (elapsed >= (h.swampExplodeAt ?? 0)) triggerSwampFrogExplosion(h, elapsed);
+            continue;
+          }
+          if (h.chaserDashPhase === "windup") {
+            h.dir.x = toT.x;
+            h.dir.y = toT.y;
+            if (elapsed >= h.chaserDashWindupEnd) {
+              h.chaserDashPhase = "dashing";
+              h.chaserDashDir = { x: toT.x, y: toT.y };
+              h.chaserDashDist = rand(85, 122);
+            } else {
+              continue;
+            }
+          }
+          if (h.chaserDashPhase === "dashing") {
+            const dashSpeed = 356 * sm * speedFactor * midgameEnemySpeedMult();
+            const stepLen = Math.min(dashSpeed * spDt, 21);
+            const nx = h.x + h.chaserDashDir.x * stepLen;
+            const ny = h.y + h.chaserDashDir.y * stepLen;
+            const test = { x: nx, y: ny, r: h.r };
+            const landChase = () => {
+              h.chaserDashPhase = "chase";
+              h.chaserDashNextReady = elapsed + rand(0.72, 1.38);
+            };
+            const tryExplode = () => {
+              const snap = Math.hypot(target.x - h.x, target.y - h.y);
+              if (snap <= SWAMP_FROG_LAND_EXPLODE_DIST && hasLineOfSight({ x: h.x, y: h.y, r: h.r }, target)) {
+                h.chaserDashPhase = "swampExplodeWindup";
+                h.swampExplodeAt = elapsed + 0.07;
+              } else landChase();
+            };
+            if (outOfBoundsCircle(test) || collidesAnyObstacle(test) || !!collidesValiantEnemyShockFieldDep?.(test, elapsed)) {
+              landChase();
+            } else {
+              h.x = nx;
+              h.y = ny;
+              h.chaserDashDist -= stepLen;
+              if (h.chaserDashDist <= 0) tryExplode();
+            }
+            continue;
+          }
+          if (h.chaserDashPhase === "chase") {
+            h.dir.x = toT.x;
+            h.dir.y = toT.y;
+            const canHop = elapsed >= (h.chaserDashNextReady ?? 0);
+            if (canHop) {
+              h.chaserDashPhase = "windup";
+              h.chaserDashWindupEnd = elapsed + 0.14;
+              h.dir.x = toT.x;
+              h.dir.y = toT.y;
+            }
+            continue;
+          }
+          continue;
         } else {
           const target = pickTargetForHunter(h);
           desired = vectorToTarget(h, target);
@@ -8704,10 +10355,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const dlen = Math.hypot(h.dir.x, h.dir.y) || 1;
         h.dir.x /= dlen;
         h.dir.y /= dlen;
-        moveCircleWithCollisions(h, h.dir.x * speed, h.dir.y * speed, spDt, { blockValiantEnemyShockFields: true });
+        moveCircleWithCollisions(h, h.dir.x * speed, h.dir.y * speed, spDt, {
+          blockValiantEnemyShockFields: true,
+          ignoreObstacles: !!h.boneSwarmPhasing
+        });
       }
       for (const h of entities.hunters) {
         clampHunterOutsideSafehouseDisk(h);
+      }
+      for (let i = entities.hunters.length - 1; i >= 0; i--) {
+        if (entities.hunters[i]._removeNow) entities.hunters.splice(i, 1);
       }
     }
     function updateRangedAttackers(dt) {
@@ -8722,16 +10379,36 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         h.lastShotAt = elapsed;
         const to = vectorToTarget(h, target);
         const speed = (h.shotSpeed || 360) * runLevelEnemySpeedMult() * midgameEnemySpeedMult();
-        entities.projectiles.push({
-          x: h.x,
-          y: h.y,
-          vx: to.x * speed,
-          vy: to.y * speed,
-          r: 3,
-          bornAt: elapsed,
-          life: 1.25,
-          damage: 1
-        });
+        const firePath = getActivePathId() === "fire";
+        if (firePath) {
+          const dist = Math.hypot(target.x - h.x, target.y - h.y) || 1;
+          entities.fireArcs.push({
+            x: h.x,
+            y: h.y,
+            a: Math.atan2(to.y, to.x),
+            halfA: Math.PI / 24,
+            // +/- 7.5deg (15deg total arc angle).
+            radius: 8,
+            width: 20,
+            speed: 380,
+            maxRadius: Math.max(220, dist + 28),
+            bornAt: elapsed,
+            life: 0.96,
+            nextHitAt: elapsed,
+            fireApplyIgnite: true
+          });
+        } else {
+          entities.projectiles.push({
+            x: h.x,
+            y: h.y,
+            vx: to.x * speed,
+            vy: to.y * speed,
+            r: 3,
+            bornAt: elapsed,
+            life: 1.25,
+            damage: 1
+          });
+        }
       }
       for (let i = entities.projectiles.length - 1; i >= 0; i--) {
         const p = entities.projectiles[i];
@@ -8740,6 +10417,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const prevY = p.y;
         p.x += p.vx * dt * sp;
         p.y += p.vy * dt * sp;
+        if (p.fireCone && p.rEnd != null) {
+          const ageU = clamp7((elapsed - p.bornAt) / Math.max(1e-3, p.life), 0, 1);
+          p.r = 4 + (p.rEnd - 4) * ageU;
+        }
         let hitBarrier = false;
         for (let s = 0; s <= 5; s++) {
           const u = s / 5;
@@ -8777,18 +10458,100 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         }
         const rr = p.r + player.r;
         if (distSq3(p, player) <= rr * rr) {
-          damagePlayer(p.damage || 1, { sourceX: p.x, sourceY: p.y });
+          damagePlayer(p.damage || 1, {
+            sourceX: p.x,
+            sourceY: p.y,
+            ...p.fireApplyIgnite ? { fireApplyIgnite: true } : {}
+          });
           entities.projectiles.splice(i, 1);
         }
+      }
+    }
+    function updateSniperFireArcs(dt) {
+      if (!entities.fireArcs.length) return;
+      const elapsed = getSimElapsed();
+      const player = getPlayer();
+      for (let i = entities.fireArcs.length - 1; i >= 0; i--) {
+        const arc = entities.fireArcs[i];
+        if (elapsed - arc.bornAt > arc.life) {
+          entities.fireArcs.splice(i, 1);
+          continue;
+        }
+        arc.radius += arc.speed * dt * spades13AuraEnemyDtMult();
+        if (arc.radius >= arc.maxRadius) {
+          entities.fireArcs.splice(i, 1);
+          continue;
+        }
+        const dx = player.x - arc.x;
+        const dy = player.y - arc.y;
+        const d = Math.hypot(dx, dy) || 1;
+        const ang = Math.atan2(dy, dx);
+        let delta = ang - arc.a;
+        while (delta > Math.PI) delta -= Math.PI * 2;
+        while (delta < -Math.PI) delta += Math.PI * 2;
+        const radialOk = Math.abs(d - arc.radius) <= arc.width + player.r;
+        const angularOk = Math.abs(delta) <= arc.halfA + 0.02;
+        if (radialOk && angularOk && elapsed >= (arc.nextHitAt ?? 0)) {
+          damagePlayer(1, {
+            sourceX: arc.x + Math.cos(arc.a) * arc.radius,
+            sourceY: arc.y + Math.sin(arc.a) * arc.radius,
+            ...arc.fireApplyIgnite ? { fireApplyIgnite: true } : {}
+          });
+          arc.nextHitAt = elapsed + 0.22;
+        }
+      }
+    }
+    function updateSwampPools() {
+      if (!entities.swampPools.length) return;
+      const elapsed = getSimElapsed();
+      const player = getPlayer();
+      for (let i = entities.swampPools.length - 1; i >= 0; i--) {
+        const p = entities.swampPools[i];
+        if (elapsed >= p.expiresAt) {
+          entities.swampPools.splice(i, 1);
+          continue;
+        }
+        if (elapsed < (p.nextTickAt ?? Infinity)) continue;
+        p.nextTickAt += p.tickInterval ?? 0.48;
+        const rPool = p.frogMudPool ? p.r * frogMudPoolGrowScale(p.bornAt, elapsed) : p.r;
+        const rr = rPool + player.r;
+        if (distSq3(p, player) <= rr * rr) {
+          damagePlayer(0, {
+            sourceX: p.x,
+            sourceY: p.y,
+            swampApplyInfection: true,
+            swampInfectionOnly: true
+          });
+        }
+      }
+    }
+    function getFrogMudPoolMoveMult(px, py, pr, elapsed) {
+      for (const p of entities.swampPools) {
+        if (!p.frogMudPool) continue;
+        if (elapsed >= p.expiresAt) continue;
+        const rPool = p.r * frogMudPoolGrowScale(p.bornAt, elapsed);
+        const rr = rPool + pr;
+        if (distSq3(p, { x: px, y: py }) <= rr * rr) return FROG_MUD_POOL_MOVE_MULT;
+      }
+      return 1;
+    }
+    function updateSwampBursts() {
+      if (!entities.swampBursts.length) return;
+      const elapsed = getSimElapsed();
+      for (let i = entities.swampBursts.length - 1; i >= 0; i--) {
+        const b = entities.swampBursts[i];
+        if (elapsed - b.bornAt > b.life) entities.swampBursts.splice(i, 1);
       }
     }
     function updateSpawners() {
       const elapsed = getSimElapsed();
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner") ejectSpawnerHunterFromSpecialHexFootprint(h);
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner")
+          ejectSpawnerHunterFromSpecialHexFootprint(h);
       }
       for (const h of entities.hunters) {
-        if (h.type !== "spawner" && h.type !== "airSpawner") continue;
+        if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") continue;
+        if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
         if (elapsed < h.spawnDelayUntil) continue;
         if (elapsed >= h.spawnActiveUntil) continue;
         if (elapsed < h.nextSwarmAt) continue;
@@ -8800,7 +10563,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           const swarmN = h.swarmN || 5;
           for (let i = 0; i < swarmN; i++) {
             const open = h.type === "airSpawner" ? resolveFastSpawnNearAirSpawner(h, fastR) : randomOpenPointAround(h.x, h.y, h.r + 16, h.r + 34, fastR, 25, { excludeSpecialHex: true });
-            spawnHunter("fast", open.x, open.y);
+            spawnHunter("fast", open.x, open.y, { boneSwarmPhasing: h.type === "cryptSpawner" });
           }
         }
       }
@@ -8813,7 +10576,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const halfArc = arcDeg * Math.PI / 360;
       const shieldR = player.r + 30;
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
         const dx = h.x - player.x;
         const dy = h.y - player.y;
         const d = Math.hypot(dx, dy) || 1;
@@ -8856,7 +10619,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           if (hitDist <= player.r + 5) {
             damagePlayer(
               2,
-              beam.blueLaser ? { laserBlueSlow: true, sourceX: beam.x1, sourceY: beam.y1 } : { sourceX: beam.x1, sourceY: beam.y1 }
+              beam.blueLaser ? {
+                laserBlueSlow: true,
+                sourceX: beam.x1,
+                sourceY: beam.y1,
+                swampDamageInstanceId: `laser-${beam.damageId ?? beam.bornAt ?? 0}`
+              } : {
+                sourceX: beam.x1,
+                sourceY: beam.y1,
+                swampDamageInstanceId: `laser-${beam.damageId ?? beam.bornAt ?? 0}`
+              }
             );
           }
         }
@@ -8891,7 +10663,41 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       if (elapsed >= spawnState.nextSpawnAt) advanceSpawnWave();
       for (let i = entities.hunters.length - 1; i >= 0; i--) {
-        if (elapsed >= entities.hunters[i].dieAt) entities.hunters.splice(i, 1);
+        const h = entities.hunters[i];
+        if (elapsed >= h.dieAt) {
+          if (h.type === "frogChaser") {
+            triggerSwampFrogExplosion(h, elapsed);
+            entities.hunters.splice(i, 1);
+            continue;
+          }
+          if (h.type === "ghost") scheduleNextBoneGhostSpawn(elapsed, true);
+          entities.hunters.splice(i, 1);
+        }
+      }
+      if (!bonePathActive()) {
+        for (let i = entities.hunters.length - 1; i >= 0; i--) {
+          if (entities.hunters[i].type === "ghost") entities.hunters.splice(i, 1);
+        }
+        boneGhostNextSpawnAt = null;
+        return;
+      }
+      let ghostAlive = false;
+      for (const h of entities.hunters) {
+        if (h.type === "ghost") {
+          ghostAlive = true;
+          break;
+        }
+      }
+      if (!ghostAlive) {
+        if (boneGhostNextSpawnAt == null) scheduleNextBoneGhostSpawn(elapsed, false);
+        if (elapsed >= boneGhostNextSpawnAt) {
+          const p = getPlayer();
+          const spawn = randomOpenPointAround(p.x, p.y, 150, 280, hunterRadiusForType("ghost"), 64, {
+            excludeSpecialHex: true
+          });
+          spawnHunter("ghost", spawn.x, spawn.y);
+          boneGhostNextSpawnAt = null;
+        }
       }
     }
     function tick(dt, opts = {}) {
@@ -8901,6 +10707,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       applyFrontShieldArc();
       updateSnipers();
       updateRangedAttackers(dt);
+      updateSniperFireArcs(dt);
+      updateSwampPools();
+      updateSwampBursts();
       updateSpawners();
       updateLaserHazards();
       updateCollisions();
@@ -8918,7 +10727,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const h = entities.hunters[i];
         const hq = worldToHex(h.x, h.y);
         if (hq.q !== q || hq.r !== r) continue;
-        if (h.type === "spawner" || h.type === "airSpawner") {
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") {
           ejectSpawnerHunterFromSpecialHexFootprint(h);
           continue;
         }
@@ -8954,7 +10763,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
     }
     function ejectHuntersFromSurgeLockHex(lockQ, lockR, surgePhase) {
-      if (surgePhase !== 1 && surgePhase !== 2) return;
+      if (surgePhase !== 1 && surgePhase !== 2 && surgePhase !== 3) return;
       const { x: cx, y: cy } = hexToWorld(lockQ, lockR);
       const edgeR = HEX_SIZE + 14;
       for (const h of entities.hunters) {
@@ -8974,6 +10783,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       entities.laserBeams.length = 0;
       entities.dangerZones.length = 0;
       entities.bullets.length = 0;
+      entities.fireArcs.length = 0;
+      entities.swampPools.length = 0;
+      entities.swampBursts.length = 0;
+      boneGhostNextSpawnAt = null;
       spawnState.wave = 0;
       spawnState.spawnInterval = SPAWN_INTERVAL_START;
       spawnState.spawnScheduled.length = 0;
@@ -8994,12 +10807,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         drawLaserBeamFancy(ctx, beam, now);
       }
       drawSpawnerChargeClocks(ctx, entities.hunters, now);
+      const colourblind = getSwampBootlegColourblind2();
       for (const h of entities.hunters) {
-        drawHunterBody(ctx, h);
+        drawHunterBody(ctx, h, { colourblind });
       }
       drawHunterLifeBars(ctx, entities.hunters, now);
       drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);
+      drawSwampPools(ctx, entities.swampPools, now);
+      drawSwampBlastBursts(ctx, entities.swampBursts, now);
       drawSniperBullets(ctx, entities.bullets, now);
+      drawSniperFireArcs(ctx, entities.fireArcs, now);
       for (const p of entities.projectiles) {
         drawProjectileBody(ctx, p);
       }
@@ -9009,7 +10826,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     function bulwarkParryPushHunters(px, py, radius, pushDist) {
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
         const dx = h.x - px;
         const dy = h.y - py;
         const d = Math.hypot(dx, dy) || 1;
@@ -9031,7 +10848,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const dy = nextY - prevY;
       if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) return;
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
         const dist = pointToSegmentDistance(h.x, h.y, prevX, prevY, nextX, nextY);
         if (dist > playerR + h.r + BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN) continue;
         h.x += dx;
@@ -9049,7 +10866,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (!pushedSet || pushedSet.size === 0) return;
       const until = elapsed + BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC;
       for (const h of pushedSet) {
-        if (!h || h.type === "spawner" || h.type === "airSpawner") continue;
+        if (!h || h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
         h.stunnedUntil = Math.max(h.stunnedUntil || 0, until);
       }
     }
@@ -9071,7 +10888,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       ejectHuntersFromSurgeLockHex,
       bulwarkChargePushHunters,
       bulwarkChargeApplyTerrainGroupStun,
-      bulwarkParryPushHunters
+      bulwarkParryPushHunters,
+      getFrogMudPoolMoveMult
     };
   }
 
@@ -9596,7 +11414,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const {
       getSimElapsed,
       getPlayer,
-      inventory,
+      inventory: inventory2,
       getCharacterInvulnUntil,
       isDashCoolingDown,
       stunNearbyEnemies,
@@ -9615,18 +11433,21 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       screenShakeUntil: 0,
       screenShakeStrength: 0,
       playerLaserSlowUntil: 0,
+      playerSwampSlowUntil: 0,
+      swampInfectionMoveLockUntil: 0,
+      swampInfectionBurstSlowEnd: 0,
       heartsDeathDefyReadyAt: 0
     };
     function countSuitInRankDeck(suit) {
       let n = 0;
-      forEachDeckCard(inventory, (c) => {
+      forEachDeckCard(inventory2, (c) => {
         if (c && c.suit === suit) n += 1;
       });
       return n;
     }
     function getHeartsResistanceCardCount() {
       let n = 0;
-      forEachDeckCard(inventory, (c) => {
+      forEachDeckCard(inventory2, (c) => {
         if (c?.effect?.kind === "hitResist") n += 1;
       });
       return n;
@@ -9645,7 +11466,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     function getHeartsResistanceCooldown() {
       let totalRank = 0;
-      forEachDeckCard(inventory, (c) => {
+      forEachDeckCard(inventory2, (c) => {
         if (c?.effect?.kind === "hitResist") totalRank += c.rank;
       });
       if (totalRank <= 0) return 15;
@@ -9665,7 +11486,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (elapsed < combat.playerUntargetableUntil) return;
         if (rogueStealthBlocksDamage?.()) return;
         if (getLunaticSprintDamageImmune?.() && !opts.lunaticCrash && !opts.lunaticRoarTerrain) return;
-        if (elapsed < (inventory.clubsInvisUntil ?? 0)) return;
+        if (elapsed < (inventory2.clubsInvisUntil ?? 0)) return;
         if ((isDashCoolingDown?.() ?? false) && Math.random() < getDodgeChanceWhenDashCd()) return;
         if (getBulwarkParryActive?.()) return;
         const arcDeg = getFrontShieldArcDeg();
@@ -9683,9 +11504,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           if (Math.acos(Math.max(-1, Math.min(1, dot))) <= halfArc) return;
         }
         const heartsResistanceCount = getHeartsResistanceCardCount();
-        if (heartsResistanceCount > 0 && elapsed >= (inventory.heartsResistanceReadyAt ?? 0) && !opts.lunaticCrash && !opts.lunaticRoarTerrain) {
+        if (heartsResistanceCount > 0 && elapsed >= (inventory2.heartsResistanceReadyAt ?? 0) && !opts.lunaticCrash && !opts.lunaticRoarTerrain) {
           const cd = getHeartsResistanceCooldown();
-          inventory.heartsResistanceReadyAt = elapsed + cd;
+          inventory2.heartsResistanceCooldownDuration = cd;
+          inventory2.heartsResistanceReadyAt = elapsed + cd;
           return;
         }
       }
@@ -9747,6 +11569,27 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function isLaserSlowActive() {
       return getSimElapsed() < combat.playerLaserSlowUntil;
     }
+    function applySwampHitSlow() {
+      const elapsed = getSimElapsed();
+      combat.playerSwampSlowUntil = elapsed + SWAMP_HIT_SLOW_SEC;
+    }
+    function applySwampInfectionBurst(elapsed) {
+      combat.swampInfectionMoveLockUntil = elapsed + SWAMP_INFECTION_BURST_STUN_SEC;
+      combat.swampInfectionBurstSlowEnd = elapsed + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+    }
+    function isSwampInfectionMoveLocked() {
+      return getSimElapsed() < combat.swampInfectionMoveLockUntil;
+    }
+    function getMovementSlowMult() {
+      const elapsed = getSimElapsed();
+      let m = 1;
+      if (elapsed < combat.playerLaserSlowUntil) m *= LASER_BLUE_PLAYER_SLOW_MULT;
+      if (elapsed < combat.playerSwampSlowUntil) m *= SWAMP_HIT_SLOW_MULT;
+      if (combat.swampInfectionBurstSlowEnd > 0 && elapsed >= combat.swampInfectionMoveLockUntil && elapsed < combat.swampInfectionBurstSlowEnd) {
+        m *= SWAMP_INFECTION_BURST_SLOW_MULT;
+      }
+      return m;
+    }
     function resetCombatState() {
       combat.playerInvulnerableUntil = 0;
       combat.playerUntargetableUntil = 0;
@@ -9754,6 +11597,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       combat.screenShakeUntil = 0;
       combat.screenShakeStrength = 0;
       combat.playerLaserSlowUntil = 0;
+      combat.playerSwampSlowUntil = 0;
+      combat.swampInfectionMoveLockUntil = 0;
+      combat.swampInfectionBurstSlowEnd = 0;
       combat.heartsDeathDefyReadyAt = 0;
     }
     function bumpScreenShake(strength = DAMAGE_SCREEN_SHAKE_STRENGTH, sec = DAMAGE_SCREEN_SHAKE_SEC) {
@@ -9777,9 +11623,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       tickCombatPresentation,
       getShakeOffset,
       isLaserSlowActive,
+      applySwampHitSlow,
+      applySwampInfectionBurst,
+      isSwampInfectionMoveLocked,
+      getMovementSlowMult,
       resetCombatState,
       bumpScreenShake,
-      grantInvulnerabilityUntil
+      grantInvulnerabilityUntil,
+      getHeartsResistanceCardCount,
+      getHeartsResistanceCooldown
     };
   }
 
@@ -9846,6 +11698,267 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     return target;
   }
 
+  // src/escape/map/path/bone.js
+  var BONE_PATH_DEF = {
+    id: "bone",
+    label: "Bone",
+    tileTint: "#2a2d33",
+    /** @param {any} payload */
+    onDamage(payload) {
+      return payload;
+    },
+    /** @param {any} payload */
+    onEnemy(payload) {
+      return payload;
+    },
+    /** @param {any} payload */
+    onDebuff(payload) {
+      return payload;
+    }
+  };
+
+  // src/escape/map/path/fire.js
+  var FIRE_PATH_DEF = {
+    id: "fire",
+    label: "Fire",
+    tileTint: "#341412",
+    /** @param {any} payload */
+    onDamage(payload) {
+      if (!payload || (payload.amount ?? 0) <= 0) return payload;
+      const prevOpts = payload.opts || {};
+      if (prevOpts.fireIgniteTick || prevOpts.fireNoIgnite) return payload;
+      return {
+        ...payload,
+        opts: {
+          ...prevOpts,
+          fireApplyIgnite: true
+        }
+      };
+    },
+    /** @param {any} payload */
+    onEnemy(payload) {
+      return payload;
+    },
+    /** @param {any} payload */
+    onDebuff(payload) {
+      return payload;
+    }
+  };
+
+  // src/escape/map/path/swamp.js
+  var SWAMP_PATH_DEF = {
+    id: "swamp",
+    label: "Swamp",
+    tileTint: "#122015",
+    /** @param {any} payload */
+    onDamage(payload) {
+      if (!payload) return payload;
+      const amount = Number(payload.amount ?? 0);
+      const opts = payload.opts || {};
+      if (opts.swampInfectionOnly) {
+        return {
+          ...payload,
+          amount: 0,
+          opts: { ...opts, swampApplyInfection: true }
+        };
+      }
+      if (amount <= 0) return payload;
+      return {
+        ...payload,
+        opts: { ...opts, swampApplyInfection: true }
+      };
+    },
+    /** @param {any} payload */
+    onEnemy(payload) {
+      return payload;
+    },
+    /** @param {any} payload */
+    onDebuff(payload) {
+      return payload;
+    }
+  };
+
+  // src/escape/run/pathRuntime.js
+  var PATH_DEFS = [BONE_PATH_DEF, FIRE_PATH_DEF, SWAMP_PATH_DEF];
+  var PATH_BY_ID = new Map(PATH_DEFS.map((d) => [d.id, d]));
+  function normalizePathId(value) {
+    if (typeof value !== "string") return null;
+    return PATH_BY_ID.has(
+      /** @type {PathId} */
+      value
+    ) ? (
+      /** @type {PathId} */
+      value
+    ) : null;
+  }
+  function createPathRuntime(opts = {}) {
+    const rng = typeof opts.rng === "function" ? opts.rng : Math.random;
+    let currentPathId = null;
+    let forcedPathId = null;
+    let assignedAtLevel = null;
+    function resetRun() {
+      currentPathId = null;
+      forcedPathId = null;
+      assignedAtLevel = null;
+    }
+    function pickRandomPathId() {
+      const i = Math.max(0, Math.min(PATH_DEFS.length - 1, Math.floor(rng() * PATH_DEFS.length)));
+      return PATH_DEFS[i].id;
+    }
+    function ensurePathAssignedForLevel(runLevel2) {
+      if (forcedPathId) {
+        currentPathId = forcedPathId;
+        assignedAtLevel = Math.max(1, runLevel2);
+        return currentPathId;
+      }
+      if (runLevel2 < 1) return currentPathId;
+      if (!currentPathId) {
+        currentPathId = pickRandomPathId();
+        assignedAtLevel = runLevel2;
+      }
+      return currentPathId;
+    }
+    function setForcedPathId(pathId) {
+      forcedPathId = normalizePathId(pathId);
+      if (forcedPathId) {
+        currentPathId = forcedPathId;
+        if (assignedAtLevel == null) assignedAtLevel = 0;
+      }
+      return forcedPathId;
+    }
+    function getPathVisualConfig() {
+      const def = currentPathId ? PATH_BY_ID.get(currentPathId) : null;
+      return {
+        id: currentPathId,
+        label: def?.label ?? "None",
+        tileTint: def?.tileTint ?? "#0f172a"
+      };
+    }
+    function currentPathDef() {
+      return currentPathId ? PATH_BY_ID.get(currentPathId) ?? null : null;
+    }
+    function applyDamageHooks(payload) {
+      const def = currentPathDef();
+      return def?.onDamage ? def.onDamage(payload) : payload;
+    }
+    function applyEnemyHooks(payload) {
+      const def = currentPathDef();
+      return def?.onEnemy ? def.onEnemy(payload) : payload;
+    }
+    function applyDebuffHooks(payload) {
+      const def = currentPathDef();
+      return def?.onDebuff ? def.onDebuff(payload) : payload;
+    }
+    return {
+      resetRun,
+      ensurePathAssignedForLevel,
+      setForcedPathId,
+      getPathVisualConfig,
+      getCurrentPathId: () => currentPathId,
+      getForcedPathId: () => forcedPathId,
+      getAssignedAtLevel: () => assignedAtLevel,
+      getPathDefs: () => PATH_DEFS.slice(),
+      applyDamageHooks,
+      applyEnemyHooks,
+      applyDebuffHooks
+    };
+  }
+
+  // src/escape/hud/pathShellTheme.js
+  var SHELL_THEMES = {
+    default: {
+      body: "#111827",
+      panel: "#1e293b",
+      deep: "#0f172a",
+      mid: "#111827",
+      veil: "#0b1220",
+      panelAlt: "#1f2937",
+      border: "#334155",
+      borderBright: "#475569",
+      hover: "#334155",
+      bpA: "#172033",
+      bpB: "#0c1424",
+      inkOnLight: "#0f172a",
+      inkRgb: "2, 6, 23",
+      deepRgb: "15, 23, 42",
+      panelRgb: "30, 41, 59"
+    },
+    fire: {
+      body: "#1a1010",
+      panel: "#422626",
+      deep: "#2c1515",
+      mid: "#1c0e0e",
+      veil: "#120909",
+      panelAlt: "#3a2323",
+      border: "#4a3535",
+      borderBright: "#5c4545",
+      hover: "#5a3a3a",
+      bpA: "#301a1a",
+      bpB: "#140808",
+      inkOnLight: "#2c1515",
+      inkRgb: "26, 8, 8",
+      deepRgb: "44, 21, 21",
+      panelRgb: "66, 38, 38"
+    },
+    swamp: {
+      body: "#101816",
+      panel: "#1e332c",
+      deep: "#142922",
+      mid: "#0f1a16",
+      veil: "#0a100d",
+      panelAlt: "#1a2d26",
+      border: "#2a3f36",
+      borderBright: "#3d5249",
+      hover: "#2f4a3e",
+      bpA: "#163026",
+      bpB: "#0a1510",
+      inkOnLight: "#142922",
+      inkRgb: "6, 18, 12",
+      deepRgb: "20, 41, 34",
+      panelRgb: "36, 58, 48"
+    },
+    bone: {
+      body: "#151618",
+      panel: "#343842",
+      deep: "#23262d",
+      mid: "#141518",
+      veil: "#0b0c0f",
+      panelAlt: "#2d313a",
+      border: "#3d424d",
+      borderBright: "#525866",
+      hover: "#4a505e",
+      bpA: "#282c35",
+      bpB: "#12141a",
+      inkOnLight: "#23262d",
+      inkRgb: "12, 14, 18",
+      deepRgb: "35, 38, 45",
+      panelRgb: "52, 56, 66"
+    }
+  };
+  function applyPathShellTheme(pathId) {
+    const key = pathId === "fire" || pathId === "swamp" || pathId === "bone" ? (
+      /** @type {ShellThemeId} */
+      pathId
+    ) : "default";
+    const t = SHELL_THEMES[key];
+    const r = document.documentElement;
+    r.style.setProperty("--escape-ui-body", t.body);
+    r.style.setProperty("--escape-ui-panel", t.panel);
+    r.style.setProperty("--escape-ui-deep", t.deep);
+    r.style.setProperty("--escape-ui-mid", t.mid);
+    r.style.setProperty("--escape-ui-veil", t.veil);
+    r.style.setProperty("--escape-ui-panel-alt", t.panelAlt);
+    r.style.setProperty("--escape-ui-border", t.border);
+    r.style.setProperty("--escape-ui-border-bright", t.borderBright);
+    r.style.setProperty("--escape-ui-hover", t.hover);
+    r.style.setProperty("--escape-ui-bp-a", t.bpA);
+    r.style.setProperty("--escape-ui-bp-b", t.bpB);
+    r.style.setProperty("--escape-ui-ink-on-light", t.inkOnLight);
+    r.style.setProperty("--escape-ui-ink-rgb", t.inkRgb);
+    r.style.setProperty("--escape-ui-deep-rgb", t.deepRgb);
+    r.style.setProperty("--escape-ui-panel-rgb", t.panelRgb);
+  }
+
   // src/escape/entry.js
   var FLOOR_HEX_FILL = "#0f172a";
   var activeCharacterId = "knight";
@@ -9902,9 +12015,52 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     return false;
   }
+  function shouldUseMobileUi(win = window) {
+    const coarse = win.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+    const narrow = win.matchMedia?.("(max-width: 920px)")?.matches ?? false;
+    const touchPoints = (navigator.maxTouchPoints ?? 0) > 0;
+    return coarse && (narrow || touchPoints);
+  }
+  function isLocalDebugHost(win = window) {
+    const host = String(win.location?.hostname || "").trim().toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  }
   function boot() {
     const runLogger = createRunLogger(30);
+    const pathRuntime = createPathRuntime({ rng: Math.random });
     mountCharacterRoster(document);
+    const debugAllowed = isLocalDebugHost(window);
+    let devPanelEl = document.getElementById("special-test-west-panel");
+    let devPanelToggleBtn = document.getElementById("dev-panel-toggle-button");
+    if (!debugAllowed) {
+      devPanelEl?.remove();
+      devPanelToggleBtn?.remove();
+      devPanelEl = null;
+      devPanelToggleBtn = null;
+    }
+    const DEV_PANEL_HIDDEN_LS_KEY = "escape-dev-panel-hidden";
+    function setDevPanelHidden(hidden) {
+      if (!devPanelEl || !devPanelToggleBtn) return;
+      devPanelEl.classList.toggle("special-test-west-panel--hidden", hidden);
+      devPanelToggleBtn.textContent = hidden ? "Show debug" : "Hide debug";
+      devPanelToggleBtn.setAttribute("aria-expanded", hidden ? "false" : "true");
+      try {
+        localStorage.setItem(DEV_PANEL_HIDDEN_LS_KEY, hidden ? "1" : "0");
+      } catch {
+      }
+    }
+    if (devPanelEl && devPanelToggleBtn) {
+      let initiallyHidden = false;
+      try {
+        initiallyHidden = localStorage.getItem(DEV_PANEL_HIDDEN_LS_KEY) === "1";
+      } catch {
+        initiallyHidden = false;
+      }
+      setDevPanelHidden(initiallyHidden);
+      devPanelToggleBtn.addEventListener("click", () => {
+        setDevPanelHidden(!devPanelEl.classList.contains("special-test-west-panel--hidden"));
+      });
+    }
     const canvas = document.getElementById("game");
     if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
       runLogger.error("entry", "#game canvas not found");
@@ -9932,6 +12088,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       setTimeout(() => URL.revokeObjectURL(a.href), 1e3);
     });
     runLogger.log("entry", "boot");
+    const mobileUiEnabled = shouldUseMobileUi(window);
+    document.body.classList.toggle("is-mobile-ui", mobileUiEnabled);
+    const characterSelectModalEl = document.getElementById("character-select-modal");
+    const mobileUnpauseBtn = document.getElementById("mobile-unpause-btn");
+    let hasLockedInitialHeroFromModal = !mobileUiEnabled;
+    let expectingCharacterPickAfterDeath = false;
     let hunterRuntime = (
       /** @type {ReturnType<typeof createHunterRuntime> | null} */
       null
@@ -10009,9 +12171,30 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     const keys = attachArrowKeyState(window);
     const steerKeys = attachHeldLetterKeys(window, ["q", "e"]);
+    const touchMoveHeld = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+    const touchSteerHeld = { q: false, e: false };
+    const mobileControlDisposers = [];
+    function clearTouchMoveInputs() {
+      touchMoveHeld.ArrowUp = false;
+      touchMoveHeld.ArrowDown = false;
+      touchMoveHeld.ArrowLeft = false;
+      touchMoveHeld.ArrowRight = false;
+    }
+    function clearTouchInputs() {
+      clearTouchMoveInputs();
+      touchSteerHeld.q = false;
+      touchSteerHeld.e = false;
+    }
+    function isArrowHeld(key) {
+      return keys.isDown(key) || !!touchMoveHeld[key];
+    }
+    function isSteerHeld(letter) {
+      return steerKeys.isDown(letter) || !!touchSteerHeld[String(letter).toLowerCase()];
+    }
     function clearMovementKeys() {
       keys.clearHeld();
       steerKeys.clearHeld();
+      clearTouchInputs();
     }
     const player = {
       x: 0,
@@ -10035,6 +12218,32 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       _px: 0,
       _py: 0
     };
+    function setTouchMoveFromStick(nx, ny) {
+      touchMoveHeld.ArrowUp = false;
+      touchMoveHeld.ArrowDown = false;
+      touchMoveHeld.ArrowLeft = false;
+      touchMoveHeld.ArrowRight = false;
+      const mag = Math.hypot(nx, ny);
+      if (mag < 0.28) return;
+      const sector = Math.round(Math.atan2(ny, nx) / (Math.PI / 4));
+      if (sector === 0) touchMoveHeld.ArrowRight = true;
+      else if (sector === 1) {
+        touchMoveHeld.ArrowRight = true;
+        touchMoveHeld.ArrowDown = true;
+      } else if (sector === 2) touchMoveHeld.ArrowDown = true;
+      else if (sector === 3) {
+        touchMoveHeld.ArrowDown = true;
+        touchMoveHeld.ArrowLeft = true;
+      } else if (Math.abs(sector) === 4) touchMoveHeld.ArrowLeft = true;
+      else if (sector === -3) {
+        touchMoveHeld.ArrowLeft = true;
+        touchMoveHeld.ArrowUp = true;
+      } else if (sector === -2) touchMoveHeld.ArrowUp = true;
+      else if (sector === -1) {
+        touchMoveHeld.ArrowUp = true;
+        touchMoveHeld.ArrowRight = true;
+      }
+    }
     let obstacles = [];
     let activeHexes = [];
     let lastPlayerHexKey = "";
@@ -10047,13 +12256,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       lastPlayerHexKey
     }));
     activeCharacterId = resolveImplementedHeroId(activeCharacterId);
-    const inventory = createEmptyInventory();
-    inventory.clubsInvisUntil = 0;
-    inventory.spadesLandingStealthUntil = 0;
-    inventory.spadesObstacleBoostUntil = 0;
-    inventory.heartsResistanceReadyAt = 0;
-    inventory.heartsRegenPerSec = 0;
-    inventory.heartsRegenBank = 0;
+    const inventory2 = createEmptyInventory();
+    inventory2.clubsInvisUntil = 0;
+    inventory2.spadesLandingStealthUntil = 0;
+    inventory2.spadesObstacleBoostUntil = 0;
+    inventory2.heartsResistanceReadyAt = 0;
+    inventory2.heartsResistanceCooldownDuration = 0;
+    inventory2.swampInfectionStacks = 0;
+    inventory2.heartsRegenPerSec = 0;
+    inventory2.heartsRegenBank = 0;
     const rogueWorld = createRogueWorld();
     rogueWorld.reset(0, player);
     const valiantWorld = createValiantWorld();
@@ -10067,13 +12278,43 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
     );
     function obstaclesForPlayerCollision() {
-      if (activeCharacterId === "rogue" && rogueWorld.clubsPhaseThroughObstacles(inventory, player.x, player.y, simElapsed)) {
+      if (activeCharacterId === "rogue" && rogueWorld.clubsPhaseThroughObstacles(inventory2, player.x, player.y, simElapsed)) {
         return [];
       }
-      if (activeCharacterId === "valiant" && countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD && typeof character.getValiantSurgeUntil === "function" && simElapsed < character.getValiantSurgeUntil()) {
+      if (activeCharacterId === "knight" && countSuitsInActiveSlots(inventory2).clubs >= SET_BONUS_SUIT_THRESHOLD && typeof character.getBurstVisualUntil === "function" && simElapsed < character.getBurstVisualUntil(simElapsed)) {
+        return [];
+      }
+      if (activeCharacterId === "valiant" && countSuitsInActiveSlots(inventory2).clubs >= SET_BONUS_SUIT_THRESHOLD && typeof character.getValiantSurgeUntil === "function" && simElapsed < character.getValiantSurgeUntil()) {
         return [];
       }
       return obstacles;
+    }
+    function knightHasClubsSevenSet() {
+      return countSuitsInActiveSlots(inventory2).clubs >= SET_BONUS_SUIT_THRESHOLD;
+    }
+    function ejectKnightFromSolidTerrainIfNeeded() {
+      if (activeCharacterId !== "knight" || !knightHasClubsSevenSet()) return;
+      if (!circleOverlapsAnyRect(player.x, player.y, player.r, obstacles)) return;
+      const res = resolvePlayerAgainstRects(player.x, player.y, player.r, obstacles);
+      player.x = res.x;
+      player.y = res.y;
+      if (!circleOverlapsAnyRect(player.x, player.y, player.r, obstacles)) return;
+      const ox = player.x;
+      const oy = player.y;
+      const pr = player.r;
+      const maxPush = pr * 14;
+      for (let dist = 4; dist <= maxPush; dist += 4) {
+        for (let s = 0; s < 24; s++) {
+          const ang = s / 24 * Math.PI * 2 + dist * 0.17;
+          const cx = ox + Math.cos(ang) * dist;
+          const cy = oy + Math.sin(ang) * dist;
+          if (!circleOverlapsAnyRect(cx, cy, pr, obstacles)) {
+            player.x = cx;
+            player.y = cy;
+            return;
+          }
+        }
+      }
     }
     applyShellUiFromCharacter(document, character);
     function applyCombatFromCharacter() {
@@ -10112,6 +12353,59 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     let timelockWorldShakeAt = 0;
     let ultimateSpeedUntil = 0;
     let knightSpadesWorldSlowUntil = 0;
+    let fireIgniteUntil = 0;
+    let fireIgniteNextTickAt = 0;
+    let fireIgniteTickStep = 1;
+    let boneBlindDebuffPeakEnd = 0;
+    let boneBlindDebuffFadeEnd = 0;
+    let boneBlindDebuffFromBlueLaser = false;
+    const BONE_BLIND_DEBUFF_PEAK_SEC = 0.92;
+    const BONE_BLIND_DEBUFF_FADE_SEC = 0.55;
+    let prevKnightClubsInvisActive = false;
+    let prevKnightBurstTerrainPhase = false;
+    const FIRE_GROWTH_ZONE_VISUAL_RADIUS_MULT = 1.9;
+    let swampInfectionTenBurstAt = 0;
+    let swampInfectionDebuffOverlayUntil = 0;
+    let swampInfectionChainLockUntil = 0;
+    let swampInfectionStackLastAt = 0;
+    const swampDamageInstanceSeenAt = /* @__PURE__ */ new Map();
+    const swampMudTrail = (
+      /** @type {{ x: number; y: number; t: number }[]} */
+      []
+    );
+    let swampMudTrailLastX = NaN;
+    let swampMudTrailLastY = NaN;
+    const SWAMP_MUD_TRAIL_MAX = 58;
+    const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
+    const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
+    const SWAMP_ENEMY_TRAIL_MAX = 36;
+    const SWAMP_TRAIL_HUNTER_TYPES = /* @__PURE__ */ new Set(["chaser", "frogChaser", "cutter"]);
+    const swampHunterMudTrailByHunter = /* @__PURE__ */ new WeakMap();
+    const knightSwampDashSplashes = (
+      /** @type {{ x: number; y: number; bornAt: number; pr: number }[]} */
+      []
+    );
+    const KNIGHT_SWAMP_DASH_SPLASH_SEC = 0.62;
+    const damagePopups = (
+      /** @type {{ x: number; y: number; bornAt: number; expiresAt: number; base: number; swampBonus: number; driftX: number }[]} */
+      []
+    );
+    const fireGrowthZones = (
+      /** @type {Array<{
+        key: string;
+        q: number;
+        r: number;
+        x: number;
+        y: number;
+        bornAt: number;
+        growDur: number;
+        baseR: number;
+        maxR: number;
+        nextTouchDamageAt: number;
+        seed: number;
+      }>} */
+      []
+    );
     let nextHealSpawnAt = 3.5;
     let nextCardSpawnAt = 10;
     const MAX_HEAL_CRYSTALS = 6;
@@ -10129,6 +12423,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const deathStatBestEl = document.getElementById("death-stat-best");
     const deathStatWaveEl = document.getElementById("death-stat-wave");
     const deathStatHuntersEl = document.getElementById("death-stat-hunters");
+    const deathScreenChooseHeroBtn = document.getElementById("death-screen-choose-hero-btn");
     function hideDeathScreen() {
       if (!deathScreenEl) return;
       deathScreenEl.hidden = true;
@@ -10149,16 +12444,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     playerDamage = createPlayerDamage({
       getSimElapsed: () => simElapsed,
       getPlayer: () => player,
-      inventory,
+      inventory: inventory2,
       getCharacterInvulnUntil: () => character.getInvulnUntil(),
-      rogueStealthBlocksDamage: () => activeCharacterId === "rogue" && rogueWorld.stealthBlocksDamage(simElapsed, inventory),
+      rogueStealthBlocksDamage: () => activeCharacterId === "rogue" && rogueWorld.stealthBlocksDamage(simElapsed, inventory2),
       getLunaticSprintDamageImmune: () => activeCharacterId === "lunatic" && typeof character.getLunaticSprintDamageImmune === "function" && character.getLunaticSprintDamageImmune(),
       getIsValiant: () => activeCharacterId === "valiant",
       applyValiantIncomingDamage: (amount, opts) => {
         valiantWorld.applyDamage(amount, opts, {
           getSimElapsed: () => simElapsed,
           getPlayer: () => player,
-          inventory,
+          inventory: inventory2,
           get combat() {
             return playerDamage.combat;
           },
@@ -10209,12 +12504,800 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         lunaticSprintTierFx.length = 0;
       }
     });
+    function resetSwampInfection() {
+      inventory2.swampInfectionStacks = 0;
+      swampInfectionTenBurstAt = 0;
+      swampInfectionDebuffOverlayUntil = 0;
+      swampInfectionChainLockUntil = 0;
+      swampInfectionStackLastAt = 0;
+      swampDamageInstanceSeenAt.clear();
+    }
+    function finalizeSwampBootlegCrystalPick(offer) {
+      const h = Math.max(0, Math.floor(offer.heal ?? 0));
+      if (activeCharacterId === "lunatic") {
+        player.hp = Math.min(player.maxHp, player.hp + h);
+      } else if (activeCharacterId === "valiant" && typeof character.onHealCrystalPickup === "function") {
+        character.onHealCrystalPickup(buildAbilityContext(0), h);
+      } else {
+        player.hp = Math.min(player.maxHp, player.hp + h);
+      }
+      applySwampBootlegOffer(inventory2, offer, simElapsed, () => {
+        swampBootlegCurseUid += 1;
+        return swampBootlegCurseUid;
+      });
+      fireIgniteUntil = 0;
+      fireIgniteNextTickAt = 0;
+      fireIgniteTickStep = 1;
+    }
+    function spawnDamagePopup(baseAmount, swampBonus, opts = {}) {
+      if (baseAmount <= 0 && swampBonus <= 0) return;
+      const sx = Number.isFinite(opts?.sourceX) ? opts.sourceX : player.x;
+      const sy = Number.isFinite(opts?.sourceY) ? opts.sourceY : player.y;
+      const jitter = (Math.random() - 0.5) * 18;
+      damagePopups.push({
+        x: sx + jitter,
+        y: sy - player.r - 4,
+        bornAt: simElapsed,
+        expiresAt: simElapsed + 0.9,
+        base: Math.max(0, Math.floor(baseAmount)),
+        swampBonus: Math.max(0, Math.floor(swampBonus)),
+        driftX: (Math.random() - 0.5) * 28
+      });
+      if (damagePopups.length > 90) damagePopups.splice(0, damagePopups.length - 90);
+    }
+    function drawDamagePopups(ctx2) {
+      for (let i = damagePopups.length - 1; i >= 0; i--) {
+        const p = damagePopups[i];
+        if (simElapsed >= p.expiresAt) {
+          damagePopups.splice(i, 1);
+          continue;
+        }
+        const u = clamp7((simElapsed - p.bornAt) / Math.max(1e-3, p.expiresAt - p.bornAt), 0, 1);
+        const alpha = 1 - u;
+        const px = p.x + p.driftX * u;
+        const py = p.y - u * 40;
+        ctx2.save();
+        ctx2.textAlign = "center";
+        ctx2.textBaseline = "bottom";
+        ctx2.font = 'bold 15px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+        ctx2.lineWidth = 4;
+        const baseTxt = `-${p.base}`;
+        ctx2.strokeStyle = `rgba(2, 6, 23, ${0.85 * alpha})`;
+        ctx2.strokeText(baseTxt, px, py);
+        ctx2.fillStyle = `rgba(248, 113, 113, ${alpha})`;
+        ctx2.fillText(baseTxt, px, py);
+        if (p.swampBonus > 0) {
+          const extraTxt = `-${p.swampBonus}`;
+          ctx2.font = 'bold 13px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
+          ctx2.strokeStyle = `rgba(2, 6, 23, ${0.8 * alpha})`;
+          ctx2.strokeText(extraTxt, px + 20, py - 8);
+          ctx2.fillStyle = `rgba(163, 230, 53, ${alpha})`;
+          ctx2.fillText(extraTxt, px + 20, py - 8);
+        }
+        ctx2.restore();
+      }
+    }
+    function drawFireAtmosphereWorld(ctx2, viewW, viewH) {
+      const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.9);
+      const r1 = Math.max(viewW, viewH) * 0.66;
+      const r2 = Math.max(viewW, viewH) * 0.98;
+      const g1 = ctx2.createRadialGradient(player.x, player.y, r1 * 0.08, player.x, player.y, r1);
+      g1.addColorStop(0, `rgba(254, 215, 170, ${0.09 + pulse * 0.06})`);
+      g1.addColorStop(0.5, `rgba(251, 146, 60, ${0.075 + pulse * 0.05})`);
+      g1.addColorStop(1, "rgba(127, 29, 29, 0)");
+      ctx2.fillStyle = g1;
+      ctx2.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+      const g2 = ctx2.createRadialGradient(player.x, player.y, r2 * 0.18, player.x, player.y, r2);
+      g2.addColorStop(0, "rgba(0, 0, 0, 0)");
+      g2.addColorStop(0.62, "rgba(120, 53, 15, 0.2)");
+      g2.addColorStop(1, "rgba(69, 10, 10, 0.4)");
+      ctx2.fillStyle = g2;
+      ctx2.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+      const emberN = 32;
+      for (let i = 0; i < emberN; i++) {
+        const seed = i * 17.13;
+        const t = simElapsed * (0.32 + i * 0.02);
+        const sx = cameraX + ((Math.sin(t + seed) * 0.5 + 0.5) * (viewW + 140) - 70);
+        const sy = cameraY + ((Math.sin(t * 0.7 + seed * 1.37) * 0.5 + 0.5) * (viewH + 140) - 70);
+        const rr = 1.5 + i % 4 * 0.9;
+        const a = 0.12 + (0.5 + 0.5 * Math.sin(simElapsed * 3.6 + i)) * 0.18;
+        ctx2.fillStyle = i % 5 === 0 ? `rgba(254, 215, 170, ${a})` : `rgba(251, 146, 60, ${a})`;
+        ctx2.beginPath();
+        ctx2.arc(sx, sy, rr, 0, Math.PI * 2);
+        ctx2.fill();
+      }
+    }
+    function getSwampAtmosphereAnchorWorld(viewW, viewH) {
+      return { x: cameraX + viewW * 0.5, y: cameraY + viewH * 0.5 };
+    }
+    function drawSwampAtmosphereBackgroundWorld(ctx2, viewW, viewH) {
+      const anchor = getSwampAtmosphereAnchorWorld(viewW, viewH);
+      const rMax = Math.max(viewW, viewH) * 0.95;
+      const g1 = ctx2.createRadialGradient(anchor.x, anchor.y, rMax * 0.11, anchor.x, anchor.y, rMax * 0.52);
+      g1.addColorStop(0, "rgba(42, 58, 48, 0.095)");
+      g1.addColorStop(0.5, "rgba(22, 38, 30, 0.072)");
+      g1.addColorStop(1, "rgba(15, 23, 42, 0)");
+      ctx2.fillStyle = g1;
+      ctx2.fillRect(cameraX - 28, cameraY - 28, viewW + 56, viewH + 56);
+      const g2 = ctx2.createRadialGradient(anchor.x, anchor.y, rMax * 0.2, anchor.x, anchor.y, rMax);
+      g2.addColorStop(0, "rgba(0, 0, 0, 0)");
+      g2.addColorStop(0.58, "rgba(6, 26, 18, 0.44)");
+      g2.addColorStop(0.82, "rgba(4, 16, 12, 0.56)");
+      g2.addColorStop(1, "rgba(2, 8, 6, 0.68)");
+      ctx2.fillStyle = g2;
+      ctx2.fillRect(cameraX - 28, cameraY - 28, viewW + 56, viewH + 56);
+      const footY0 = cameraY + viewH * 0.66;
+      const footG = ctx2.createLinearGradient(cameraX, footY0, cameraX, cameraY + viewH + 24);
+      footG.addColorStop(0, "rgba(28, 22, 16, 0)");
+      footG.addColorStop(0.35, "rgba(24, 30, 22, 0.06)");
+      footG.addColorStop(0.72, "rgba(20, 26, 20, 0.1)");
+      footG.addColorStop(1, "rgba(14, 20, 16, 0.14)");
+      ctx2.fillStyle = footG;
+      ctx2.fillRect(cameraX - 32, footY0 - 6, viewW + 64, viewH * 0.38 + 32);
+      const L = activeHexes.length;
+      if (!L) return;
+      for (const h of activeHexes) {
+        const mix = h.q * 9283711 + h.r * 689287 >>> 0;
+        const { x: hx, y: hy } = hexToWorld(h.q, h.r);
+        const wobx = Math.sin((mix & 4095) * 15e-4) * HEX_SIZE * 0.07;
+        const woby = Math.cos((mix >> 12 & 4095) * 14e-4) * HEX_SIZE * 0.06;
+        const peat = ctx2.createRadialGradient(hx, hy + HEX_SIZE * 0.1, 0, hx, hy + HEX_SIZE * 0.08, HEX_SIZE * 0.95);
+        peat.addColorStop(0, "rgba(38, 30, 22, 0.22)");
+        peat.addColorStop(0.55, "rgba(22, 32, 26, 0.11)");
+        peat.addColorStop(1, "rgba(12, 22, 18, 0)");
+        ctx2.fillStyle = peat;
+        ctx2.beginPath();
+        ctx2.arc(hx, hy + HEX_SIZE * 0.06, HEX_SIZE * 0.88, 0, Math.PI * 2);
+        ctx2.fill();
+        const fr = HEX_SIZE * (0.88 + mix % 5 * 0.04);
+        const fog = ctx2.createRadialGradient(hx + wobx, hy + woby, 0, hx + wobx, hy + woby, fr);
+        fog.addColorStop(0, "rgba(55, 88, 72, 0.085)");
+        fog.addColorStop(0.55, "rgba(28, 52, 42, 0.06)");
+        fog.addColorStop(1, "rgba(10, 28, 22, 0)");
+        ctx2.fillStyle = fog;
+        ctx2.beginPath();
+        ctx2.arc(hx + wobx, hy + woby, fr, 0, Math.PI * 2);
+        ctx2.fill();
+      }
+    }
+    function pruneSwampMudTrailPoints(points) {
+      const cutoff = simElapsed - SWAMP_MUD_TRAIL_DECAY_SEC;
+      while (points.length > 0 && points[0].t < cutoff) points.shift();
+    }
+    function pruneSwampMudTrail() {
+      pruneSwampMudTrailPoints(swampMudTrail);
+    }
+    function drawSwampMudTrailStrip(ctx2, points, opts) {
+      const n = points.length;
+      if (n < 2) return;
+      const decay = SWAMP_MUD_TRAIL_DECAY_SEC;
+      const SHELLS = 6;
+      const salt = opts.salt >>> 0;
+      const headR = Math.max(4, opts.headR);
+      ctx2.lineCap = "round";
+      ctx2.lineJoin = "round";
+      for (let i = 1; i < n; i++) {
+        const p0 = points[i - 1];
+        const p1 = points[i];
+        const u0 = Math.max(0, 1 - (simElapsed - p0.t) / decay);
+        const u1 = Math.max(0, 1 - (simElapsed - p1.t) / decay);
+        const u = Math.min(u0, u1);
+        if (u <= 0.015) continue;
+        const mixH = ((Math.floor(p0.x * 0.7) ^ Math.floor(p0.y * 0.61) ^ Math.floor(p1.x * 0.67) ^ Math.floor(p1.y * 0.6) ^ salt) >>> 0) % 4096;
+        const jagW = 0.55 + (mixH & 255) / 255 * 1.05;
+        const jagNarrow = 0.62 + (mixH >> 8 & 255) / 255 * 0.55;
+        const wMax = (7 + u * 19) * jagW;
+        const aBase = (0.055 + u * 0.2) * (0.72 + (mixH >> 4 & 127) / 127 * 0.48);
+        for (let s = SHELLS - 1; s >= 0; s--) {
+          const outerness = s / Math.max(1, SHELLS - 1);
+          const lw = wMax * (0.14 + 0.86 * outerness) * jagNarrow;
+          const wash = Math.pow(Math.max(0, u), 0.28 + outerness * 1.55);
+          if (wash < 0.02 || lw < 0.6) continue;
+          const aBr = aBase * wash;
+          const mottle = (mixH >>> s % 5 ^ s * 17489) & 1;
+          const br = mottle ? { r: 52, g: 38, b: 28, ir: 22, ig: 34, ib: 28 } : { r: 28, g: 20, b: 14, ir: 12, ig: 22, ib: 16 };
+          ctx2.beginPath();
+          ctx2.moveTo(p0.x, p0.y);
+          ctx2.lineTo(p1.x, p1.y);
+          ctx2.strokeStyle = `rgba(${br.r}, ${br.g}, ${br.b}, ${aBr})`;
+          ctx2.lineWidth = lw;
+          ctx2.stroke();
+          ctx2.beginPath();
+          ctx2.moveTo(p0.x, p0.y);
+          ctx2.lineTo(p1.x, p1.y);
+          ctx2.strokeStyle = `rgba(${br.ir}, ${br.ig}, ${br.ib}, ${aBr * 0.5})`;
+          ctx2.lineWidth = lw * 0.42;
+          ctx2.stroke();
+        }
+      }
+      const newest = points[n - 1];
+      const nu = Math.max(0, 1 - (simElapsed - newest.t) / decay);
+      if (nu > 0.02) {
+        const splashR = headR * 1.65 + 10 + nu * 8;
+        const inward = 1 - nu;
+        const g = ctx2.createRadialGradient(newest.x, newest.y, 0, newest.x, newest.y, splashR);
+        const mid = 0.22 + inward * 0.38;
+        const midA = (0.09 + nu * 0.06) * (1 - inward * 0.55);
+        g.addColorStop(0, `rgba(46, 36, 28, ${(0.12 + nu * 0.05) * (0.55 + 0.45 * nu)})`);
+        g.addColorStop(mid * 0.55, `rgba(38, 32, 26, ${midA * 0.95})`);
+        g.addColorStop(mid, `rgba(32, 40, 32, ${midA * 0.72})`);
+        g.addColorStop(mid + (1 - mid) * (0.35 + inward * 0.35), `rgba(24, 32, 26, ${midA * 0.35 * (1 - inward * 0.8)})`);
+        g.addColorStop(1, "rgba(14, 22, 18, 0)");
+        ctx2.fillStyle = g;
+        ctx2.beginPath();
+        ctx2.arc(newest.x, newest.y, splashR, 0, Math.PI * 2);
+        ctx2.fill();
+      }
+    }
+    function drawSwampMudTrailWorld(ctx2) {
+      pruneSwampMudTrail();
+      ctx2.save();
+      ctx2.lineCap = "round";
+      ctx2.lineJoin = "round";
+      drawSwampMudTrailStrip(ctx2, swampMudTrail, { headR: player.r, salt: 0 });
+      if (hunterRuntime) {
+        for (const h of hunterRuntime.entities.hunters) {
+          if (!SWAMP_TRAIL_HUNTER_TYPES.has(h.type)) continue;
+          const st = swampHunterMudTrailByHunter.get(h);
+          if (!st || st.points.length < 2) continue;
+          pruneSwampMudTrailPoints(st.points);
+          if (st.points.length < 2) continue;
+          const salt = (h.bornAt * 1009 ^ String(h.type).length * 131) >>> 0;
+          drawSwampMudTrailStrip(ctx2, st.points, { headR: h.r, salt });
+        }
+      }
+      ctx2.restore();
+    }
+    function getSwampHunterMudTrailState(h) {
+      let st = swampHunterMudTrailByHunter.get(h);
+      if (!st) {
+        st = {
+          points: (
+            /** @type {{ x: number; y: number; t: number }[]} */
+            []
+          ),
+          lastX: NaN,
+          lastY: NaN,
+          prevX: h.x,
+          prevY: h.y
+        };
+        swampHunterMudTrailByHunter.set(h, st);
+      }
+      return st;
+    }
+    function tickSwampHunterMudTrails(dt) {
+      if (!hunterRuntime) return;
+      const pdt = Math.max(dt, 1e-5);
+      for (const h of hunterRuntime.entities.hunters) {
+        if (!SWAMP_TRAIL_HUNTER_TYPES.has(h.type)) {
+          swampHunterMudTrailByHunter.delete(h);
+          continue;
+        }
+        const st = getSwampHunterMudTrailState(h);
+        const vx = (h.x - st.prevX) / pdt;
+        const vy = (h.y - st.prevY) / pdt;
+        st.prevX = h.x;
+        st.prevY = h.y;
+        const sp = Math.hypot(vx, vy);
+        pruneSwampMudTrailPoints(st.points);
+        if (sp > 20) {
+          if (!Number.isFinite(st.lastX)) {
+            st.points.push({ x: h.x, y: h.y, t: simElapsed });
+            st.lastX = h.x;
+            st.lastY = h.y;
+          } else {
+            const d = Math.hypot(h.x - st.lastX, h.y - st.lastY);
+            if (d >= SWAMP_MUD_TRAIL_SAMPLE_MIN) {
+              st.points.push({ x: h.x, y: h.y, t: simElapsed });
+              st.lastX = h.x;
+              st.lastY = h.y;
+              while (st.points.length > SWAMP_ENEMY_TRAIL_MAX) st.points.shift();
+            }
+          }
+        }
+      }
+    }
+    function clearSwampHunterMudTrails() {
+      if (!hunterRuntime) return;
+      for (const h of hunterRuntime.entities.hunters) {
+        swampHunterMudTrailByHunter.delete(h);
+      }
+    }
+    function drawKnightSwampDashSplashesWorld(ctx2) {
+      const dur = KNIGHT_SWAMP_DASH_SPLASH_SEC;
+      const now = simElapsed;
+      for (let i = knightSwampDashSplashes.length - 1; i >= 0; i--) {
+        if (now - knightSwampDashSplashes[i].bornAt > dur) knightSwampDashSplashes.splice(i, 1);
+      }
+      ctx2.save();
+      ctx2.lineCap = "round";
+      ctx2.lineJoin = "round";
+      for (const s of knightSwampDashSplashes) {
+        const u = (now - s.bornAt) / dur;
+        if (u >= 1) continue;
+        const pr = Math.max(12, Number(s.pr) || PLAYER_RADIUS);
+        const rx = s.x;
+        const ry = s.y;
+        const fade = Math.pow(1 - u, 1.05);
+        const hit = Math.sin(Math.min(1, u / 0.1) * Math.PI);
+        const vis = fade * (0.55 + 0.45 * hit);
+        const outerR = pr * 2.45 + 52 + u * (pr * 1.05 + 42);
+        const g = ctx2.createRadialGradient(rx, ry + 4, 0, rx, ry, outerR);
+        g.addColorStop(0, `rgba(46, 34, 26, ${0.55 * vis})`);
+        g.addColorStop(0.22, `rgba(40, 30, 22, ${0.48 * vis})`);
+        g.addColorStop(0.45, `rgba(34, 42, 30, ${0.32 * vis})`);
+        g.addColorStop(0.72, `rgba(24, 34, 26, ${0.16 * fade})`);
+        g.addColorStop(1, "rgba(10, 16, 12, 0)");
+        ctx2.fillStyle = g;
+        ctx2.beginPath();
+        ctx2.ellipse(rx, ry + 6, outerR * 1.06, outerR * 0.86, 0, 0, Math.PI * 2);
+        ctx2.fill();
+        const salt = (Math.floor(rx) * 92837111 ^ Math.floor(ry) * 689287451) >>> 0;
+        const spokes = 15;
+        const len0 = pr * 1.25 + 36;
+        for (let k = 0; k < spokes; k++) {
+          const ang = k / spokes * Math.PI * 2 + (salt & 4095) * 35e-5 + u * 0.15;
+          const len = len0 * (1.05 - u * 0.92) + (salt >>> k % 9 & 19);
+          const inner = pr * 0.22;
+          const aSp = 0.38 * fade * (0.7 + 0.3 * hit);
+          ctx2.strokeStyle = `rgba(52, 38, 28, ${aSp})`;
+          ctx2.lineWidth = 6 + (1 - u) * 8;
+          ctx2.beginPath();
+          ctx2.moveTo(rx + Math.cos(ang) * inner, ry + Math.sin(ang) * inner);
+          ctx2.lineTo(rx + Math.cos(ang) * (inner + len), ry + Math.sin(ang) * (inner + len));
+          ctx2.stroke();
+          ctx2.strokeStyle = `rgba(20, 30, 24, ${aSp * 0.5})`;
+          ctx2.lineWidth = 2.8;
+          ctx2.beginPath();
+          ctx2.moveTo(rx + Math.cos(ang) * inner, ry + Math.sin(ang) * inner);
+          ctx2.lineTo(rx + Math.cos(ang) * (inner + len * 0.52), ry + Math.sin(ang) * (inner + len * 0.52));
+          ctx2.stroke();
+        }
+        const ringR = pr * 2.15 + 28 + u * (pr + 56);
+        ctx2.strokeStyle = `rgba(36, 28, 20, ${0.45 * fade})`;
+        ctx2.lineWidth = 8 + (1 - u) * 7;
+        ctx2.beginPath();
+        ctx2.arc(rx, ry, ringR, 0, Math.PI * 2);
+        ctx2.stroke();
+        ctx2.strokeStyle = `rgba(22, 34, 26, ${0.28 * fade})`;
+        ctx2.lineWidth = 3.5;
+        ctx2.beginPath();
+        ctx2.arc(rx, ry, ringR + 8 + u * 12, 0, Math.PI * 2);
+        ctx2.stroke();
+      }
+      ctx2.restore();
+    }
+    function drawSwampPlayerMudChurnWorld(ctx2) {
+      const px = player.x;
+      const py = player.y;
+      const ph = 0.5 + 0.5 * Math.sin(simElapsed * 2.05);
+      const pw = 0.5 + 0.5 * Math.sin(simElapsed * 1.55 + 1.1);
+      const rOuter = player.r + 22 + ph * 10;
+      const g = ctx2.createRadialGradient(px, py + 3, 0, px, py, rOuter);
+      g.addColorStop(0, `rgba(32, 24, 18, ${0.07 + ph * 0.05})`);
+      g.addColorStop(0.42, `rgba(28, 36, 28, ${0.075 + pw * 0.025})`);
+      g.addColorStop(1, "rgba(12, 20, 16, 0)");
+      ctx2.fillStyle = g;
+      ctx2.beginPath();
+      ctx2.arc(px, py, rOuter, 0, Math.PI * 2);
+      ctx2.fill();
+      ctx2.strokeStyle = `rgba(22, 34, 26, ${0.045 + pw * 0.035})`;
+      ctx2.lineWidth = 2.5;
+      ctx2.beginPath();
+      ctx2.arc(px, py, player.r + 9 + ph * 5, 0, Math.PI * 2);
+      ctx2.stroke();
+      ctx2.strokeStyle = `rgba(18, 28, 22, ${0.03 + ph * 0.02})`;
+      ctx2.lineWidth = 1.5;
+      ctx2.beginPath();
+      ctx2.arc(px, py, player.r + 16 + pw * 6, 0, Math.PI * 2);
+      ctx2.stroke();
+    }
+    function drawSwampBubbleGlyph(ctx2, x, y, R, alpha) {
+      if (alpha <= 8e-3 || R < 0.5) return;
+      const a = alpha;
+      ctx2.fillStyle = `rgba(210, 232, 220, ${0.1 * a})`;
+      ctx2.beginPath();
+      ctx2.arc(x, y, R, 0, Math.PI * 2);
+      ctx2.fill();
+      ctx2.strokeStyle = `rgba(160, 190, 175, ${0.26 * a})`;
+      ctx2.lineWidth = Math.max(0.85, R * 0.1);
+      ctx2.beginPath();
+      ctx2.arc(x, y, R, 0, Math.PI * 2);
+      ctx2.stroke();
+      ctx2.fillStyle = `rgba(255, 255, 255, ${0.2 * a})`;
+      ctx2.beginPath();
+      ctx2.arc(x - R * 0.38, y - R * 0.4, R * 0.22, 0, Math.PI * 2);
+      ctx2.fill();
+    }
+    function swampObstacleInnerPoint(o, salt) {
+      const xi = Math.floor(o.x) | 0;
+      const yi = Math.floor(o.y) | 0;
+      const h = (xi * 92837111 ^ yi * 689287451 ^ salt * 374761393) >>> 0;
+      const mx = 0.1 + (h & 1023) / 1024 * 0.8;
+      const my = 0.1 + (h >>> 10 & 1023) / 1024 * 0.8;
+      return { x: o.x + mx * o.w, y: o.y + my * o.h };
+    }
+    function clampSwampBugToObstacle(px, py, o, pad) {
+      return {
+        x: Math.min(o.x + o.w - pad, Math.max(o.x + pad, px)),
+        y: Math.min(o.y + o.h - pad, Math.max(o.y + pad, py))
+      };
+    }
+    function drawSwampAtmosphereForegroundWorld(ctx2, viewW, viewH) {
+      const L = activeHexes.length;
+      if (!L) return;
+      const pickHex = (i) => activeHexes[((i * 17 ^ i * 3 + (i >> 1)) >>> 0) % L];
+      for (const h of activeHexes) {
+        const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+        const mix = h.q * 9283711 + h.r * 689287 >>> 0;
+        const nBubbles = 10 + mix % 12;
+        for (let m = 0; m < nBubbles; m++) {
+          const hsh = mix * 2654435761 + m * 1597334677 + h.q * 374761393 + h.r * 668265263 >>> 0;
+          const u01 = hsh / 4294967296;
+          const u02 = (hsh >>> 11) / 4294967296;
+          const ang = u01 * Math.PI * 2 + m * 1.713;
+          const radT = 0.11 + u02 * 0.26;
+          const spawnX = cx + Math.cos(ang) * HEX_SIZE * radT;
+          const spawnY0 = cy + Math.sin(ang * 1.09 + m * 0.37) * HEX_SIZE * radT * 0.92 + HEX_SIZE * 0.06;
+          const R = 2.55 + (mix + m * 47 + (hsh & 15)) % 6 * 0.36;
+          const life = 15 + (mix >> m % 4 & 7) * 1.6;
+          const phase = hsh % 1e4 / 1e4;
+          const t = simElapsed + phase * life;
+          const u = t % life / life;
+          const travel = 52 + (hsh >>> 8) % 5 * 16;
+          const speedMul = 1 + 7 * ((hsh >>> 20) % 1e3) / 1e3;
+          const x = spawnX;
+          const y = spawnY0 - u * travel * speedMul;
+          let alpha = 0.72;
+          if (u < 0.1) alpha *= u / 0.1;
+          else if (u > 0.62) alpha *= (1 - u) / 0.38;
+          drawSwampBubbleGlyph(ctx2, x, y, R, alpha);
+        }
+      }
+      const steamN = 40;
+      for (let i = 0; i < steamN; i++) {
+        const fh = pickHex(i * 5 + 2);
+        const sm = fh.q * 311 + fh.r * 177 + i * 41 >>> 0;
+        const { x: sx0, y: sy0 } = hexToWorld(fh.q, fh.r);
+        const rise = (simElapsed * (0.12 + sm % 5 * 0.02) + sm * 3e-3) % 1;
+        const sx = sx0 + Math.sin(sm * 0.02 + simElapsed * 0.12) * HEX_SIZE * 0.28;
+        const sy = sy0 - rise * HEX_SIZE * 0.85;
+        const hSteam = 18 + sm % 6 * 4;
+        const wSteam = 4 + sm % 3;
+        const sa = (0.026 + Math.sin(rise * Math.PI) * 0.036) * (0.9 + i % 3 * 0.09);
+        ctx2.save();
+        ctx2.translate(sx, sy);
+        ctx2.rotate((sm * 8e-3 + simElapsed * 0.06) % (Math.PI * 2));
+        const st = ctx2.createLinearGradient(0, hSteam * 0.5, 0, -hSteam * 0.5);
+        st.addColorStop(0, `rgba(40, 55, 48, ${sa * 0.6})`);
+        st.addColorStop(0.4, `rgba(95, 110, 98, ${sa * 0.45})`);
+        st.addColorStop(0.65, `rgba(200, 210, 198, ${sa * 0.75})`);
+        st.addColorStop(1, "rgba(220, 228, 218, 0)");
+        ctx2.fillStyle = st;
+        ctx2.beginPath();
+        ctx2.ellipse(0, 0, wSteam, hSteam, 0, 0, Math.PI * 2);
+        ctx2.fill();
+        ctx2.restore();
+      }
+      const mud = obstacles;
+      if (mud.length) {
+        const GNAT_CAP = 260;
+        let gnatPlaced = 0;
+        for (let oi = 0; oi < mud.length && gnatPlaced < GNAT_CAP; oi++) {
+          const o = mud[oi];
+          if (o.w < 0.5 || o.h < 0.5) continue;
+          const xi = Math.floor(o.x) | 0;
+          const yi = Math.floor(o.y) | 0;
+          const h0 = (xi * 92837111 ^ yi * 689287451 ^ oi * 2654435761) >>> 0;
+          const gn = 1 + (h0 >> 2 & 1) + (h0 >> 9 & 1);
+          const pad = 1.1;
+          const rx = Math.min(3.2, o.w * 0.38);
+          const ry = Math.min(3.2, o.h * 0.38);
+          for (let k = 0; k < gn && gnatPlaced < GNAT_CAP; k++) {
+            gnatPlaced++;
+            const base = swampObstacleInnerPoint(o, oi * 17 + k * 31);
+            const ks = h0 * 0.01 + k * 2.1 + oi * 0.11;
+            const t = simElapsed * 0.35;
+            const p = clampSwampBugToObstacle(
+              base.x + Math.sin(t + ks) * rx,
+              base.y + Math.cos(t * 0.95 + ks * 1.1) * ry,
+              o,
+              pad
+            );
+            const gx = p.x;
+            const gy = p.y;
+            const gk = 0.5 + 0.5 * Math.sin(simElapsed * 2.8 + h0 + k);
+            const gr = 1.15 + k % 3 * 0.55;
+            const ga = 0.32 + gk * 0.28;
+            ctx2.fillStyle = `rgba(48, 56, 50, ${ga})`;
+            ctx2.beginPath();
+            ctx2.arc(gx, gy, gr, 0, Math.PI * 2);
+            ctx2.fill();
+            ctx2.strokeStyle = `rgba(22, 28, 24, ${Math.min(0.9, ga + 0.12)})`;
+            ctx2.lineWidth = 1;
+            ctx2.beginPath();
+            ctx2.arc(gx, gy, gr, 0, Math.PI * 2);
+            ctx2.stroke();
+          }
+        }
+      }
+      const flyN = 118;
+      for (let i = 0; i < flyN; i++) {
+        if (!mud.length) break;
+        const seed = i * 11.27 + 0.55;
+        const o = mud[(i * 79 + 61 * (i % 11) >>> 0) % mud.length];
+        if (o.w < 0.5 || o.h < 0.5) continue;
+        const base = swampObstacleInnerPoint(o, i * 7919 + 42);
+        const buzz = simElapsed * (5.5 + i % 4 * 0.6);
+        const pad = 1.2;
+        const bx = Math.min(4, o.w * 0.42);
+        const by = Math.min(3.5, o.h * 0.42);
+        const p = clampSwampBugToObstacle(
+          base.x + Math.sin(buzz + seed) * bx + Math.sin(buzz * 2.1 + i) * (bx * 0.45),
+          base.y + Math.cos(buzz * 0.95 + seed * 2) * by + Math.cos(buzz * 2.4) * (by * 0.4),
+          o,
+          pad
+        );
+        const fx = p.x;
+        const fy = p.y;
+        const wing = 0.5 + 0.5 * Math.sin(buzz * 3.2);
+        const wingA = 0.52 + wing * 0.38;
+        ctx2.strokeStyle = `rgba(12, 18, 14, ${wingA})`;
+        ctx2.lineWidth = 1.35;
+        ctx2.beginPath();
+        ctx2.moveTo(fx - 4.5, fy - 0.45);
+        ctx2.lineTo(fx + 4.5, fy + 0.45);
+        ctx2.stroke();
+        ctx2.fillStyle = `rgba(18, 26, 20, ${0.62 + wing * 0.28})`;
+        ctx2.beginPath();
+        ctx2.arc(fx, fy, 1.45, 0, Math.PI * 2);
+        ctx2.fill();
+        ctx2.strokeStyle = `rgba(8, 12, 10, ${0.55 + wing * 0.2})`;
+        ctx2.lineWidth = 0.9;
+        ctx2.beginPath();
+        ctx2.arc(fx, fy, 1.45, 0, Math.PI * 2);
+        ctx2.stroke();
+      }
+    }
+    function resetFireGrowthZones() {
+      fireGrowthZones.length = 0;
+    }
+    function fireGrowthZoneRadius(zone) {
+      const u = clamp7((simElapsed - zone.bornAt) / Math.max(1e-3, zone.growDur), 0, 1);
+      const e = u * u * (3 - 2 * u);
+      return zone.baseR + (zone.maxR - zone.baseR) * e;
+    }
+    function fireGrowthZoneVisualRadius(zone) {
+      return fireGrowthZoneRadius(zone) * FIRE_GROWTH_ZONE_VISUAL_RADIUS_MULT;
+    }
+    function pruneFireGrowthZonesToActiveHexes() {
+      if (!fireGrowthZones.length) return;
+      const needed = new Set(activeHexes.map((h) => hexKey(h.q, h.r)));
+      for (let i = fireGrowthZones.length - 1; i >= 0; i--) {
+        if (!needed.has(fireGrowthZones[i].key)) fireGrowthZones.splice(i, 1);
+      }
+    }
+    function spawnFireGrowthZoneAt(x, y, opts = {}) {
+      const miniFromArtillery = !!opts.miniFromArtillery;
+      let h = worldToHex(x, y);
+      if (miniFromArtillery && specials.isSpecialTile(h.q, h.r)) {
+        for (const d of HEX_DIRS) {
+          const q2 = h.q + d.q;
+          const r2 = h.r + d.r;
+          if (!specials.isSpecialTile(q2, r2)) {
+            h = { q: q2, r: r2 };
+            break;
+          }
+        }
+      }
+      const k = hexKey(h.q, h.r);
+      if (!miniFromArtillery) {
+        if (specials.isSpecialTile(h.q, h.r)) return false;
+        if (fireGrowthZones.some((z) => z.key === k)) return false;
+      }
+      fireGrowthZones.push({
+        key: k,
+        q: h.q,
+        r: h.r,
+        x,
+        y,
+        bornAt: simElapsed,
+        growDur: miniFromArtillery ? randRange(3.2, 6.1) : randRange(5.2, 7.4),
+        baseR: miniFromArtillery ? randRange(30, 68) : randRange(90, 128),
+        maxR: miniFromArtillery ? randRange(86, 104) : randRange(328, 386),
+        nextTouchDamageAt: simElapsed + 0.18,
+        seed: Math.random() * Math.PI * 2
+      });
+      return true;
+    }
+    function maybeSpawnFireGrowthZone(dt) {
+      const targetMax = Math.min(5, 2 + Math.max(0, runLevel - 2));
+      if (fireGrowthZones.length >= targetMax) return;
+      const dangerRamp01 = hunterRuntime ? hunterRuntime.getDangerRamp01() : clamp7(simElapsed / 300, 0, 1);
+      const levelBonus = Math.max(0, runLevel - 2) * 0.04;
+      const spawnPerSec = 0.16 + levelBonus + 0.34 * dangerRamp01;
+      if (Math.random() >= spawnPerSec * Math.max(0, dt)) return;
+      const blocked = new Set(fireGrowthZones.map((z) => z.key));
+      const playerHex = worldToHex(player.x, player.y);
+      const candidates = activeHexes.filter((h2) => {
+        if (h2.q === 0 && h2.r === 0) return false;
+        if (h2.q === playerHex.q && h2.r === playerHex.r) return false;
+        if (blocked.has(hexKey(h2.q, h2.r))) return false;
+        if (specials.isSpecialTile(h2.q, h2.r)) return false;
+        return true;
+      });
+      if (!candidates.length) return;
+      const h = candidates[Math.floor(Math.random() * candidates.length)];
+      const c = hexToWorld(h.q, h.r);
+      const a = Math.random() * Math.PI * 2;
+      const d = randRange(HEX_SIZE * 0.12, HEX_SIZE * 0.46);
+      const x = c.x + Math.cos(a) * d;
+      const y = c.y + Math.sin(a) * d;
+      if (Math.hypot(x - player.x, y - player.y) < player.r + 68) return;
+      spawnFireGrowthZoneAt(x, y);
+    }
+    function spawnFireGrowthZonesFromFireArtillery() {
+      if (!hunterRuntime) return;
+      for (const z of hunterRuntime.entities.dangerZones) {
+        if (!z || !z.firePath || !z.exploded) continue;
+        if (z.fireGrowthSpawned) continue;
+        const spawned = spawnFireGrowthZoneAt(z.x, z.y, { miniFromArtillery: true });
+        if (spawned) z.fireGrowthSpawned = true;
+      }
+    }
+    function tickFireGrowthZones(dt) {
+      const firePathActive = pathRuntime.getCurrentPathId() === "fire";
+      if (!firePathActive || runLevel < 1) {
+        if (fireGrowthZones.length) resetFireGrowthZones();
+        return;
+      }
+      pruneFireGrowthZonesToActiveHexes();
+      if (runLevel >= 2) maybeSpawnFireGrowthZone(dt);
+      for (const zone of fireGrowthZones) {
+        const rr = fireGrowthZoneVisualRadius(zone) * 0.92 + player.r;
+        const dx = player.x - zone.x;
+        const dy = player.y - zone.y;
+        if (dx * dx + dy * dy > rr * rr) continue;
+        if (simElapsed < zone.nextTouchDamageAt) continue;
+        damagePlayerThroughPath(1, { sourceX: zone.x, sourceY: zone.y, fireApplyIgnite: true });
+        zone.nextTouchDamageAt = simElapsed + 0.35;
+      }
+    }
+    function drawFireGrowthZones(ctx2) {
+      if (!fireGrowthZones.length) return;
+      for (const zone of fireGrowthZones) {
+        const r = fireGrowthZoneRadius(zone);
+        const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 5.4 + zone.seed);
+        const visualR = fireGrowthZoneVisualRadius(zone);
+        const scorch = ctx2.createRadialGradient(zone.x, zone.y, visualR * 0.12, zone.x, zone.y, visualR * 1.2);
+        scorch.addColorStop(0, "rgba(69, 10, 10, 0.56)");
+        scorch.addColorStop(0.55, "rgba(39, 39, 42, 0.34)");
+        scorch.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx2.fillStyle = scorch;
+        ctx2.beginPath();
+        ctx2.arc(zone.x, zone.y, visualR * 1.2, 0, Math.PI * 2);
+        ctx2.fill();
+        const core = ctx2.createRadialGradient(zone.x, zone.y, 0, zone.x, zone.y, visualR);
+        core.addColorStop(0, `rgba(255, 251, 235, ${0.34 + pulse * 0.14})`);
+        core.addColorStop(0.22, `rgba(253, 186, 116, ${0.56 + pulse * 0.24})`);
+        core.addColorStop(0.58, `rgba(249, 115, 22, ${0.4 + pulse * 0.22})`);
+        core.addColorStop(1, "rgba(153, 27, 27, 0)");
+        ctx2.fillStyle = core;
+        ctx2.beginPath();
+        ctx2.arc(zone.x, zone.y, visualR, 0, Math.PI * 2);
+        ctx2.fill();
+        const outerHeat = ctx2.createRadialGradient(zone.x, zone.y, visualR * 0.55, zone.x, zone.y, visualR * 1.55);
+        outerHeat.addColorStop(0, `rgba(251, 146, 60, ${0.12 + pulse * 0.06})`);
+        outerHeat.addColorStop(0.7, "rgba(220, 38, 38, 0.08)");
+        outerHeat.addColorStop(1, "rgba(153, 27, 27, 0)");
+        ctx2.fillStyle = outerHeat;
+        ctx2.beginPath();
+        ctx2.arc(zone.x, zone.y, visualR * 1.55, 0, Math.PI * 2);
+        ctx2.fill();
+        const tongues = 10;
+        for (let i = 0; i < tongues; i++) {
+          const a = zone.seed + i * (Math.PI * 2 / tongues) + simElapsed * (0.55 + i * 0.08);
+          const tr = visualR * (0.5 + 0.18 * Math.sin(simElapsed * 2.2 + i));
+          const tx = zone.x + Math.cos(a) * tr;
+          const ty = zone.y + Math.sin(a) * tr;
+          const fr = visualR * (0.16 + 0.05 * Math.sin(simElapsed * 6 + i));
+          const fg = ctx2.createRadialGradient(tx, ty, 0, tx, ty, fr);
+          fg.addColorStop(0, "rgba(254, 243, 199, 0.32)");
+          fg.addColorStop(0.5, "rgba(251, 146, 60, 0.28)");
+          fg.addColorStop(1, "rgba(185, 28, 28, 0)");
+          ctx2.fillStyle = fg;
+          ctx2.beginPath();
+          ctx2.arc(tx, ty, fr, 0, Math.PI * 2);
+          ctx2.fill();
+        }
+        ctx2.strokeStyle = `rgba(254, 215, 170, ${0.4 + pulse * 0.22})`;
+        ctx2.lineWidth = 2.4;
+        ctx2.beginPath();
+        ctx2.arc(zone.x, zone.y, visualR * (0.86 + pulse * 0.08), 0, Math.PI * 2);
+        ctx2.stroke();
+      }
+    }
+    function damagePlayerThroughPath(amount, opts = {}) {
+      const hooked = pathRuntime.applyDamageHooks({
+        amount,
+        opts,
+        simElapsed,
+        runLevel,
+        player,
+        inventory: inventory2,
+        activeCharacterId
+      });
+      if (hooked?.cancel) return;
+      const finalAmount = hooked?.amount ?? amount;
+      const finalOpts = hooked?.opts ?? opts;
+      const baseDamage = Math.max(0, Number(amount) || 0);
+      let dmgToApply = Math.max(0, Number(finalAmount) || 0);
+      if (pathRuntime.getCurrentPathId() === "swamp" && dmgToApply > 0 && !finalOpts?.swampBootlegBloodTax) {
+        dmgToApply += getSwampBootlegFragileExtra(inventory2, simElapsed);
+      }
+      const damageBonus = Math.max(0, dmgToApply - baseDamage);
+      playerDamage.damagePlayer(dmgToApply, finalOpts);
+      if (dmgToApply > 0 && !finalOpts?.swampBootlegBloodTax) {
+        onSwampBootlegPlayerDamageHit(inventory2, simElapsed);
+      }
+      if (pathRuntime.getCurrentPathId() === "swamp" && runLevel >= 2 && Number(dmgToApply) > 0) {
+        playerDamage.applySwampHitSlow();
+      }
+      if (pathRuntime.getCurrentPathId() === "bone" && Number(finalAmount) > 0) {
+        boneBlindDebuffPeakEnd = simElapsed + BONE_BLIND_DEBUFF_PEAK_SEC;
+        boneBlindDebuffFadeEnd = boneBlindDebuffPeakEnd + BONE_BLIND_DEBUFF_FADE_SEC;
+        boneBlindDebuffFromBlueLaser = !!finalOpts?.laserBlueSlow;
+      }
+      if (dmgToApply > 0) spawnDamagePopup(dmgToApply, damageBonus, finalOpts);
+      if (pathRuntime.getCurrentPathId() === "swamp" && !finalOpts?.swampInfectionBurst && !finalOpts?.swampBootlegBloodTax && (finalOpts?.swampApplyInfection || dmgToApply > 0) && simElapsed >= swampInfectionChainLockUntil) {
+        const instanceId = finalOpts?.swampDamageInstanceId;
+        let shouldAddStack = true;
+        if (instanceId != null) {
+          const key = String(instanceId);
+          if (swampDamageInstanceSeenAt.has(key)) shouldAddStack = false;
+          else swampDamageInstanceSeenAt.set(key, simElapsed);
+        }
+        if (shouldAddStack) {
+          const minGap = runLevel >= 2 ? SWAMP_INFECTION_STACK_MIN_GAP_LEVEL3_SEC : runLevel >= 1 ? SWAMP_INFECTION_STACK_MIN_GAP_LEVEL2_SEC : 0;
+          if (minGap > 0 && swampInfectionStackLastAt > 0 && simElapsed - swampInfectionStackLastAt < minGap) {
+            shouldAddStack = false;
+          }
+        }
+        if (shouldAddStack) {
+          const prev = Math.max(0, Math.floor(inventory2.swampInfectionStacks ?? 0));
+          const next = prev + 1;
+          if (next >= SWAMP_INFECTION_CAP) {
+            inventory2.swampInfectionStacks = SWAMP_INFECTION_CAP;
+            swampInfectionChainLockUntil = simElapsed + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+            swampInfectionTenBurstAt = simElapsed;
+            swampInfectionDebuffOverlayUntil = simElapsed + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+            playerDamage.applySwampInfectionBurst(simElapsed);
+            damagePlayerThroughPath(1, {
+              sourceX: player.x,
+              sourceY: player.y,
+              swampInfectionBurst: true
+            });
+          } else {
+            inventory2.swampInfectionStacks = next;
+          }
+          swampInfectionStackLastAt = simElapsed;
+        }
+      }
+      if ((finalOpts?.fireApplyIgnite ?? false) && !(finalOpts?.fireIgniteTick ?? false)) {
+        const igniteStep = runLevel >= 2 ? 2 / 3 : 1;
+        fireIgniteTickStep = igniteStep;
+        fireIgniteUntil = simElapsed + 2;
+        fireIgniteNextTickAt = simElapsed + igniteStep;
+      }
+    }
     let cardPickup = null;
+    let swampBootlegCrystalModal = null;
+    let swampBootlegCurseUid = 0;
     function modalChromePausesWorld() {
-      return (cardPickup?.isPaused() ?? false) || (rouletteModal?.isPaused() ?? false) || (forgeWorldModal?.isForgePaused() ?? false) || safehouseHexFlow.isPausedForSafehousePrompt();
+      return (cardPickup?.isPaused() ?? false) || (rouletteModal?.isPaused() ?? false) || (forgeWorldModal?.isForgePaused() ?? false) || safehouseHexFlow.isPausedForSafehousePrompt() || (swampBootlegCrystalModal?.isPaused() ?? false);
     }
     function simClockPaused() {
-      return manualPause || handsResetPause || (cardPickup?.isPaused() ?? false) || (rouletteModal?.isPaused() ?? false) || (forgeWorldModal?.isForgePaused() ?? false);
+      return manualPause || handsResetPause || (cardPickup?.isPaused() ?? false) || (rouletteModal?.isPaused() ?? false) || (forgeWorldModal?.isForgePaused() ?? false) || (swampBootlegCrystalModal?.isPaused() ?? false);
     }
     function isWorldPaused() {
       return manualPause || handsResetPause || modalChromePausesWorld();
@@ -10223,30 +13306,54 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       syncDeckSlotsFromInventory(
         deckRankSlotEls,
         backpackSlotEls,
-        inventory,
+        inventory2,
         cardPickup?.getPendingCard() ?? null,
         getItemRulesForCharacter(activeCharacterId),
         forgeWorldModal?.isForgePaused() ?? false
       );
       if (setBonusStatusEl) {
-        const lines = getModalSetBonusProgressLines(inventory, cardPickup?.getPendingCard() ?? null, getItemRulesForCharacter(activeCharacterId));
+        const lines = getModalSetBonusProgressLines(inventory2, cardPickup?.getPendingCard() ?? null, getItemRulesForCharacter(activeCharacterId));
         setBonusStatusEl.textContent = lines.length ? lines.join("\n") : "";
       }
+      maybePromptDiamondEmpowerChoice();
     }
-    function switchActiveCharacter(id) {
-      if (id === activeCharacterId) return;
+    function maybePromptDiamondEmpowerChoice() {
+      if (!cardPickup) return;
+      if (activeCharacterId !== "knight") {
+        cardPickup.clearSetBonusChoice?.("diamonds");
+        hideDiamondEmpowerOverlay();
+        return;
+      }
+      if (inventory2.diamondEmpower) {
+        cardPickup.clearSetBonusChoice?.("diamonds");
+        hideDiamondEmpowerOverlay();
+        return;
+      }
+      const suits = countSuitsInActiveSlots(inventory2);
+      if (suits.diamonds < SET_BONUS_SUIT_THRESHOLD || suits.diamonds >= SET_BONUS_SUIT_MAX) {
+        cardPickup.clearSetBonusChoice?.("diamonds");
+        hideDiamondEmpowerOverlay();
+        return;
+      }
+      if (!(cardPickup.isPaused?.() ?? false)) return;
+      cardPickup.openSetBonusChoice("diamonds");
+      if (cardPickup.isDiamondSetBonusChoicePending?.()) showDiamondEmpowerOverlay();
+    }
+    function switchActiveCharacter(id, opts = {}) {
+      const forceReselect = !!(opts && opts.forceReselect);
+      if (!forceReselect && id === activeCharacterId) return;
       hideDeathScreen();
       activeCharacterId = id;
       if (id === "lunatic") {
         for (let r = 1; r <= 13; r++) {
-          inventory.deckByRank[r] = null;
+          inventory2.deckByRank[r] = null;
         }
-        inventory.backpackSlots[0] = null;
-        inventory.backpackSlots[1] = null;
-        inventory.backpackSlots[2] = null;
-        inventory.lunaticRegenBank = 0;
-        inventory.diamondEmpower = null;
-        inventory.valiantElectricBoxChargeBonus = 0;
+        inventory2.backpackSlots[0] = null;
+        inventory2.backpackSlots[1] = null;
+        inventory2.backpackSlots[2] = null;
+        inventory2.lunaticRegenBank = 0;
+        inventory2.diamondEmpower = null;
+        inventory2.valiantElectricBoxChargeBonus = 0;
       }
       character = instrumentObjectMethods(createCharacterController(id, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
         skip: ["getAbilityHud"]
@@ -10262,7 +13369,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       player._px = 0;
       player._py = 0;
       player.speedBurstMult = 1;
-      inventory.aceUltimateReadyAt = 0;
+      inventory2.aceUltimateReadyAt = 0;
       ultimateEffects.length = 0;
       ultimateShields.length = 0;
       ultimateBurstWaves.length = 0;
@@ -10272,9 +13379,24 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       timelockWorldShakeAt = 0;
       ultimateSpeedUntil = 0;
       knightSpadesWorldSlowUntil = 0;
+      fireIgniteUntil = 0;
+      fireIgniteNextTickAt = 0;
+      fireIgniteTickStep = 1;
+      boneBlindDebuffPeakEnd = 0;
+      boneBlindDebuffFadeEnd = 0;
+      boneBlindDebuffFromBlueLaser = false;
+      resetSwampInfection();
+      resetFireGrowthZones();
+      swampMudTrail.length = 0;
+      swampMudTrailLastX = NaN;
+      swampMudTrailLastY = NaN;
+      knightSwampDashSplashes.length = 0;
+      damagePopups.length = 0;
       specials.resetSessionState();
       safehouseHexFlow.resetSession();
       runLevel = 0;
+      pathRuntime.resetRun();
+      refreshDebugRunProgressUi();
       if (specialTestWestEl && "value" in specialTestWestEl) {
         specials.setTestWestKind(specialTestWestEl.value);
       }
@@ -10309,12 +13431,36 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       valiantWorld.reset(simElapsed);
       bulwarkWorld.reset();
+      prevKnightClubsInvisActive = false;
+      prevKnightBurstTerrainPhase = false;
       syncDeckHud();
     }
     const devHeroSelect = mountDevActiveHeroSelect(document, {
       initialId: activeCharacterId,
       onSelect: switchActiveCharacter
     });
+    const diamondEmpowerOverlayEl = document.getElementById("diamond-empower-overlay");
+    function hideDiamondEmpowerOverlay() {
+      if (!diamondEmpowerOverlayEl) return;
+      diamondEmpowerOverlayEl.classList.remove("open");
+      diamondEmpowerOverlayEl.setAttribute("aria-hidden", "true");
+    }
+    function showDiamondEmpowerOverlay() {
+      if (!diamondEmpowerOverlayEl) return;
+      diamondEmpowerOverlayEl.classList.add("open");
+      diamondEmpowerOverlayEl.setAttribute("aria-hidden", "false");
+    }
+    function wireDiamondEmpowerOverlay() {
+      if (!diamondEmpowerOverlayEl) return;
+      const bind = (btnId, id) => {
+        document.getElementById(btnId)?.addEventListener("click", () => {
+          cardPickup?.applyDiamondEmpowerChoice?.(id);
+        });
+      };
+      bind("diamond-empower-q", "dash2x");
+      bind("diamond-empower-w", "speedPassive");
+      bind("diamond-empower-e", "decoyFortify");
+    }
     cardPickup = instrumentObjectMethods(createCardPickupModal({
       cardModal: document.getElementById("card-modal"),
       cardModalFace: document.getElementById("card-modal-face"),
@@ -10322,7 +13468,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       cardSwapRow: document.getElementById("card-swap-row"),
       modalSetBonusStatusEl: document.getElementById("modal-set-bonus-status"),
       cardCloseButton: document.getElementById("card-close-button"),
-      inventory,
+      inventory: inventory2,
       getItemRules: () => getItemRulesForCharacter(activeCharacterId),
       syncDeckSlots: syncDeckHud,
       onPausedChange: (paused) => {
@@ -10333,12 +13479,25 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (runDead) return;
         handsResetPause = true;
         clearMovementKeys();
-      }
+      },
+      onDiamondEmpowerPicked: hideDiamondEmpowerOverlay
     }), "cardModal", runLogger);
+    swampBootlegCrystalModal = createSwampBootlegCrystalModal({
+      onPausedChange: (paused) => {
+        if (paused) {
+          handsResetPause = false;
+          return;
+        }
+        if (runDead) return;
+        handsResetPause = true;
+        clearMovementKeys();
+      }
+    });
+    wireDiamondEmpowerOverlay();
     syncDeckHud();
     rouletteModal = instrumentObjectMethods(createRouletteModal({
       doc: document,
-      inventory,
+      inventory: inventory2,
       getItemRules: () => getItemRulesForCharacter(activeCharacterId),
       getPendingCard: () => cardPickup?.getPendingCard() ?? null,
       getWorldCardPickups: () => collectibles.filter((x) => x.kind === "card").map((x) => ({ card: x.card })),
@@ -10348,7 +13507,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }), "rouletteModal", runLogger);
     forgeWorldModal = instrumentObjectMethods(createForgeWorldModal({
       doc: document,
-      inventory,
+      inventory: inventory2,
       getItemRules: () => getItemRulesForCharacter(activeCharacterId),
       syncDeckSlots: syncDeckHud,
       getOpenCardPickup: () => (card) => cardPickup?.openCardPickup(card),
@@ -10364,6 +13523,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         safehouseHexFlow.applyLevelUpAccepted({
           onRunLevelIncrement: () => {
             runLevel += 1;
+            pathRuntime.ensurePathAssignedForLevel(runLevel);
+            resetSwampInfection();
+            refreshDebugRunProgressUi();
           },
           onSpawnAnchorResetToDifficultyClock: (eff) => {
             hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
@@ -10412,7 +13574,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       return Math.hypot(x - c.x, y - c.y) <= HEX_SIZE + 4;
     }
     function ejectSpawnerHunterFromSpecialHexFootprint(h) {
-      if (h.type !== "spawner" && h.type !== "airSpawner") return;
+      if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") return;
       if (!isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y)) return;
       const hq = worldToHex(h.x, h.y);
       const c = hexToWorld(hq.q, hq.r);
@@ -10507,14 +13669,17 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       getObstacles: () => obstacles,
       getDecoys: () => character.getDecoys(),
       getCharacterId: () => activeCharacterId,
-      getInventory: () => inventory,
+      getActivePathId: () => pathRuntime.getCurrentPathId(),
+      getInventory: () => inventory2,
       getPlayerUntargetableUntil: () => playerDamage.combat.playerUntargetableUntil,
       pickRogueHunterTarget: (hunter, playerRef, inv, nearestDecoy, hasLOS, fallback, elapsed) => rogueWorld.pickRogueHunterTarget(hunter, playerRef, inv, nearestDecoy, hasLOS, fallback, elapsed),
       rand: randRange,
       getViewSize: () => ({ w: canvas.width, h: canvas.height }),
-      damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+      damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
       collidesValiantEnemyShockField: (circle, elapsed) => valiantWorld.collidesEnemyShockField(circle, elapsed),
       getBulwarkPlantedFlag: () => activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function" ? character.getBulwarkWorld().getPlantedFlagForAi() : null,
+      getDebugHunterTypeFilter: () => huntersEnabled ? debugHunterTypeFilter : null,
+      getSwampBootlegColourblind: () => pathRuntime.getCurrentPathId() === "swamp" && getSwampBootlegColourblind(inventory2, simElapsed),
       hitDecoyIfAny,
       hitDecoyAlongSegment,
       worldToHex,
@@ -10555,7 +13720,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       isSurgeHexTile: (q, r) => specials.isSurgeHexTile(q, r),
       isSurgeHexInteractive: (q, r) => specials.isSurgeHexInteractive(q, r),
       markProceduralSurgeHexSpent: (q, r) => specials.markProceduralSurgeHexSpent(q, r),
-      damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+      damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
       bumpScreenShake: (s, sec) => playerDamage.bumpScreenShake(s, sec),
       dropSpecialEventJokerReward: () => dropJokerRewardFromSpecialEvent({
         getCharacterId: () => activeCharacterId,
@@ -10569,7 +13734,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       ejectHuntersFromSurgeLockHex: (lq, lr, sp) => hunterRuntime.ejectHuntersFromSurgeLockHex(lq, lr, sp),
       isCardPickupPaused: () => cardPickup?.isPaused() ?? false
     }), "events", runLogger, { skip: ["tick", "postHunterTick", "getArenaDrawState", "getSurgeDrawState"] });
-    function restartRunAfterDeath() {
+    function performFullRunResetAfterDeath() {
       if (!runDead || !hunterRuntime) return;
       hideDeathScreen();
       runDead = false;
@@ -10592,21 +13757,26 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       player.velY = 0;
       player.speedBurstMult = 1;
       for (let r = 1; r <= 13; r++) {
-        inventory.deckByRank[r] = null;
+        inventory2.deckByRank[r] = null;
       }
-      inventory.backpackSlots[0] = null;
-      inventory.backpackSlots[1] = null;
-      inventory.backpackSlots[2] = null;
-      inventory.clubsInvisUntil = 0;
-      inventory.spadesLandingStealthUntil = 0;
-      inventory.spadesObstacleBoostUntil = 0;
-      inventory.heartsResistanceReadyAt = 0;
-      inventory.heartsRegenPerSec = 0;
-      inventory.heartsRegenBank = 0;
-      inventory.diamondEmpower = null;
-      inventory.valiantElectricBoxChargeBonus = 0;
-      inventory.lunaticRegenBank = 0;
-      inventory.aceUltimateReadyAt = 0;
+      inventory2.backpackSlots[0] = null;
+      inventory2.backpackSlots[1] = null;
+      inventory2.backpackSlots[2] = null;
+      inventory2.clubsInvisUntil = 0;
+      inventory2.spadesLandingStealthUntil = 0;
+      inventory2.spadesObstacleBoostUntil = 0;
+      inventory2.heartsResistanceReadyAt = 0;
+      inventory2.heartsResistanceCooldownDuration = 0;
+      inventory2.swampInfectionStacks = 0;
+      resetSwampBootlegState(inventory2);
+      swampBootlegCurseUid = 0;
+      swampBootlegCrystalModal?.close?.();
+      inventory2.heartsRegenPerSec = 0;
+      inventory2.heartsRegenBank = 0;
+      inventory2.diamondEmpower = null;
+      inventory2.valiantElectricBoxChargeBonus = 0;
+      inventory2.lunaticRegenBank = 0;
+      inventory2.aceUltimateReadyAt = 0;
       ultimateEffects.length = 0;
       ultimateShields.length = 0;
       ultimateBurstWaves.length = 0;
@@ -10616,9 +13786,24 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       timelockWorldShakeAt = 0;
       ultimateSpeedUntil = 0;
       knightSpadesWorldSlowUntil = 0;
+      fireIgniteUntil = 0;
+      fireIgniteNextTickAt = 0;
+      fireIgniteTickStep = 1;
+      boneBlindDebuffPeakEnd = 0;
+      boneBlindDebuffFadeEnd = 0;
+      boneBlindDebuffFromBlueLaser = false;
+      resetSwampInfection();
+      resetFireGrowthZones();
+      swampMudTrail.length = 0;
+      swampMudTrailLastX = NaN;
+      swampMudTrailLastY = NaN;
+      knightSwampDashSplashes.length = 0;
+      damagePopups.length = 0;
       specials.resetSessionState();
       safehouseHexFlow.resetSession();
       runLevel = 0;
+      pathRuntime.resetRun();
+      refreshDebugRunProgressUi();
       if (specialTestWestEl && "value" in specialTestWestEl) {
         specials.setTestWestKind(specialTestWestEl.value);
       }
@@ -10650,20 +13835,54 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (typeof character.resetRunState === "function") {
         character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
       }
+      prevKnightClubsInvisActive = false;
+      prevKnightBurstTerrainPhase = false;
       syncDeckHud();
       snapCameraToPlayer();
+    }
+    function goToCharacterSelectAfterDeath() {
+      if (!runDead || !hunterRuntime) return;
+      performFullRunResetAfterDeath();
+      manualPause = true;
+      clearMovementKeys();
+      expectingCharacterPickAfterDeath = true;
+      characterSelectModalEl?.classList.add("open");
     }
     function onDeathRetryKeydown(e) {
       if (!runDead) return;
       if (e.key !== "Enter") return;
       if (e.repeat) return;
       e.preventDefault();
-      restartRunAfterDeath();
+      goToCharacterSelectAfterDeath();
     }
     window.addEventListener("keydown", onDeathRetryKeydown);
+    function onDeathScreenChooseHeroClick() {
+      if (!runDead) return;
+      goToCharacterSelectAfterDeath();
+    }
+    deathScreenChooseHeroBtn?.addEventListener("click", onDeathScreenChooseHeroClick);
+    mobileControlDisposers.push(() => deathScreenChooseHeroBtn?.removeEventListener("click", onDeathScreenChooseHeroClick));
+    function onHeroPickFromModal(ev) {
+      const btn = ev.target instanceof Element ? ev.target.closest("button[data-character-id]") : null;
+      if (!btn || btn.hasAttribute("disabled")) return;
+      const nextId = btn.dataset.characterId;
+      if (!nextId) return;
+      const forceReselect = expectingCharacterPickAfterDeath || !hasLockedInitialHeroFromModal;
+      switchActiveCharacter(nextId, { forceReselect });
+      hasLockedInitialHeroFromModal = true;
+      expectingCharacterPickAfterDeath = false;
+      characterSelectModalEl?.classList.remove("open");
+      manualPause = false;
+      handsResetPause = false;
+    }
+    const characterPickHostEl = document.getElementById("character-select-pick");
+    if (characterPickHostEl) {
+      characterPickHostEl.addEventListener("click", onHeroPickFromModal);
+      mobileControlDisposers.push(() => characterPickHostEl.removeEventListener("click", onHeroPickFromModal));
+    }
     const RESUME_KEYS = /* @__PURE__ */ new Set(["q", "w", "e", "r", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
     function isCharacterSelectModalOpen() {
-      return document.getElementById("character-select-modal")?.classList.contains("open") ?? false;
+      return characterSelectModalEl?.classList.contains("open") ?? false;
     }
     function pauseKeyRoutingBlocked(ev) {
       const t = ev.target;
@@ -10682,7 +13901,6 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         }
         manualPause = false;
         handsResetPause = false;
-        clearMovementKeys();
         return;
       }
       if (key === " " && !runDead && !modalChromePausesWorld()) {
@@ -10693,10 +13911,29 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
     }
     window.addEventListener("keydown", onManualPauseKeydown);
+    function tryMobileHudPause() {
+      if (runDead) return;
+      if (modalChromePausesWorld()) return;
+      if (manualPause || handsResetPause) return;
+      manualPause = true;
+      clearMovementKeys();
+    }
     const dangerRampFillEl = document.getElementById("danger-ramp-fill");
     const devHuntersEl = document.getElementById("dev-hunters-enabled");
-    let huntersEnabled = true;
+    const devHunterTypeFilterEl = document.getElementById("dev-hunter-type-filter");
+    var huntersEnabled = true;
     const HUNTERS_LS_KEY = "escape-dev-hunters-enabled";
+    const HUNTER_TYPE_FILTER_LS_KEY = "escape-dev-hunter-type-filter";
+    var debugHunterTypeFilter = null;
+    function normalizeDebugHunterTypeFilter(value) {
+      if (typeof value !== "string") return null;
+      const v = value.trim();
+      if (!v || v === "__all__") return null;
+      if (v === "chaser" || v === "frogChaser" || v === "cutter" || v === "sniper" || v === "ranged" || v === "laser" || v === "laserBlue" || v === "spawner" || v === "airSpawner" || v === "cryptSpawner" || v === "ghost" || v === "fast") {
+        return v;
+      }
+      return null;
+    }
     if (devHuntersEl && "checked" in devHuntersEl) {
       const saved = localStorage.getItem(HUNTERS_LS_KEY);
       if (saved != null) devHuntersEl.checked = saved !== "0";
@@ -10707,10 +13944,71 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         hunterRuntime.reset();
       });
     }
+    if (devHunterTypeFilterEl && "value" in devHunterTypeFilterEl) {
+      const saved = localStorage.getItem(HUNTER_TYPE_FILTER_LS_KEY);
+      const normalized = normalizeDebugHunterTypeFilter(saved);
+      debugHunterTypeFilter = normalized;
+      devHunterTypeFilterEl.value = normalized ?? "__all__";
+      devHunterTypeFilterEl.addEventListener("change", () => {
+        const normalizedNext = normalizeDebugHunterTypeFilter(String(devHunterTypeFilterEl.value || "__all__"));
+        debugHunterTypeFilter = normalizedNext;
+        localStorage.setItem(HUNTER_TYPE_FILTER_LS_KEY, normalizedNext ?? "__all__");
+        if (huntersEnabled) hunterRuntime.reset();
+      });
+    }
+    const debugRunLevelDecEl = document.getElementById("debug-run-level-dec");
+    const debugRunLevelIncEl = document.getElementById("debug-run-level-inc");
+    const debugRunLevelValueEl = document.getElementById("debug-run-level-value");
+    const debugPathSelectEl = document.getElementById("debug-path-select");
+    function refreshDebugRunProgressUi() {
+      const pathVisual = pathRuntime.getPathVisualConfig();
+      applyPathShellTheme(pathRuntime.getCurrentPathId());
+      if (debugRunLevelValueEl) {
+        debugRunLevelValueEl.textContent = `Level ${runLevel + 1} \xB7 Path: ${pathVisual.label}`;
+      }
+      if (debugPathSelectEl && "value" in debugPathSelectEl) {
+        debugPathSelectEl.value = pathRuntime.getForcedPathId() ?? "__auto__";
+      }
+    }
+    function applyDebugRunLevel(nextRunLevel) {
+      runLevel = Math.max(0, Math.floor(nextRunLevel));
+      if (runLevel < 1 && !pathRuntime.getForcedPathId()) {
+        pathRuntime.resetRun();
+      } else {
+        pathRuntime.ensurePathAssignedForLevel(runLevel);
+      }
+      const eff = safehouseHexFlow.getDifficultyClockSec(simElapsed);
+      hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
+      resetSwampInfection();
+      refreshDebugRunProgressUi();
+    }
+    if (debugPathSelectEl && "value" in debugPathSelectEl) {
+      for (const def of pathRuntime.getPathDefs()) {
+        const opt = document.createElement("option");
+        opt.value = def.id;
+        opt.textContent = def.label;
+        debugPathSelectEl.appendChild(opt);
+      }
+      debugPathSelectEl.addEventListener("change", () => {
+        const selected = String(debugPathSelectEl.value || "__auto__");
+        if (selected === "__auto__") {
+          pathRuntime.setForcedPathId(null);
+          if (runLevel < 1) pathRuntime.resetRun();
+          else pathRuntime.ensurePathAssignedForLevel(runLevel);
+        } else {
+          pathRuntime.setForcedPathId(selected);
+        }
+        refreshDebugRunProgressUi();
+      });
+    }
+    debugRunLevelDecEl?.addEventListener("click", () => applyDebugRunLevel(runLevel - 1));
+    debugRunLevelIncEl?.addEventListener("click", () => applyDebugRunLevel(runLevel + 1));
+    refreshDebugRunProgressUi();
     const debugItemSuitEl = document.getElementById("debug-item-suit");
     const debugItemRankEl = document.getElementById("debug-item-rank");
     const debugItemEffectEl = document.getElementById("debug-item-effect");
     const debugItemDropBtn = document.getElementById("debug-item-drop-button");
+    const debugItemPopulateBuildBtn = document.getElementById("debug-item-populate-build-button");
     function debugEffectOptions(suit, rank) {
       const opts = [];
       const add = (id, label, effect, effectBorrowedSuit) => opts.push({ id, label, effect, effectBorrowedSuit });
@@ -10735,9 +14033,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           return;
         }
         if (srcSuit === "clubs") {
-          add(`clubs:dodge`, "clubs dodge", { kind: "dodge", value: (5 + 0.1 * rank) / 100 }, srcSuit);
+          add(`clubs:dodge`, "clubs dodge", { kind: "dodge", value: (2 + rank) / 100 }, srcSuit);
           add(`clubs:stun`, "clubs stun", { kind: "stun", value: 0.2 * rank }, srcSuit);
-          add(`clubs:invisBurst`, "clubs invis on burst", { kind: "invisBurst", value: 0.1 * rank }, srcSuit);
+          add(`clubs:invisBurst`, "clubs invis on burst", { kind: "invisBurst", value: invisBurstDurationSeconds(rank) }, srcSuit);
           return;
         }
         if (srcSuit === "spades") {
@@ -10755,6 +14053,20 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         addDefaultBySuit(suit);
       }
       return opts;
+    }
+    const DEBUG_POPULATE_SUITS = ["diamonds", "hearts", "clubs", "spades", "joker"];
+    function makeRandomDebugBuildCard(rank, idTag) {
+      const suit = DEBUG_POPULATE_SUITS[Math.floor(Math.random() * DEBUG_POPULATE_SUITS.length)];
+      const options = debugEffectOptions(suit, rank);
+      if (!options.length) return null;
+      const chosen = options[Math.floor(Math.random() * options.length)];
+      return {
+        id: `debug-build-${Date.now()}-${idTag}-${Math.floor(Math.random() * 1e6)}`,
+        suit,
+        rank,
+        effect: chosen.effect,
+        ...suit === "joker" ? { effectBorrowedSuit: chosen.effectBorrowedSuit ?? "spades" } : {}
+      };
     }
     function refreshDebugItemEffectOptions() {
       if (!debugItemSuitEl || !debugItemRankEl || !debugItemEffectEl) return;
@@ -10835,17 +14147,33 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         effect: card.effect?.kind ?? "unknown"
       });
     });
+    debugItemPopulateBuildBtn?.addEventListener("click", () => {
+      for (let r = 1; r <= 13; r++) {
+        inventory2.deckByRank[r] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(r, `deck${r}`);
+      }
+      for (let i = 0; i < inventory2.backpackSlots.length; i++) {
+        const rank = 1 + Math.floor(Math.random() * 13);
+        inventory2.backpackSlots[i] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(rank, `bp${i}`);
+      }
+      syncDeckHud();
+      runLogger.log("debug", "populate build", { deckFilled: 13, backpackSlots: inventory2.backpackSlots.length });
+    });
     function buildAbilityContext(dt) {
       return {
         player,
         elapsed: simElapsed,
         dt,
         obstacles,
-        inventory,
+        inventory: inventory2,
         resolvePlayer: (x, y, r) => resolvePlayerAgainstRects(x, y, r, obstaclesForPlayerCollision()),
         circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstaclesForPlayerCollision()),
         spawnAttackRing: (x, y, r, color, durationSec) => {
           pushAttackRing(attackRings, x, y, r, color, simElapsed, durationSec);
+        },
+        spawnKnightDashEndSplash: (x, y) => {
+          if (pathRuntime.getCurrentPathId() !== "swamp") return;
+          knightSwampDashSplashes.push({ x, y, bornAt: simElapsed, pr: player.r });
+          while (knightSwampDashSplashes.length > 6) knightSwampDashSplashes.shift();
         },
         spawnUltimateEffect: (type, x, y, color, durationSec, radius, opts = {}) => {
           const bornAt = opts.bornAt ?? simElapsed;
@@ -10895,7 +14223,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           player.tempHp = value;
           player.tempHpExpiry = expiry;
         },
-        countActiveSuits: () => countSuitsInActiveSlots(inventory),
+        countActiveSuits: () => countSuitsInActiveSlots(inventory2),
         bumpScreenShake: (strength, sec) => playerDamage.bumpScreenShake(strength, sec),
         grantInvulnerabilityUntil: (until) => playerDamage.grantInvulnerabilityUntil(until),
         onValiantWillDeath: () => playerDamage.killPlayerImmediate(),
@@ -10905,24 +14233,146 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         bulwarkParryPushHunters: (px, py, rad, dist) => hunterRuntime?.bulwarkParryPushHunters?.(px, py, rad, dist)
       };
     }
-    const abilityKeys = attachAbilityKeyPresses(
-      window,
-      (slot) => {
-        if (runDead || isWorldPaused()) return;
-        if (simElapsed < playerTimelockUntil) return;
-        const ctx2 = buildAbilityContext(0);
-        if (slot === "r" && tryUseEquippedUltimate(ctx2)) return;
-        character.onAbilityPress(slot, ctx2);
-      },
-      void 0,
-      (slot) => {
-        if (runDead || isWorldPaused()) return;
-        if (simElapsed < playerTimelockUntil) return;
-        if (typeof character.onAbilityRelease !== "function") return;
-        const ctx2 = buildAbilityContext(0);
-        character.onAbilityRelease(slot, ctx2);
+    function handleAbilityPress(slot) {
+      if (runDead) return;
+      if (manualPause || handsResetPause) {
+        manualPause = false;
+        handsResetPause = false;
       }
-    );
+      if (isWorldPaused()) return;
+      if ((slot === "q" || slot === "w" || slot === "e") && simElapsed < (inventory2.swampBootlegSpellSilenceUntil ?? 0)) {
+        return;
+      }
+      if (simElapsed < playerTimelockUntil) return;
+      const ctx2 = buildAbilityContext(0);
+      if (slot === "r" && tryUseEquippedUltimate(ctx2)) return;
+      character.onAbilityPress(slot, ctx2);
+    }
+    function handleAbilityRelease(slot) {
+      if (runDead || isWorldPaused()) return;
+      if (simElapsed < playerTimelockUntil) return;
+      if (typeof character.onAbilityRelease !== "function") return;
+      const ctx2 = buildAbilityContext(0);
+      character.onAbilityRelease(slot, ctx2);
+    }
+    const abilityKeys = attachAbilityKeyPresses(window, handleAbilityPress, void 0, handleAbilityRelease);
+    if (mobileUiEnabled) {
+      if (characterSelectModalEl) {
+        characterSelectModalEl.classList.add("open");
+        manualPause = true;
+        clearMovementKeys();
+      }
+      if (mobileUnpauseBtn) {
+        const onMobileUnpause = (ev) => {
+          if (runDead) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          manualPause = false;
+          handsResetPause = false;
+        };
+        mobileUnpauseBtn.addEventListener("pointerdown", onMobileUnpause, { passive: false });
+        mobileControlDisposers.push(() => mobileUnpauseBtn.removeEventListener("pointerdown", onMobileUnpause));
+      }
+      const mobileHudPauseBtn = document.getElementById("mobile-hud-pause-btn");
+      if (mobileHudPauseBtn) {
+        const onMobileHudPause = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          tryMobileHudPause();
+        };
+        mobileHudPauseBtn.addEventListener("pointerdown", onMobileHudPause, { passive: false });
+        mobileControlDisposers.push(() => mobileHudPauseBtn.removeEventListener("pointerdown", onMobileHudPause));
+      }
+      const stickZoneEl = document.getElementById("mobile-stick-zone");
+      const stickKnobEl = document.getElementById("mobile-stick-knob");
+      if (stickZoneEl && stickKnobEl) {
+        let stickPointerId = null;
+        let stickCx = 0;
+        let stickCy = 0;
+        let stickR = 1;
+        const updateStickGeom = () => {
+          const rect = stickZoneEl.getBoundingClientRect();
+          stickCx = rect.left + rect.width / 2;
+          stickCy = rect.top + rect.height / 2;
+          stickR = Math.max(24, Math.min(rect.width, rect.height) * 0.36);
+        };
+        const resetStick = () => {
+          stickPointerId = null;
+          clearTouchMoveInputs();
+          stickKnobEl.style.transform = "translate(0px, 0px)";
+        };
+        const updateStickFromEvent = (ev) => {
+          const dx = ev.clientX - stickCx;
+          const dy = ev.clientY - stickCy;
+          const len = Math.hypot(dx, dy) || 1;
+          const clamped = Math.min(stickR, len);
+          const kx = dx / len * clamped;
+          const ky = dy / len * clamped;
+          stickKnobEl.style.transform = `translate(${kx}px, ${ky}px)`;
+          setTouchMoveFromStick(dx / stickR, dy / stickR);
+        };
+        const onStickDown = (ev) => {
+          ev.preventDefault();
+          updateStickGeom();
+          stickPointerId = ev.pointerId;
+          stickZoneEl.setPointerCapture(ev.pointerId);
+          updateStickFromEvent(ev);
+        };
+        const onStickMove = (ev) => {
+          if (ev.pointerId !== stickPointerId) return;
+          ev.preventDefault();
+          updateStickFromEvent(ev);
+        };
+        const onStickUp = (ev) => {
+          if (ev.pointerId !== stickPointerId) return;
+          ev.preventDefault();
+          resetStick();
+        };
+        stickZoneEl.addEventListener("pointerdown", onStickDown);
+        stickZoneEl.addEventListener("pointermove", onStickMove);
+        stickZoneEl.addEventListener("pointerup", onStickUp);
+        stickZoneEl.addEventListener("pointercancel", onStickUp);
+        window.addEventListener("blur", resetStick);
+        mobileControlDisposers.push(() => {
+          stickZoneEl.removeEventListener("pointerdown", onStickDown);
+          stickZoneEl.removeEventListener("pointermove", onStickMove);
+          stickZoneEl.removeEventListener("pointerup", onStickUp);
+          stickZoneEl.removeEventListener("pointercancel", onStickUp);
+          window.removeEventListener("blur", resetStick);
+        });
+      }
+      for (const slot of ["q", "w", "e", "r"]) {
+        const btn = document.getElementById(`mobile-btn-${slot}`);
+        if (!btn) continue;
+        let heldPointerId = null;
+        const onDown = (ev) => {
+          ev.preventDefault();
+          heldPointerId = ev.pointerId;
+          btn.setPointerCapture?.(ev.pointerId);
+          if (slot === "q" || slot === "e") touchSteerHeld[slot] = true;
+          btn.classList.add("mobile-action-btn--active");
+          handleAbilityPress(slot);
+        };
+        const onUp = (ev) => {
+          if (heldPointerId != null && ev.pointerId !== heldPointerId) return;
+          ev.preventDefault();
+          heldPointerId = null;
+          if (slot === "q" || slot === "e") touchSteerHeld[slot] = false;
+          btn.classList.remove("mobile-action-btn--active");
+          handleAbilityRelease(slot);
+        };
+        btn.addEventListener("pointerdown", onDown);
+        btn.addEventListener("pointerup", onUp);
+        btn.addEventListener("pointercancel", onUp);
+        btn.addEventListener("pointerleave", onUp);
+        mobileControlDisposers.push(() => {
+          btn.removeEventListener("pointerdown", onDown);
+          btn.removeEventListener("pointerup", onUp);
+          btn.removeEventListener("pointercancel", onUp);
+          btn.removeEventListener("pointerleave", onUp);
+        });
+      }
+    }
     function isLootForbiddenForSpawns(q, r) {
       if (specials.isSpecialTile(q, r)) return true;
       if (activeCharacterId === "lunatic" && typeof character.getHealExcludeHexKey === "function") {
@@ -10956,12 +14406,76 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const dt = rawDt * speedMul;
         const simPaused = simClockPaused();
         const paused = isWorldPaused();
+        if (mobileUiEnabled && mobileUnpauseBtn) {
+          const showMbUnpause = (manualPause || handsResetPause) && !runDead && !(characterSelectModalEl?.classList.contains("open") ?? false);
+          mobileUnpauseBtn.hidden = !showMbUnpause;
+        }
         if (!paused) {
           playerDamage.tickCombatPresentation(rawDt);
         }
         if (!simPaused && !runDead) {
           simElapsed += rawDt;
+          if (swampInfectionChainLockUntil > 0 && simElapsed >= swampInfectionChainLockUntil) {
+            swampInfectionChainLockUntil = 0;
+            inventory2.swampInfectionStacks = 0;
+            swampInfectionStackLastAt = 0;
+          }
+          tickSwampBootlegCurses(inventory2, simElapsed);
+          tickSwampBootlegBloodTax(
+            inventory2,
+            simElapsed,
+            (amt) => damagePlayerThroughPath(amt, {
+              swampBootlegBloodTax: true,
+              sourceX: player.x,
+              sourceY: player.y
+            })
+          );
           character.tick(buildAbilityContext(dt));
+          pathRuntime.applyDebuffHooks({ dt, simElapsed, runLevel, player, inventory: inventory2, activeCharacterId });
+          const swampPathActive2 = pathRuntime.getCurrentPathId() === "swamp";
+          const firePathActive2 = pathRuntime.getCurrentPathId() === "fire";
+          const bonePathActive2 = pathRuntime.getCurrentPathId() === "bone";
+          if (swampDamageInstanceSeenAt.size > 0) {
+            const cutoff = simElapsed - 20;
+            for (const [k, t] of swampDamageInstanceSeenAt) {
+              if (t < cutoff) swampDamageInstanceSeenAt.delete(k);
+            }
+          }
+          if (!swampPathActive2 && (inventory2.swampInfectionStacks ?? 0) > 0) {
+            resetSwampInfection();
+          }
+          if (!firePathActive2) {
+            fireIgniteUntil = 0;
+            fireIgniteNextTickAt = 0;
+            fireIgniteTickStep = 1;
+          } else if (fireIgniteUntil > simElapsed && fireIgniteNextTickAt > 0 && simElapsed >= fireIgniteNextTickAt) {
+            while (fireIgniteUntil > simElapsed && simElapsed >= fireIgniteNextTickAt) {
+              damagePlayerThroughPath(1, { fireIgniteTick: true, fireNoIgnite: true, sourceX: player.x, sourceY: player.y });
+              fireIgniteNextTickAt += fireIgniteTickStep;
+              if (player.hp <= 0) break;
+            }
+          } else if (fireIgniteUntil <= simElapsed) {
+            fireIgniteUntil = 0;
+            fireIgniteNextTickAt = 0;
+            fireIgniteTickStep = 1;
+          }
+          if (!bonePathActive2) {
+            boneBlindDebuffPeakEnd = 0;
+            boneBlindDebuffFadeEnd = 0;
+            boneBlindDebuffFromBlueLaser = false;
+          }
+          tickFireGrowthZones(rawDt);
+          if (activeCharacterId === "knight") {
+            const clubsInvis = simElapsed < (inventory2.clubsInvisUntil ?? 0);
+            const burstTerrainPhase = knightHasClubsSevenSet() && typeof character.getBurstVisualUntil === "function" && character.getBurstVisualUntil(simElapsed) > simElapsed;
+            if (prevKnightClubsInvisActive && !clubsInvis) ejectKnightFromSolidTerrainIfNeeded();
+            if (prevKnightBurstTerrainPhase && !burstTerrainPhase) ejectKnightFromSolidTerrainIfNeeded();
+            prevKnightClubsInvisActive = clubsInvis;
+            prevKnightBurstTerrainPhase = burstTerrainPhase;
+          } else {
+            prevKnightClubsInvisActive = false;
+            prevKnightBurstTerrainPhase = false;
+          }
           player.hp = Math.max(0, Math.min(player.maxHp, player.hp));
           if (activeCharacterId === "valiant") {
             const lootPlacementOpts = () => ({
@@ -10986,7 +14500,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           let vx = 0;
           let vy = 0;
           let rogueMovementIntent = false;
-          if (simElapsed < playerTimelockUntil) {
+          if (simElapsed < playerTimelockUntil || playerDamage.isSwampInfectionMoveLocked()) {
             player.velX = 0;
             player.velY = 0;
             player._px = player.x;
@@ -10996,17 +14510,19 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               dt,
               simElapsed,
               player,
-              keys,
-              steerLeft: () => steerKeys.isDown("q"),
-              steerRight: () => steerKeys.isDown("e"),
-              inventory,
+              keys: {
+                isDown: (k) => k === "ArrowLeft" || k === "ArrowRight" || k === "ArrowUp" || k === "ArrowDown" ? isArrowHeld(k) : keys.isDown(k)
+              },
+              steerLeft: () => isSteerHeld("q"),
+              steerRight: () => isSteerHeld("e"),
+              inventory: inventory2,
               PLAYER_SPEED,
               ultimateSpeedUntil,
-              laserSlowMult: playerDamage.isLaserSlowActive() ? LASER_BLUE_PLAYER_SLOW_MULT : 1,
+              laserSlowMult: playerDamage.getMovementSlowMult() * (pathRuntime.getCurrentPathId() === "swamp" && hunterRuntime ? hunterRuntime.getFrogMudPoolMoveMult(player.x, player.y, player.r, simElapsed) : 1) * (pathRuntime.getCurrentPathId() === "swamp" ? getSwampBootlegMoveSpeedMult(inventory2, simElapsed) : 1),
               getObsForCollision: () => obstaclesForPlayerCollision(),
               resolvePlayerAgainstRects,
               circleOverlapsAnyRect,
-              damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts),
+              damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
               spawnAttackRing: (x, y, r, color, durationSec) => {
                 pushAttackRing(attackRings, x, y, r, color, simElapsed, durationSec);
               },
@@ -11023,11 +14539,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               }
             }) : null;
             const bulwarkCharging = activeCharacterId === "bulwark" && typeof character.isBulwarkCharging === "function" && character.isBulwarkCharging();
+            let sweepTouchedObstacle = false;
             if (!lunaticMove && !bulwarkCharging) {
-              if (keys.isDown("ArrowLeft")) vx -= 1;
-              if (keys.isDown("ArrowRight")) vx += 1;
-              if (keys.isDown("ArrowUp")) vy -= 1;
-              if (keys.isDown("ArrowDown")) vy += 1;
+              if (isArrowHeld("ArrowLeft")) vx -= 1;
+              if (isArrowHeld("ArrowRight")) vx += 1;
+              if (isArrowHeld("ArrowUp")) vy -= 1;
+              if (isArrowHeld("ArrowDown")) vy += 1;
+              if (pathRuntime.getCurrentPathId() === "swamp" && getSwampBootlegInvertMove(inventory2, simElapsed)) {
+                vx = -vx;
+                vy = -vy;
+              }
               const len = Math.hypot(vx, vy);
               const rogueDashHold = activeCharacterId === "rogue" && rogueWorld.getDashAiming();
               if (len > 1e-6) {
@@ -11037,10 +14558,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                   let sp = PLAYER_SPEED * (player.speedBurstMult ?? 1);
                   if (simElapsed < ultimateSpeedUntil) sp *= 1.75;
                   sp *= player.speedPassiveMult ?? 1;
-                  if (simElapsed < (inventory.spadesObstacleBoostUntil ?? 0)) {
+                  if (simElapsed < (inventory2.spadesObstacleBoostUntil ?? 0)) {
                     sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
                   }
-                  if (playerDamage.isLaserSlowActive()) sp *= LASER_BLUE_PLAYER_SLOW_MULT;
+                  sp *= playerDamage.getMovementSlowMult();
+                  if (pathRuntime.getCurrentPathId() === "swamp" && hunterRuntime) {
+                    sp *= hunterRuntime.getFrogMudPoolMoveMult(player.x, player.y, player.r, simElapsed);
+                  }
+                  if (pathRuntime.getCurrentPathId() === "swamp") {
+                    sp *= getSwampBootlegMoveSpeedMult(inventory2, simElapsed);
+                  }
                   vx = vx / len * sp * dt;
                   vy = vy / len * sp * dt;
                 } else {
@@ -11048,8 +14575,22 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                   vy = 0;
                 }
               }
-              player.x += vx;
-              player.y += vy;
+              const moveDist = Math.hypot(vx, vy);
+              const moveSteps = Math.max(1, Math.ceil(moveDist / Math.max(3, player.r * 0.35)));
+              const stepX = vx / moveSteps;
+              const stepY = vy / moveSteps;
+              for (let i = 0; i < moveSteps; i++) {
+                player.x += stepX;
+                player.y += stepY;
+                const preResolveX = player.x;
+                const preResolveY = player.y;
+                const stepResolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obstaclesForPlayerCollision());
+                if (Math.abs(stepResolved.x - preResolveX) > 1e-6 || Math.abs(stepResolved.y - preResolveY) > 1e-6) {
+                  sweepTouchedObstacle = true;
+                }
+                player.x = stepResolved.x;
+                player.y = stepResolved.y;
+              }
             } else if (lunaticMove) {
               rogueMovementIntent = lunaticMove.rogueMovementIntent;
             }
@@ -11064,7 +14605,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             if (!lunaticMove) {
               const obsForPlayer = obstaclesForPlayerCollision();
               const resolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForPlayer);
-              touchedObstacle = Math.abs(resolved.x - player.x) > 1e-6 || Math.abs(resolved.y - player.y) > 1e-6;
+              touchedObstacle = sweepTouchedObstacle || Math.abs(resolved.x - player.x) > 1e-6 || Math.abs(resolved.y - player.y) > 1e-6;
               player.x = resolved.x;
               player.y = resolved.y;
               if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
@@ -11074,7 +14615,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               touchedObstacle = lunaticMove.touchedObstacle;
             }
             if (touchedObstacle && (player.terrainTouchMult ?? 1) > 1) {
-              inventory.spadesObstacleBoostUntil = simElapsed + TERRAIN_SPEED_BOOST_LINGER;
+              inventory2.spadesObstacleBoostUntil = simElapsed + TERRAIN_SPEED_BOOST_LINGER;
             }
             if (lunaticMove && typeof character.tickLunaticRoarTerrain === "function") {
               character.tickLunaticRoarTerrain({
@@ -11082,7 +14623,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                 simElapsed,
                 player,
                 obstacles,
-                damagePlayer: (amt, opts) => playerDamage.damagePlayer(amt, opts)
+                damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts)
               });
             }
             if (lunaticMove && typeof character.ejectFromObstaclesIfStuck === "function") {
@@ -11099,13 +14640,40 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             player.velY = (player.y - player._py) / pdt;
             player._px = player.x;
             player._py = player.y;
+            pruneSwampMudTrail();
+            if (pathRuntime.getCurrentPathId() === "swamp") {
+              const sp = Math.hypot(player.velX, player.velY);
+              if (sp > 20) {
+                const ax = player.x;
+                const ay = player.y;
+                if (!Number.isFinite(swampMudTrailLastX)) {
+                  swampMudTrail.push({ x: ax, y: ay, t: simElapsed });
+                  swampMudTrailLastX = ax;
+                  swampMudTrailLastY = ay;
+                } else {
+                  const d = Math.hypot(ax - swampMudTrailLastX, ay - swampMudTrailLastY);
+                  if (d >= SWAMP_MUD_TRAIL_SAMPLE_MIN) {
+                    swampMudTrail.push({ x: ax, y: ay, t: simElapsed });
+                    swampMudTrailLastX = ax;
+                    swampMudTrailLastY = ay;
+                    while (swampMudTrail.length > SWAMP_MUD_TRAIL_MAX) swampMudTrail.shift();
+                  }
+                }
+              }
+            } else {
+              swampMudTrail.length = 0;
+              swampMudTrailLastX = NaN;
+              swampMudTrailLastY = NaN;
+              knightSwampDashSplashes.length = 0;
+              clearSwampHunterMudTrails();
+            }
             if (!simPaused && activeCharacterId === "rogue") {
               rogueWorld.tickNeeds(
                 {
                   simDt: dt,
                   simElapsed,
                   player,
-                  inventory,
+                  inventory: inventory2,
                   obstacles,
                   moving: rogueMovementIntent,
                   touchedObstacle,
@@ -11156,12 +14724,13 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             canvasH: canvas.height
           });
           const worldCardPickups = collectibles.filter((x) => x.kind === "card").map((x) => ({ card: x.card }));
-          const reserved = collectReservedDeckKeys(inventory, cardPickup?.getPendingCard() ?? null, worldCardPickups);
+          const reserved = collectReservedDeckKeys(inventory2, cardPickup?.getPendingCard() ?? null, worldCardPickups);
           if (simElapsed >= nextHealSpawnAt) {
             if (!runDead) {
               if (collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS) {
                 const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
                 if (pt) {
+                  const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
                   collectibles.push({
                     kind: "heal",
                     x: pt.x,
@@ -11169,7 +14738,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                     r: HEAL_PICKUP_HIT_R,
                     plusHalf: HEAL_PICKUP_PLUS_HALF,
                     plusThick: HEAL_PICKUP_ARM_THICK,
-                    heal: HEAL_CRYSTAL_HP,
+                    heal: onSwamp ? SWAMP_BOOTLEG_CRYSTAL_HP : HEAL_CRYSTAL_HP,
+                    bootlegSwamp: onSwamp,
                     bornAt: simElapsed,
                     expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC
                   });
@@ -11213,6 +14783,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               const dy = player.y - c.y;
               if (dx * dx + dy * dy > rr * rr) continue;
               if (c.kind === "heal") {
+                if (pathRuntime.getCurrentPathId() === "swamp" && swampBootlegCrystalModal) {
+                  collectibles.splice(i, 1);
+                  const bundle = rollTwoBootlegOffers(() => Math.random(), simElapsed);
+                  purgeSwampBootlegNextCrystalCurses(inventory2);
+                  void swampBootlegCrystalModal.openModal(bundle).then((side) => {
+                    const offer = side === "a" ? bundle.left : bundle.right;
+                    finalizeSwampBootlegCrystalPick(offer);
+                  });
+                  break;
+                }
                 if (activeCharacterId === "lunatic") {
                   player.maxHp += 1;
                   player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -11221,15 +14801,18 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                 } else {
                   player.hp = Math.min(player.maxHp, player.hp + (c.heal ?? HEAL_CRYSTAL_HP));
                 }
+                fireIgniteUntil = 0;
+                fireIgniteNextTickAt = 0;
+                fireIgniteTickStep = 1;
               } else if (c.kind === "card" && cardPickup) {
                 cardPickup.openCardPickup(c.card);
               }
               collectibles.splice(i, 1);
             }
           }
-          const hexFlowsUnpaused = !runDead && !(cardPickup?.isPaused() ?? false) && !(rouletteModal?.isPaused() ?? false) && !(forgeWorldModal?.isForgePaused() ?? false) && !safehouseHexFlow.isPausedForSafehousePrompt();
+          const hexFlowsUnpaused = !runDead && !(cardPickup?.isPaused() ?? false) && !(rouletteModal?.isPaused() ?? false) && !(forgeWorldModal?.isForgePaused() ?? false) && !(swampBootlegCrystalModal?.isPaused() ?? false) && !safehouseHexFlow.isPausedForSafehousePrompt();
           if (hexFlowsUnpaused) {
-            const modalPause = () => (cardPickup?.isPaused() ?? false) || (rouletteModal?.isPaused() ?? false) || (forgeWorldModal?.isForgePaused() ?? false);
+            const modalPause = () => (cardPickup?.isPaused() ?? false) || (rouletteModal?.isPaused() ?? false) || (forgeWorldModal?.isForgePaused() ?? false) || (swampBootlegCrystalModal?.isPaused() ?? false);
             rouletteHexFlow.tick({
               isWorldPaused: modalPause,
               getPlayer: () => player,
@@ -11239,7 +14822,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               isRouletteHexTile: (q, r) => specials.isRouletteHexTile(q, r),
               isRouletteHexInteractive: (q, r) => specials.isRouletteHexInteractive(q, r),
               onOuterPenalty: () => {
-                playerDamage.damagePlayer(ROULETTE_OUTER_PENALTY_HP, {
+                damagePlayerThroughPath(ROULETTE_OUTER_PENALTY_HP, {
                   rouletteHexOuterPenalty: true,
                   floorHpAtMin: 1
                 });
@@ -11268,7 +14851,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               isForgeHexTile: (q, r) => specials.isForgeHexTile(q, r),
               isForgeHexInteractive: (q, r) => specials.isForgeHexInteractive(q, r),
               onOuterPenalty: () => {
-                playerDamage.damagePlayer(FORGE_OUTER_PENALTY_HP, {
+                damagePlayerThroughPath(FORGE_OUTER_PENALTY_HP, {
                   rouletteHexOuterPenalty: true,
                   floorHpAtMin: 1
                 });
@@ -11303,7 +14886,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               const len = Math.hypot(dx, dy) || 1;
               const ux = dx / len;
               const uy = dy / len;
-              if (h.type !== "spawner" && h.type !== "airSpawner") {
+              if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") {
                 h.x += ux * 95;
                 h.y += uy * 95;
               }
@@ -11349,7 +14932,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           if (hunterRuntime?.entities) {
             for (const shield of ultimateShields) {
               for (const h of hunterRuntime.entities.hunters) {
-                if (h.type === "spawner" || h.type === "airSpawner") continue;
+                if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
                 const rr = shield.r + h.r;
                 const dx = h.x - shield.x;
                 const dy = h.y - shield.y;
@@ -11384,38 +14967,57 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           const timelockFrozen = simElapsed >= timelockEnemyFrom && simElapsed < timelockEnemyUntil;
           let worldTimeScale = timelockFrozen ? 0.05 : 1;
           if (simElapsed < knightSpadesWorldSlowUntil) worldTimeScale = Math.min(worldTimeScale, 0.3);
+          const enemyHook = pathRuntime.applyEnemyHooks({
+            dt,
+            simElapsed,
+            runLevel,
+            worldTimeScale,
+            timelockFrozen,
+            player,
+            inventory: inventory2
+          });
+          worldTimeScale = enemyHook?.worldTimeScale ?? worldTimeScale;
           if (huntersEnabled && !runDead) {
             hunterRuntime.tick(dt * worldTimeScale, { suppressRangedAttacks: timelockFrozen });
+            if (pathRuntime.getCurrentPathId() === "swamp") {
+              tickSwampHunterMudTrails(dt);
+            }
+            if (pathRuntime.getCurrentPathId() === "fire" && runLevel >= 1) {
+              spawnFireGrowthZonesFromFireArtillery();
+            }
+          }
+          if (hunterRuntime && pathRuntime.getCurrentPathId() !== "swamp") {
+            clearSwampHunterMudTrails();
           }
           if (!runDead) {
             hexEventRuntime?.postHunterTick();
           }
           tickAttackRings(attackRings, simElapsed);
           tickLunaticSprintTierFx(lunaticSprintTierFx, simElapsed);
-          if ((inventory.heartsRegenPerSec ?? 0) > 0 && player.hp > 0) {
+          if ((inventory2.heartsRegenPerSec ?? 0) > 0 && player.hp > 0) {
             if (activeCharacterId === "valiant") {
-              inventory.heartsRegenBank = (inventory.heartsRegenBank ?? 0) + inventory.heartsRegenPerSec * dt;
-              while (inventory.heartsRegenBank >= 1) {
+              inventory2.heartsRegenBank = (inventory2.heartsRegenBank ?? 0) + inventory2.heartsRegenPerSec * dt;
+              while (inventory2.heartsRegenBank >= 1) {
                 const hurt = [];
                 for (let j = 0; j < 3; j++) {
                   const s = valiantWorld.getRabbitSlots()[j];
                   if (s && s.hp < s.maxHp) hurt.push(j);
                 }
                 if (!hurt.length) {
-                  inventory.heartsRegenBank = 0;
+                  inventory2.heartsRegenBank = 0;
                   break;
                 }
                 const ri = hurt[Math.floor(Math.random() * hurt.length)];
                 const rb = valiantWorld.getRabbitSlots()[ri];
                 if (!rb) break;
-                inventory.heartsRegenBank -= 1;
+                inventory2.heartsRegenBank -= 1;
                 rb.hp = Math.min(rb.maxHp, rb.hp + 1);
               }
             } else if (player.hp < player.maxHp) {
-              inventory.heartsRegenBank = (inventory.heartsRegenBank ?? 0) + inventory.heartsRegenPerSec * dt;
-              while (inventory.heartsRegenBank >= 1 && player.hp < player.maxHp) {
+              inventory2.heartsRegenBank = (inventory2.heartsRegenBank ?? 0) + inventory2.heartsRegenPerSec * dt;
+              while (inventory2.heartsRegenBank >= 1 && player.hp < player.maxHp) {
                 player.hp += 1;
-                inventory.heartsRegenBank -= 1;
+                inventory2.heartsRegenBank -= 1;
               }
             }
           }
@@ -11498,11 +15100,52 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const shake = playerDamage.getShakeOffset();
         ctx.save();
         ctx.translate(-cameraX + shake.x, -cameraY + shake.y);
+        const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
+        const floorHexFill = bonePathActive ? "#1b1d24" : pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
+        const boneAmbientOverlay = bonePathActive;
+        const boneBlindDebuffActive = bonePathActive && simElapsed < boneBlindDebuffFadeEnd && boneBlindDebuffFadeEnd > 0;
+        const firePathActive = pathRuntime.getCurrentPathId() === "fire";
+        const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
+        if (!swampPathActive) {
+          swampMudTrail.length = 0;
+          swampMudTrailLastX = NaN;
+          swampMudTrailLastY = NaN;
+          knightSwampDashSplashes.length = 0;
+          resetSwampBootlegState(inventory2);
+          swampBootlegCrystalModal?.close?.();
+        }
         for (const h of activeHexes) {
           const { x: cx, y: cy } = hexToWorld(h.q, h.r);
-          fillPointyHexCell(ctx, cx, cy, HEX_SIZE, FLOOR_HEX_FILL, null);
+          fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
         }
-        drawObstacles(ctx, obstacles);
+        if (firePathActive) drawFireAtmosphereWorld(ctx, viewW, viewH);
+        if (swampPathActive) drawSwampAtmosphereBackgroundWorld(ctx, viewW, viewH);
+        if (swampPathActive) drawSwampMudTrailWorld(ctx);
+        if (swampPathActive) drawKnightSwampDashSplashesWorld(ctx);
+        if (bonePathActive) {
+          const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.6);
+          const r1 = Math.max(viewW, viewH) * 0.62;
+          const r2 = Math.max(viewW, viewH) * 0.92;
+          const g1 = ctx.createRadialGradient(player.x, player.y, r1 * 0.06, player.x, player.y, r1);
+          g1.addColorStop(0, `rgba(226, 232, 240, ${0.05 + pulse * 0.025})`);
+          g1.addColorStop(0.45, `rgba(148, 163, 184, ${0.045 + pulse * 0.02})`);
+          g1.addColorStop(1, "rgba(15, 23, 42, 0)");
+          ctx.fillStyle = g1;
+          ctx.fillRect(cameraX - 16, cameraY - 16, viewW + 32, viewH + 32);
+          const g2 = ctx.createRadialGradient(player.x, player.y, r2 * 0.15, player.x, player.y, r2);
+          g2.addColorStop(0, "rgba(0, 0, 0, 0)");
+          g2.addColorStop(0.68, "rgba(2, 6, 23, 0.16)");
+          g2.addColorStop(1, "rgba(2, 6, 23, 0.34)");
+          ctx.fillStyle = g2;
+          ctx.fillRect(cameraX - 20, cameraY - 20, viewW + 40, viewH + 40);
+        }
+        drawObstacles(
+          ctx,
+          obstacles,
+          swampPathActive ? { fill: "#3b2d20", stroke: "#7c5a3b" } : firePathActive ? { fill: "#3a1812", stroke: "#fca5a5", glowColor: "rgba(251, 113, 133, 0.45)", glowBlur: 8 } : bonePathActive ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 } : void 0
+        );
+        if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
+        if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);
         if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
           const lock = character.getBulwarkWorld().getDeathLock();
           if (lock) {
@@ -11571,13 +15214,78 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           hexEventRuntime?.getSurgeDrawState() ?? null
         );
         if (huntersEnabled) {
+          if (firePathActive) {
+            for (const h of hunterRuntime.entities.hunters) h.fireGlow = true;
+          } else {
+            for (const h of hunterRuntime.entities.hunters) h.fireGlow = false;
+          }
           hunterRuntime.draw(ctx);
         }
         for (const c of collectibles) {
           if (c.kind === "heal") {
-            drawHealPickup(ctx, c, simElapsed, { lunaticMaxHpCrystal: activeCharacterId === "lunatic" });
+            drawHealPickup(ctx, c, simElapsed, {
+              lunaticMaxHpCrystal: activeCharacterId === "lunatic",
+              bootlegSwampCrystal: !!c.bootlegSwamp
+            });
           } else if (c.kind === "card") {
             drawCardPickupWorld(ctx, c, simElapsed);
+          }
+        }
+        drawDamagePopups(ctx);
+        if (boneAmbientOverlay) {
+          const px = player.x;
+          const py = player.y;
+          const vx = cameraX + viewW / 2;
+          const vy = cameraY + viewH / 2;
+          const maxR = Math.max(viewW, viewH) * 0.92;
+          const ambInner = 98;
+          ctx.save();
+          ctx.globalAlpha = 0.76;
+          const vignette = ctx.createRadialGradient(px, py, ambInner, vx, vy, maxR);
+          vignette.addColorStop(0, "rgba(15, 23, 42, 0)");
+          vignette.addColorStop(0.46, "rgba(15, 23, 42, 0.42)");
+          vignette.addColorStop(1, "rgba(15, 23, 42, 0.86)");
+          ctx.fillStyle = vignette;
+          ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+          const fog = ctx.createRadialGradient(px, py, 108, px, py, 400);
+          fog.addColorStop(0, "rgba(15, 23, 42, 0)");
+          fog.addColorStop(0.6, "rgba(8, 10, 14, 0.44)");
+          fog.addColorStop(1, "rgba(8, 10, 14, 0.9)");
+          ctx.fillStyle = fog;
+          ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+          ctx.restore();
+          if (boneBlindDebuffActive) {
+            const fadeSpan = Math.max(1e-4, boneBlindDebuffFadeEnd - boneBlindDebuffPeakEnd);
+            const debuffStr = simElapsed < boneBlindDebuffPeakEnd ? 1 : clamp7((boneBlindDebuffFadeEnd - simElapsed) / fadeSpan, 0, 1);
+            const innerR = ambInner * (1 - 0.3 * debuffStr);
+            ctx.save();
+            ctx.globalAlpha = debuffStr;
+            const crushOuter = ctx.createRadialGradient(px, py, innerR * 0.7, vx, vy, maxR);
+            crushOuter.addColorStop(0, "rgba(0, 0, 0, 0)");
+            crushOuter.addColorStop(0.34, `rgba(0, 0, 0, ${0.72 + 0.26 * debuffStr})`);
+            crushOuter.addColorStop(0.58, `rgba(0, 0, 0, ${Math.min(1, 0.96 + 0.04 * debuffStr)})`);
+            crushOuter.addColorStop(1, "rgba(0, 0, 0, 0.998)");
+            ctx.fillStyle = crushOuter;
+            ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+            const innerDim = ctx.createRadialGradient(px, py, 0, px, py, innerR * 0.9);
+            innerDim.addColorStop(0, `rgba(0, 0, 0, ${0.78 + 0.2 * debuffStr})`);
+            innerDim.addColorStop(0.5, `rgba(0, 0, 0, ${0.42 * debuffStr})`);
+            innerDim.addColorStop(1, "rgba(0, 0, 0, 0)");
+            ctx.fillStyle = innerDim;
+            ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+            ctx.restore();
+            if (boneBlindDebuffFromBlueLaser && debuffStr > 0.04) {
+              ctx.save();
+              ctx.globalAlpha = debuffStr * 0.88;
+              const ice = ctx.createRadialGradient(px, py, innerR * 0.55, vx, vy, maxR * 0.96);
+              ice.addColorStop(0, "rgba(255, 255, 255, 0)");
+              ice.addColorStop(0.42, "rgba(224, 242, 254, 0.2)");
+              ice.addColorStop(0.75, "rgba(186, 230, 253, 0.42)");
+              ice.addColorStop(1, "rgba(56, 189, 248, 0.5)");
+              ctx.fillStyle = ice;
+              ctx.fillRect(cameraX - 200, cameraY - 200, viewW + 400, viewH + 400);
+              ctx.restore();
+            }
           }
         }
         for (const d of character.getDecoys()) {
@@ -11610,12 +15318,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (simElapsed < invulnGate) {
           bodyAlpha = 0.45 + 0.4 * (0.5 + 0.5 * Math.sin(simElapsed * 32));
         }
-        if (activeCharacterId === "knight" && simElapsed < (inventory.clubsInvisUntil ?? 0)) {
+        if (activeCharacterId === "knight" && simElapsed < (inventory2.clubsInvisUntil ?? 0)) {
           const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 12);
           const ghostAlpha = clamp7(0.34 + 0.16 * pulse, 0.28, 0.52);
           bodyAlpha = Math.min(bodyAlpha, ghostAlpha);
         }
-        if (activeCharacterId === "rogue" && rogueWorld.stealthBlocksDamage(simElapsed, inventory)) {
+        if (activeCharacterId === "rogue" && rogueWorld.stealthBlocksDamage(simElapsed, inventory2)) {
           const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 12);
           const ghostAlpha = clamp7(0.34 + 0.16 * pulse, 0.28, 0.52);
           bodyAlpha = Math.min(bodyAlpha, ghostAlpha);
@@ -11648,6 +15356,101 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (activeCharacterId === "rogue") {
           rogueWorld.drawSurvivalHudArcs(ctx, player, simElapsed);
         }
+        if (swampPathActive) {
+          const extraHudYOffset = typeof character.getHpHudYOffset === "function" ? character.getHpHudYOffset() : 0;
+          const infX = player.x + player.r + 34;
+          const baseY = player.y - player.r - 10 - extraHudYOffset;
+          const stacks = Math.max(0, Math.floor(inventory2.swampInfectionStacks ?? 0));
+          const tenEnd = swampInfectionTenBurstAt + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_TEN_DRIFT_SEC;
+          const showTenFx = swampInfectionTenBurstAt > 0 && simElapsed < tenEnd;
+          const showStackHud = stacks >= 1 && stacks <= SWAMP_INFECTION_CAP - 1;
+          const chainLocked = simElapsed < swampInfectionChainLockUntil;
+          const holdTenHud = chainLocked && stacks >= SWAMP_INFECTION_CAP && !showTenFx;
+          if (showTenFx || showStackHud || holdTenHud) {
+            ctx.save();
+            ctx.textAlign = "left";
+            ctx.textBaseline = "bottom";
+            let txt = "";
+            let alpha = 1;
+            let infY = baseY;
+            let fontPx = 14;
+            if (showTenFx) {
+              const stunEnd = swampInfectionTenBurstAt + SWAMP_INFECTION_BURST_STUN_SEC;
+              txt = "10!";
+              fontPx = 17;
+              if (simElapsed < stunEnd) {
+                alpha = 1;
+                infY = baseY;
+              } else {
+                const driftU = clamp7((simElapsed - stunEnd) / SWAMP_INFECTION_TEN_DRIFT_SEC, 0, 1);
+                infY = baseY - driftU * 36;
+                alpha = 1 - driftU;
+              }
+            } else if (holdTenHud) {
+              txt = "10";
+              fontPx = 15;
+              alpha = 0.74;
+            } else {
+              txt = stacks >= 8 ? `${stacks}!` : `${stacks}`;
+              if (stacks >= 8) fontPx = 15;
+            }
+            ctx.font = `bold ${fontPx}px ui-sans-serif, system-ui, "Segoe UI", sans-serif`;
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = `rgba(2, 6, 23, ${0.82 * alpha})`;
+            ctx.strokeText(txt, infX, infY);
+            ctx.fillStyle = `rgba(163, 230, 53, ${0.92 * alpha})`;
+            ctx.fillText(txt, infX, infY);
+            ctx.restore();
+          }
+          if (swampInfectionTenBurstAt > 0 && simElapsed >= tenEnd) {
+            swampInfectionTenBurstAt = 0;
+          }
+        }
+        const heartsResistanceCount = playerDamage.getHeartsResistanceCardCount?.() ?? 0;
+        const heartsResistanceReady = heartsResistanceCount > 0 && simElapsed >= (inventory2.heartsResistanceReadyAt ?? 0);
+        if (heartsResistanceReady) {
+          ctx.strokeStyle = "rgba(252, 165, 165, 0.95)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, player.r + 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        if (heartsResistanceCount > 0 && !heartsResistanceReady) {
+          const cdDur = Math.max(
+            1e-3,
+            inventory2.heartsResistanceCooldownDuration || playerDamage.getHeartsResistanceCooldown?.() || 1
+          );
+          const rem = Math.max(0, (inventory2.heartsResistanceReadyAt ?? 0) - simElapsed);
+          const t = clamp7(1 - rem / cdDur, 0, 1);
+          const iconX = player.x;
+          const iconY = player.y + player.r + 20;
+          const ringR = 7;
+          const g = Math.round(148 + (191 - 148) * t);
+          const b = Math.round(163 + (255 - 163) * t);
+          ctx.strokeStyle = `rgb(100,${g},${b})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(iconX, iconY, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * t);
+          ctx.stroke();
+          ctx.strokeStyle = "rgba(100, 116, 139, 0.7)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(iconX, iconY, ringR, -Math.PI / 2 + Math.PI * 2 * t, -Math.PI / 2 + Math.PI * 2);
+          ctx.stroke();
+        }
+        if (firePathActive && fireIgniteUntil > simElapsed) {
+          const pulse = 0.62 + 0.38 * (0.5 + 0.5 * Math.sin(simElapsed * 12));
+          ctx.fillStyle = `rgba(220, 38, 38, ${0.18 + pulse * 0.1})`;
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, player.r + 10 + pulse * 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(251, 113, 133, 0.8)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, player.r + 6, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        if (swampPathActive) drawSwampPlayerMudChurnWorld(ctx);
         drawPlayerBody(ctx, player.x, player.y, player.r, player.facing, hurt01, bodyAlpha);
         if (activeCharacterId === "bulwark" && typeof character.getBulwarkParryUntil === "function") {
           drawBulwarkParry(ctx, player, simElapsed, character.getBulwarkParryUntil());
@@ -11669,6 +15472,44 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           drawLunaticRoarTimerBar(ctx, player, simElapsed, roarUntil, bodyAlpha);
         }
         ctx.restore();
+        if (pathRuntime.getCurrentPathId() === "swamp" && simElapsed < swampInfectionDebuffOverlayUntil) {
+          const dur = SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+          const fade = clamp7((swampInfectionDebuffOverlayUntil - simElapsed) / dur, 0, 1);
+          const pulse = 0.88 + 0.12 * (0.5 + 0.5 * Math.sin(simElapsed * 11));
+          const a = fade * pulse;
+          ctx.save();
+          ctx.fillStyle = `rgba(4, 22, 12, ${0.58 * a})`;
+          ctx.fillRect(0, 0, viewW, viewH);
+          ctx.fillStyle = `rgba(12, 38, 22, ${0.38 * a})`;
+          ctx.fillRect(0, 0, viewW, viewH);
+          const cx = viewW * 0.5;
+          const cy = viewH * 0.5;
+          const r0 = Math.min(viewW, viewH) * 0.05;
+          const r1 = Math.max(viewW, viewH) * 0.88;
+          const g = ctx.createRadialGradient(cx, cy, r0, cx, cy, r1);
+          g.addColorStop(0, `rgba(45, 88, 52, ${0.38 * a})`);
+          g.addColorStop(0.32, `rgba(18, 52, 30, ${0.72 * a})`);
+          g.addColorStop(0.65, `rgba(6, 26, 14, ${0.86 * a})`);
+          g.addColorStop(1, `rgba(2, 10, 5, ${0.94 * a})`);
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, viewW, viewH);
+          ctx.strokeStyle = `rgba(52, 211, 102, ${0.72 * a})`;
+          ctx.lineWidth = 7;
+          ctx.strokeRect(2, 2, viewW - 4, viewH - 4);
+          ctx.strokeStyle = `rgba(16, 90, 48, ${0.45 * a})`;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(10, 10, viewW - 20, viewH - 20);
+          ctx.fillStyle = `rgba(4, 22, 10, ${0.68 * a})`;
+          ctx.fillRect(0, 0, viewW, viewH * 0.14);
+          ctx.fillRect(0, viewH * 0.86, viewW, viewH * 0.14);
+          ctx.fillStyle = `rgba(22, 163, 74, ${0.2 * a})`;
+          ctx.fillRect(0, 0, viewW, viewH);
+          ctx.fillStyle = `rgba(34, 197, 94, ${0.1 * a})`;
+          ctx.globalCompositeOperation = "screen";
+          ctx.fillRect(0, 0, viewW, viewH);
+          ctx.globalCompositeOperation = "source-over";
+          ctx.restore();
+        }
         drawRunStatsHud(ctx, {
           survivalSec: simElapsed,
           bestSec: bestSurvivalSec,
@@ -11676,6 +15517,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           wave: hunterRuntime?.spawnState?.wave ?? 0,
           hunterCount: hunterRuntime?.entities?.hunters?.length ?? 0
         });
+        if (pathRuntime.getCurrentPathId() === "swamp") {
+          drawSwampBootlegCursesHud(ctx, viewW, viewH, getSwampBootlegSidebarRows(inventory2, simElapsed));
+        }
         if (activeCharacterId === "valiant" && !runDead) {
           drawValiantScreenHud(ctx, {
             will01: valiantWorld.getWill(),
@@ -11727,7 +15571,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           ctx.fillText("Paused", viewW / 2, viewH / 2 - 10);
           ctx.font = "16px Arial";
           ctx.fillStyle = "#cbd5e1";
-          ctx.fillText("Press movement or ability keys to resume", viewW / 2, viewH / 2 + 24);
+          ctx.fillText(
+            mobileUiEnabled ? "Tap Unpause (or stick / abilities) to resume" : "Press movement or ability keys to resume",
+            viewW / 2,
+            viewH / 2 + 24
+          );
           ctx.restore();
         }
         raf = window.requestAnimationFrame(frame);
@@ -11746,6 +15594,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         keys.dispose();
         steerKeys.dispose();
         abilityKeys.dispose();
+        clearTouchInputs();
+        mobileControlDisposers.forEach((fn) => fn());
         devHeroSelect.dispose();
         cardPickup?.dispose();
         rouletteModal?.dispose();
@@ -11754,5 +15604,30 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       { once: true }
     );
   }
-  boot();
+  function startBootWhenGameCanvasMounted() {
+    const canvas = document.getElementById("game");
+    if (canvas instanceof HTMLCanvasElement) {
+      boot();
+      return;
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", startBootWhenGameCanvasMounted, { once: true });
+      return;
+    }
+    let frames = 0;
+    function tick() {
+      frames += 1;
+      if (document.getElementById("game") instanceof HTMLCanvasElement) {
+        boot();
+        return;
+      }
+      if (frames > 120) {
+        boot();
+        return;
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+  startBootWhenGameCanvasMounted();
 })();

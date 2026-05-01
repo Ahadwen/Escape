@@ -32,6 +32,8 @@ export const HEAL_CRYSTAL_LIFETIME_SEC = 7.2;
 export const CARD_COLLECTIBLE_LIFETIME_SEC = 12;
 /** HP restored per crystal for Knight-scale runs (REFERENCE default `heal: 3`). */
 export const HEAL_CRYSTAL_HP = 3;
+/** Swamp path: bootleg heal crystals use this base heal before the curse choice modal. */
+export const SWAMP_BOOTLEG_CRYSTAL_HP = 2;
 
 /** Rank 2 vs King spawn weight ratio (REFERENCE). */
 export const CARD_RANK_SPAWN_WEIGHT_MAX = 24;
@@ -187,6 +189,26 @@ export const LASER_BLUE_PLAYER_SLOW_SEC = 1.5;
 /** Swamp path (run level 3+): slow after any damage; stacks multiplicatively with blue laser slow. */
 export const SWAMP_HIT_SLOW_MULT = 0.8;
 export const SWAMP_HIT_SLOW_SEC = 1.0;
+/** Frog mud pool: walk speed multiplier while overlapping (~20% slower). */
+export const FROG_MUD_POOL_MOVE_MULT = 0.8;
+/**
+ * Swamp display L3+ (`runLevel >= 2`): when the wave mix would spawn a sniper, keep it with this probability
+ * (otherwise frog/cutter/ranged — artillery+frog detonation stacks were overtuned).
+ */
+export const SWAMP_L3PLUS_SNIPER_WAVE_KEEP_FRACTION = 0.4;
+
+/** Swamp infection: stacks 1–9 then 10th triggers burst (damage + stun + slow). */
+export const SWAMP_INFECTION_CAP = 10;
+/** Display level 2 (`runLevel === 1`): min seconds between infection stack gains. */
+export const SWAMP_INFECTION_STACK_MIN_GAP_LEVEL2_SEC = 0.3;
+/** Display level 3+ (`runLevel >= 2`): min seconds between infection stack gains. */
+export const SWAMP_INFECTION_STACK_MIN_GAP_LEVEL3_SEC = 0.2;
+export const SWAMP_INFECTION_BURST_STUN_SEC = 0.4;
+export const SWAMP_INFECTION_BURST_SLOW_SEC = 2.0;
+/** Move speed multiplier during post-stun infection slow (lower = slower). */
+export const SWAMP_INFECTION_BURST_SLOW_MULT = 0.45;
+/** After stun, "10!" drifts upward for this long before hiding. */
+export const SWAMP_INFECTION_TEN_DRIFT_SEC = 0.85;
 /** Hearts 13: once per this many seconds, lethal damage sets HP to 5 instead. */
 export const HEARTS_13_DEATH_DEFY_CD_SEC = 30;
 /** Clubs 13: after taking real HP damage, enemies ignore the player briefly. */

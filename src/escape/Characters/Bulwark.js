@@ -91,10 +91,13 @@ export function createBulwark(bulwarkWorld) {
     return p;
   }
 
-  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown) {
+  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown, inventory) {
     const flat = passive.cooldownFlat[abilityId] || 0;
     const pct = clamp(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-    return Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const swQ = abilityId === "dash" ? inventory?.swampBootlegCdDash ?? 0 : 0;
+    const swW = abilityId === "burst" ? inventory?.swampBootlegCdBurst ?? 0 : 0;
+    return baseEff + swQ + swW;
   }
 
   function cooldownIndicator(baseCooldown, effectiveCooldownSec) {
@@ -184,7 +187,7 @@ export function createBulwark(bulwarkWorld) {
     if (chargeActive) return;
     if (elapsed < chargeReadyAt) return;
     const baseCd = chargeBaseCd(player);
-    const effCd = effectiveCooldown(passive, "dash", baseCd, 0.35);
+    const effCd = effectiveCooldown(passive, "dash", baseCd, 0.35, inventory);
     chargeReadyAt = elapsed + effCd;
 
     const fl = Math.hypot(player.facing.x, player.facing.y) || 1;
@@ -205,7 +208,7 @@ export function createBulwark(bulwarkWorld) {
     const passive = collectPassive(inventory);
     if (elapsed < parryReadyAt) return;
     const baseCd = parryBaseCd(player);
-    const effCd = effectiveCooldown(passive, "burst", baseCd, 0.35);
+    const effCd = effectiveCooldown(passive, "burst", baseCd, 0.35, inventory);
     parryReadyAt = elapsed + effCd;
     parryUntil = elapsed + BULWARK_PARRY_DURATION_SEC;
     bulwarkParryPushHunters?.(player.x, player.y, BULWARK_PARRY_PUSH_RADIUS, BULWARK_PARRY_PUSH_DIST);
@@ -288,8 +291,8 @@ export function createBulwark(bulwarkWorld) {
 
       const qBase = chargeBaseCd(player);
       const wBase = parryBaseCd(player);
-      const qCd = effectiveCooldown(passive, "dash", qBase, 0.35);
-      const wCd = effectiveCooldown(passive, "burst", wBase, 0.35);
+      const qCd = effectiveCooldown(passive, "dash", qBase, 0.35, inventory);
+      const wCd = effectiveCooldown(passive, "burst", wBase, 0.35, inventory);
       cdrHud.dash = cooldownIndicator(qBase, qCd);
       cdrHud.burst = cooldownIndicator(wBase, wCd);
 
@@ -315,8 +318,8 @@ export function createBulwark(bulwarkWorld) {
       const passive = collectPassive(inv);
       const qBase = nearFlagHud ? BULWARK_CHARGE_COOLDOWN_NEAR_FLAG_SEC : BULWARK_CHARGE_COOLDOWN_SEC;
       const wBase = nearFlagHud ? BULWARK_PARRY_COOLDOWN_NEAR_FLAG_SEC : BULWARK_PARRY_COOLDOWN_SEC;
-      const qCd = effectiveCooldown(passive, "dash", qBase, 0.35);
-      const wCd = effectiveCooldown(passive, "burst", wBase, 0.35);
+      const qCd = effectiveCooldown(passive, "dash", qBase, 0.35, inv);
+      const wCd = effectiveCooldown(passive, "burst", wBase, 0.35, inv);
       const ultimateHud = buildEquippedUltimateHud(inv, elapsed, LABEL_R, "#94a3b8");
       const carried = bulwarkWorld.isFlagCarried();
       const fd = bulwarkWorld.getPlantedFlagDecoy();

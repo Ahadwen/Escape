@@ -105,10 +105,13 @@ export function createKnight() {
     return p;
   }
 
-  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown) {
+  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown, inventory) {
     const flat = passive.cooldownFlat[abilityId] || 0;
     const pct = clamp(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-    return Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const swQ = abilityId === "dash" ? inventory?.swampBootlegCdDash ?? 0 : 0;
+    const swW = abilityId === "burst" ? inventory?.swampBootlegCdBurst ?? 0 : 0;
+    return baseEff + swQ + swW;
   }
 
   function cooldownIndicator(baseCooldown, effectiveCooldownSec) {
@@ -145,7 +148,7 @@ export function createKnight() {
     const { player, elapsed, resolvePlayer, spawnAttackRing, circleHitsObstacle, inventory } = ctx;
     const passive = collectPassive(inventory);
     if (dashCharges <= 0) return;
-    const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25);
+    const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25, inventory);
     dashCharges -= 1;
     // Cooldown starts on first spend and refills the whole dash magazine at once.
     if (dashCharges < dashChargesMax && dashNextRechargeAt <= elapsed) {
@@ -186,13 +189,16 @@ export function createKnight() {
     if (progressed && typeof spawnAttackRing === "function") {
       spawnAttackRing(player.x, player.y, 30, "rgba(56, 189, 248, 0.4)", 0.1);
     }
+    if (progressed && typeof ctx.spawnKnightDashEndSplash === "function") {
+      ctx.spawnKnightDashEndSplash(player.x, player.y);
+    }
   }
 
   function tryBurst(ctx) {
     const { player, elapsed, inventory, spawnAttackRing } = ctx;
     const passive = collectPassive(inventory);
     if (elapsed < burstReadyAt) return;
-    burstReadyAt = elapsed + effectiveCooldown(passive, "burst", BURST_COOLDOWN, 0.4);
+    burstReadyAt = elapsed + effectiveCooldown(passive, "burst", BURST_COOLDOWN, 0.4, inventory);
     const burstDurBonus = diamondSpeedEmpowerActive(passive, inventory) ? KNIGHT_DIAMOND_BURST_DURATION_BONUS_SEC : 0;
     burstUntil = elapsed + BURST_DURATION + burstDurBonus;
     const invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck(inventory);
@@ -210,7 +216,7 @@ export function createKnight() {
     const { player, elapsed, spawnAttackRing, inventory } = ctx;
     const passive = collectPassive(inventory);
     if (elapsed < decoyReadyAt) return;
-    decoyReadyAt = elapsed + effectiveCooldown(passive, "decoy", DECOY_COOLDOWN, 0.4);
+    decoyReadyAt = elapsed + effectiveCooldown(passive, "decoy", DECOY_COOLDOWN, 0.4, inventory);
     const decoyEmpower = diamondDecoyEmpowerActive(passive, inventory);
     decoys.push({
       x: player.x,
@@ -259,9 +265,9 @@ export function createKnight() {
       const { elapsed, player, inventory } = ctx;
       currentInventory = inventory;
       const passive = collectPassive(inventory);
-      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25);
-      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 0.4);
-      const decoyCd = effectiveCooldown(passive, "decoy", DECOY_COOLDOWN, 0.4);
+      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25, inventory);
+      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 0.4, inventory);
+      const decoyCd = effectiveCooldown(passive, "decoy", DECOY_COOLDOWN, 0.4, inventory);
       dashChargesMax = 1 + passive.dashChargesBonus;
       dashCharges = Math.min(dashCharges, dashChargesMax);
       if (dashCharges >= dashChargesMax) {

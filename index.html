@@ -2519,6 +2519,7 @@
           <select id="dev-hunter-type-filter" autocomplete="off" title="Only spawn this hunter type when enabled">
             <option value="__all__" selected>All types</option>
             <option value="chaser">chaser</option>
+            <option value="frogChaser">frogChaser</option>
             <option value="cutter">cutter</option>
             <option value="sniper">sniper</option>
             <option value="ranged">ranged</option>
@@ -2563,6 +2564,9 @@
         </div>
         <div class="dev-item-row">
           <button id="debug-item-drop-button" type="button">Drop selected item</button>
+        </div>
+        <div class="dev-item-row">
+          <button id="debug-item-populate-build-button" type="button">Populate build</button>
         </div>
       </div>
     </div>
@@ -2897,6 +2901,116 @@
         </div>
       </div>
     </div>
+
+    <div
+      id="swamp-bootleg-crystal-modal"
+      class="swamp-bootleg-modal"
+      hidden
+      aria-modal="true"
+      role="dialog"
+      aria-labelledby="swamp-bootleg-title"
+      aria-hidden="true"
+    >
+      <div class="swamp-bootleg-modal__veil"></div>
+      <div class="swamp-bootleg-modal__panel">
+        <h2 id="swamp-bootleg-title" class="swamp-bootleg-modal__title">Bootleg crystal</h2>
+        <p id="swamp-bootleg-flavor" class="swamp-bootleg-modal__flavor"></p>
+        <p class="swamp-bootleg-modal__hint">Choose one — there is no third path out of the mud.</p>
+        <div class="swamp-bootleg-modal__choices">
+          <button type="button" id="swamp-bootleg-choice-a" class="swamp-bootleg-choice"></button>
+          <button type="button" id="swamp-bootleg-choice-b" class="swamp-bootleg-choice"></button>
+        </div>
+      </div>
+    </div>
+
+    <style>
+      .swamp-bootleg-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 12050;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+      }
+      .swamp-bootleg-modal[hidden] {
+        display: none !important;
+      }
+      .swamp-bootleg-modal__veil {
+        position: absolute;
+        inset: 0;
+        background: rgba(4, 12, 8, 0.82);
+      }
+      .swamp-bootleg-modal__panel {
+        position: relative;
+        max-width: min(920px, 100%);
+        width: 100%;
+        padding: 20px 22px 22px;
+        border-radius: 12px;
+        border: 1px solid rgba(74, 222, 128, 0.35);
+        background: linear-gradient(165deg, rgba(15, 40, 26, 0.98), rgba(8, 22, 14, 0.98));
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+      }
+      .swamp-bootleg-modal__title {
+        margin: 0 0 10px;
+        font-size: 20px;
+        color: #bbf7d0;
+        letter-spacing: 0.02em;
+      }
+      .swamp-bootleg-modal__flavor {
+        margin: 0 0 12px;
+        font-size: 15px;
+        line-height: 1.5;
+        color: #d9f99d;
+        font-style: italic;
+      }
+      .swamp-bootleg-modal__hint {
+        margin: 0 0 16px;
+        font-size: 12px;
+        color: #86efac;
+        opacity: 0.88;
+      }
+      .swamp-bootleg-modal__choices {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px 14px;
+      }
+      @media (max-width: 640px) {
+        .swamp-bootleg-modal__choices {
+          grid-template-columns: 1fr;
+        }
+      }
+      .swamp-bootleg-choice {
+        text-align: left;
+        padding: 14px 14px 16px;
+        border-radius: 10px;
+        border: 1px solid rgba(63, 98, 72, 0.95);
+        background: rgba(6, 28, 16, 0.92);
+        color: #ecfccb;
+        cursor: pointer;
+        font: inherit;
+        min-height: 120px;
+        transition: border-color 0.12s ease, background 0.12s ease;
+      }
+      .swamp-bootleg-choice:hover {
+        border-color: rgba(163, 230, 53, 0.55);
+        background: rgba(10, 40, 22, 0.96);
+      }
+      .swamp-bootleg-choice__title {
+        display: block;
+        font-weight: 700;
+        font-size: 15px;
+        margin-bottom: 8px;
+        color: #fef08a;
+      }
+      .swamp-bootleg-choice__body {
+        display: block;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #d9f99d;
+        opacity: 0.95;
+      }
+    </style>
 
     <div id="forge-modal" class="roulette-modal forge-modal" hidden aria-live="polite" aria-label="Forge">
       <div class="roulette-modal-inner forge-modal-inner" style="border-color: rgba(180, 83, 9, 0.85)">

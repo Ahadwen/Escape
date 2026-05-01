@@ -96,10 +96,13 @@ export function createValiant(valiantWorld) {
     return p;
   }
 
-  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown) {
+  function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown, inventory) {
     const flat = passive.cooldownFlat[abilityId] || 0;
     const pct = clamp(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-    return Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+    const swQ = abilityId === "dash" ? inventory?.swampBootlegCdDash ?? 0 : 0;
+    const swW = abilityId === "burst" ? inventory?.swampBootlegCdBurst ?? 0 : 0;
+    return baseEff + swQ + swW;
   }
 
   function cooldownIndicator(baseCooldown, effectiveCooldownSec) {
@@ -108,15 +111,15 @@ export function createValiant(valiantWorld) {
     return ` ↓${reducedBy.toFixed(1)}s`;
   }
 
-  function effectiveRescueCd(passive) {
-    return effectiveCooldown(passive, "decoy", VALIANT_RESCUE_COOLDOWN_SEC, 0.5);
+  function effectiveRescueCd(passive, inventory) {
+    return effectiveCooldown(passive, "decoy", VALIANT_RESCUE_COOLDOWN_SEC, 0.5, inventory);
   }
 
   function trySurge(ctx) {
     const { player, elapsed, inventory, spawnAttackRing } = ctx;
     const passive = collectPassive(inventory);
     if (elapsed < surgeReadyAt) return;
-    const cd = effectiveCooldown(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC);
+    const cd = effectiveCooldown(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC, inventory);
     surgeReadyAt = elapsed + cd;
     const diamondSurgeTuning =
       (inventory.diamondEmpower === "valiantSpeed" && passive.suits.diamonds >= SET_BONUS_SUIT_THRESHOLD) ||
@@ -134,7 +137,13 @@ export function createValiant(valiantWorld) {
   function tryShock(ctx) {
     const { player, elapsed, inventory, spawnAttackRing } = ctx;
     const passive = collectPassive(inventory);
-    const effBurst = effectiveCooldown(passive, "burst", VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC);
+    const effBurst = effectiveCooldown(
+      passive,
+      "burst",
+      VALIANT_SHOCK_ABILITY_COOLDOWN_SEC,
+      VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC,
+      inventory,
+    );
     const st = valiantWorld.getBoxChargeState();
     if (st.charges <= 0 && elapsed < burstReadyAt) return;
     if (st.charges <= 0) return;
@@ -147,7 +156,7 @@ export function createValiant(valiantWorld) {
   function tryRescue(ctx) {
     const { player, elapsed, inventory, spawnAttackRing } = ctx;
     const passive = collectPassive(inventory);
-    valiantWorld.tryRescue(elapsed, inventory, player, effectiveRescueCd(passive), spawnAttackRing);
+    valiantWorld.tryRescue(elapsed, inventory, player, effectiveRescueCd(passive, inventory), spawnAttackRing);
   }
 
   return {
@@ -235,14 +244,20 @@ export function createValiant(valiantWorld) {
       const surgeLeg = elapsed < surgeUntil || diamondSurgeTuning;
       player.speedBurstMult = surgeLeg ? (diamondSurgeTuning ? VALIANT_SURGE_SPEED_MULT_DIAMOND : VALIANT_SURGE_SPEED_MULT) : 1;
 
-      const rescueCd = effectiveRescueCd(passive);
+      const rescueCd = effectiveRescueCd(passive, inventory);
       valiantWorld.tickWillDecay(dt ?? 0, { onWillDeath: ctx.onValiantWillDeath });
       valiantWorld.tickExpireEntities(elapsed);
       valiantWorld.tryPickupBunnies(player, elapsed);
       valiantWorld.updateRescueCooldownWhenNoRabbits(elapsed, rescueCd);
 
-      const dashCd = effectiveCooldown(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC);
-      const burstCd = effectiveCooldown(passive, "burst", VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC);
+      const dashCd = effectiveCooldown(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC, inventory);
+      const burstCd = effectiveCooldown(
+        passive,
+        "burst",
+        VALIANT_SHOCK_ABILITY_COOLDOWN_SEC,
+        VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC,
+        inventory,
+      );
       cdrHud.dash = cooldownIndicator(VALIANT_SURGE_COOLDOWN_SEC, dashCd);
       cdrHud.burst = cooldownIndicator(VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, burstCd);
       cdrHud.decoy = cooldownIndicator(VALIANT_RESCUE_COOLDOWN_SEC, rescueCd);
@@ -252,9 +267,15 @@ export function createValiant(valiantWorld) {
     getAbilityHud(elapsed) {
       const inv = currentInventory ?? { deckByRank: {}, backpackSlots: [], valiantElectricBoxChargeBonus: 0 };
       const passive = collectPassive(inv);
-      const dashCd = effectiveCooldown(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC);
-      const burstCd = effectiveCooldown(passive, "burst", VALIANT_SHOCK_ABILITY_COOLDOWN_SEC, VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC);
-      const rescueCd = effectiveRescueCd(passive);
+      const dashCd = effectiveCooldown(passive, "dash", VALIANT_SURGE_COOLDOWN_SEC, VALIANT_SURGE_MIN_COOLDOWN_SEC, inv);
+      const burstCd = effectiveCooldown(
+        passive,
+        "burst",
+        VALIANT_SHOCK_ABILITY_COOLDOWN_SEC,
+        VALIANT_SHOCK_ABILITY_MIN_COOLDOWN_SEC,
+        inv,
+      );
+      const rescueCd = effectiveRescueCd(passive, inv);
       const st = valiantWorld.getBoxChargeState();
       const shockLabel =
         st.charges > 0 ? `${st.charges}/${st.maxCharges}` : cdRemaining(burstReadyAt, elapsed) > 0 ? cdValue(burstReadyAt, elapsed) : "READY";

@@ -42,16 +42,35 @@ export function drawCircle(ctx, x, y, r, color, alpha = 1) {
 /**
  * @param {object} [opts]
  * @param {boolean} [opts.lunaticMaxHpCrystal] — amber “growth” crystal (Lunatic: pickup grants +max HP).
+ * @param {boolean} [opts.bootlegSwampCrystal] — sickly yellow swamp bootleg crystal.
  */
 export function drawHealPickup(ctx, p, elapsed, opts = {}) {
   const maxHpCrystal = !!opts.lunaticMaxHpCrystal;
+  const bootlegSwamp = !!opts.bootlegSwampCrystal;
   const pulse = 0.94 + 0.06 * (0.5 + 0.5 * Math.sin(elapsed * 5));
   const h = (p.plusHalf ?? HEAL_PICKUP_PLUS_HALF) * pulse;
   const t = p.plusThick ?? HEAL_PICKUP_ARM_THICK;
   const { x, y } = p;
   ctx.save();
   ctx.translate(x, y);
-  if (maxHpCrystal) {
+  if (bootlegSwamp) {
+    ctx.shadowColor = "rgba(202, 138, 4, 0.75)";
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = "#713f12";
+    ctx.fillRect(-h, -t / 2, 2 * h, t);
+    ctx.fillRect(-t / 2, -h, t, 2 * h);
+    ctx.shadowBlur = 11;
+    ctx.fillStyle = "#a16207";
+    ctx.fillRect(-h + 0.8, -t / 2 + 0.5, 2 * h - 1.6, t - 1);
+    ctx.fillRect(-t / 2 + 0.5, -h + 0.8, t - 1, 2 * h - 1.6);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "#fde047";
+    ctx.fillRect(-h * 0.52, -t * 0.32, h * 1.04, t * 0.64);
+    ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(254, 240, 138, 0.55)";
+  } else if (maxHpCrystal) {
     ctx.shadowColor = "rgba(251, 191, 36, 0.9)";
     ctx.shadowBlur = 20;
     ctx.fillStyle = "#92400e";
@@ -97,15 +116,23 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
   const barY = h + 8;
   ctx.fillStyle = "rgba(15, 23, 42, 0.6)";
   ctx.fillRect(-barW / 2, barY, barW, barH);
-  ctx.fillStyle = maxHpCrystal
+  ctx.fillStyle = bootlegSwamp
     ? frac > 0.35
-      ? "rgba(251, 191, 36, 0.95)"
-      : "rgba(248, 113, 113, 0.95)"
-    : frac > 0.35
-      ? "rgba(110, 231, 183, 0.95)"
-      : "rgba(251, 146, 60, 0.95)";
+      ? "rgba(250, 204, 21, 0.92)"
+      : "rgba(217, 119, 6, 0.9)"
+    : maxHpCrystal
+      ? frac > 0.35
+        ? "rgba(251, 191, 36, 0.95)"
+        : "rgba(248, 113, 113, 0.95)"
+      : frac > 0.35
+        ? "rgba(110, 231, 183, 0.95)"
+        : "rgba(251, 146, 60, 0.95)";
   ctx.fillRect(-barW / 2, barY, barW * frac, barH);
-  ctx.strokeStyle = maxHpCrystal ? "rgba(254, 243, 199, 0.75)" : "rgba(236, 253, 245, 0.7)";
+  ctx.strokeStyle = bootlegSwamp
+    ? "rgba(253, 224, 71, 0.65)"
+    : maxHpCrystal
+      ? "rgba(254, 243, 199, 0.75)"
+      : "rgba(236, 253, 245, 0.7)";
   ctx.lineWidth = 1;
   ctx.strokeRect(-barW / 2, barY, barW, barH);
   ctx.restore();
@@ -238,6 +265,56 @@ export function drawRunStatsHud(ctx, { survivalSec, bestSec, displayLevel, wave,
   ctx.fillText(`Wave: ${wave}`, 14, 72);
   ctx.fillText(`Hunters: ${hunterCount}`, 14, 92);
   ctx.restore();
+}
+
+/**
+ * Swamp path: active bootleg curses + purge hints, right side of the canvas (screen space).
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} viewW
+ * @param {number} viewH
+ * @param {{ effect: string; purge: string }[]} rows
+ */
+export function drawSwampBootlegCursesHud(ctx, viewW, viewH, rows) {
+  if (!rows?.length) return;
+  const pad = 12;
+  const x = viewW - pad;
+  const maxW = Math.min(240, viewW * 0.34);
+  ctx.save();
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  let y = 10;
+  ctx.font = "600 11px ui-sans-serif, system-ui, Arial, sans-serif";
+  ctx.fillStyle = "rgba(217, 249, 157, 0.95)";
+  ctx.fillText("BOG DEBTS", x, y);
+  y += 15;
+  ctx.font = "11px ui-sans-serif, system-ui, Arial, sans-serif";
+  for (const r of rows) {
+    if (y > viewH - 100) break;
+    const eff = truncateHudLine(ctx, r.effect, maxW);
+    const pur = truncateHudLine(ctx, r.purge, maxW);
+    ctx.fillStyle = "#ecfccb";
+    ctx.fillText(eff, x, y);
+    y += 13;
+    ctx.fillStyle = "rgba(203, 213, 225, 0.92)";
+    ctx.fillText(pur, x, y);
+    y += 16;
+  }
+  ctx.restore();
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} text
+ * @param {number} maxW
+ */
+function truncateHudLine(ctx, text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  const ell = "…";
+  let s = text;
+  while (s.length > 0 && ctx.measureText(s + ell).width > maxW) {
+    s = s.slice(0, -1);
+  }
+  return s + ell;
 }
 
 /**

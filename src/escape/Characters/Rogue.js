@@ -88,10 +88,13 @@ function collectPassive(inventory) {
   return p;
 }
 
-function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown) {
+function effectiveCooldown(passive, abilityId, baseCooldown, minCooldown, inventory) {
   const flat = passive.cooldownFlat[abilityId] || 0;
   const pct = clamp(passive.cooldownPct[abilityId] || 0, 0, 0.85);
-  return Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+  const baseEff = Math.max(0.3, minCooldown, Math.max(0, baseCooldown - flat) * (1 - pct));
+  const swQ = abilityId === "dash" ? inventory?.swampBootlegCdDash ?? 0 : 0;
+  const swW = abilityId === "burst" ? inventory?.swampBootlegCdBurst ?? 0 : 0;
+  return baseEff + swQ + swW;
 }
 
 function cooldownIndicator(baseCooldown, effectiveCooldownSec) {
@@ -123,7 +126,7 @@ export function createRogue(rogueWorld) {
   function tryExecuteDash(ctx) {
     const { player, elapsed, resolvePlayer, circleHitsObstacle, spawnAttackRing, inventory } = ctx;
     const passive = collectPassive(inventory);
-    const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25);
+    const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25, inventory);
     if (elapsed < dashReadyAt) return;
     dashReadyAt = elapsed + dashCd;
     const range = currentDashRange(inventory);
@@ -153,7 +156,7 @@ export function createRogue(rogueWorld) {
   function trySmoke(ctx) {
     const { player, elapsed, inventory, spawnAttackRing } = ctx;
     const passive = collectPassive(inventory);
-    const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 1);
+    const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 1, inventory);
     if (elapsed < burstReadyAt) return;
     burstReadyAt = elapsed + burstCd;
     const linger = SMOKE_DURATION + passive.invisOnBurst;
@@ -166,7 +169,7 @@ export function createRogue(rogueWorld) {
   function tryConsume(ctx) {
     const { elapsed, player, inventory } = ctx;
     const passive = collectPassive(inventory);
-    const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4);
+    const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4, inventory);
     if (elapsed < consumeReadyAt) return;
     consumeReadyAt = elapsed + consumeCd;
     rogueWorld.beginFoodSense(elapsed);
@@ -207,9 +210,9 @@ export function createRogue(rogueWorld) {
       const { inventory, player } = ctx;
       currentInventory = inventory;
       const passive = collectPassive(inventory);
-      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25);
-      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 1);
-      const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4);
+      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25, inventory);
+      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 1, inventory);
+      const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4, inventory);
       cdrHud.dash = cooldownIndicator(DASH_COOLDOWN, dashCd);
       cdrHud.burst = cooldownIndicator(BURST_COOLDOWN, burstCd);
       cdrHud.decoy = cooldownIndicator(CONSUME_COOLDOWN, consumeCd);
@@ -228,9 +231,9 @@ export function createRogue(rogueWorld) {
 
     getAbilityHud(elapsed) {
       const passive = collectPassive(currentInventory ?? { deckByRank: {} });
-      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25);
-      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 1);
-      const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4);
+      const dashCd = effectiveCooldown(passive, "dash", DASH_COOLDOWN, 0.25, inventory);
+      const burstCd = effectiveCooldown(passive, "burst", BURST_COOLDOWN, 1, inventory);
+      const consumeCd = effectiveCooldown(passive, "decoy", CONSUME_COOLDOWN, 0.4, inventory);
       const ultimateHud = buildEquippedUltimateHud(currentInventory, elapsed, LABEL_R, "#60a5fa");
       const aiming = rogueWorld.getDashAiming();
       return {

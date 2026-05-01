@@ -1,10 +1,21 @@
 import { TAU } from "../constants.js";
 import { clamp } from "./hunterGeometry.js";
 
+/** Frog detonation burst + mud pool grow-in duration (seconds); same easing for both. */
+export const FROG_SPLASH_GROW_SEC = 0.88;
+
+/** 0..1 scale while splash/pool expands from center (ease-out, matches burst `ease`). */
+export function frogMudPoolGrowScale(bornAt, now) {
+  const u = clamp((now - bornAt) / FROG_SPLASH_GROW_SEC, 0, 1);
+  return 1 - Math.pow(1 - u, 2.45);
+}
+
 export function hunterPalette(type) {
   switch (type) {
     case "chaser":
       return { light: "#fecaca", core: "#dc2626", shadow: "#7f1d1d", rim: "#fca5a5", mark: "#fff1f2" };
+    case "frogChaser":
+      return { light: "#86efac", core: "#166534", shadow: "#14532d", rim: "#4ade80", mark: "#ecfccb" };
     case "cutter":
       return { light: "#fde68a", core: "#d97706", shadow: "#78350f", rim: "#fcd34d", mark: "#fffbeb" };
     case "sniper":
@@ -30,7 +41,11 @@ export function hunterPalette(type) {
   }
 }
 
-export function drawHunterBody(ctx, h) {
+/** @param {CanvasRenderingContext2D} ctx
+ * @param {object} h
+ * @param {{ colourblind?: boolean }} [opts]
+ */
+export function drawHunterBody(ctx, h, opts = {}) {
   if (h.type === "cryptSpawner" && h.cryptDisguised) {
     const s = 35;
     const pulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + h.x * 0.01 + h.y * 0.01) * 4.2);
@@ -47,9 +62,15 @@ export function drawHunterBody(ctx, h) {
     return;
   }
   const boneSwarmGhostFast = h.type === "fast" && !!h.boneSwarmPhasing;
-  const pal = boneSwarmGhostFast
-    ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" }
-    : hunterPalette(h.type);
+  const swampMudFast = h.type === "fast" && !!h.swampMudSpawn;
+  const colourblind = !!opts.colourblind;
+  const pal = colourblind
+    ? { light: "#9ca89a", core: "#5a6658", shadow: "#3a4239", rim: "#6b7569", mark: "#b4c0b0" }
+    : boneSwarmGhostFast
+      ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" }
+      : swampMudFast
+        ? { light: "#5c4a3a", core: "#342a1f", shadow: "#120e0a", rim: "#3d3024", mark: "#2a2218" }
+        : hunterPalette(h.type);
   const { x, y, r } = h;
   const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
   const cryptRevealU = h.type === "cryptSpawner" ? clamp(Number(h.cryptRevealU ?? 1), 0, 1) : 1;
@@ -455,32 +476,133 @@ export function drawSwampPools(ctx, pools, now) {
     const life = clamp((now - p.bornAt) / Math.max(0.001, p.expiresAt - p.bornAt), 0, 1);
     const fade = 1 - life * 0.75;
     const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(now * 5 + p.x * 0.01 + p.y * 0.01));
-    drawCircle(ctx, p.x, p.y, p.r, "#2d1f12", 0.5 * fade);
-    drawCircle(ctx, p.x, p.y, p.r * 0.78, "#3f2f1e", (0.2 + 0.12 * pulse) * fade);
-    ctx.strokeStyle = `rgba(161, 98, 7, ${(0.45 + pulse * 0.2) * fade})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r * (0.9 + 0.05 * pulse), 0, TAU);
-    ctx.stroke();
+    const R = p.r;
+    if (p.frogMudPool) {
+      ctx.save();
+      const grow = frogMudPoolGrowScale(p.bornAt, now);
+      const drawR = Math.max(2, R * grow);
+      const g = ctx.createRadialGradient(p.x, p.y - drawR * 0.12, drawR * 0.06, p.x, p.y, drawR);
+      g.addColorStop(0, `rgba(36, 44, 30, ${0.9 * fade})`);
+      g.addColorStop(0.28, `rgba(44, 36, 24, ${0.88 * fade})`);
+      g.addColorStop(0.55, `rgba(32, 40, 28, ${0.78 * fade})`);
+      g.addColorStop(0.78, `rgba(22, 30, 22, ${0.62 * fade})`);
+      g.addColorStop(0.94, `rgba(16, 22, 18, ${0.45 * fade})`);
+      g.addColorStop(1, `rgba(10, 14, 12, ${0.28 * fade})`);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, drawR, 0, TAU);
+      ctx.fillStyle = g;
+      ctx.fill();
+      const gSheen = ctx.createRadialGradient(
+        p.x - drawR * 0.22,
+        p.y - drawR * 0.28,
+        0,
+        p.x,
+        p.y,
+        drawR * 0.52,
+      );
+      gSheen.addColorStop(0, `rgba(62, 54, 42, ${0.22 * fade})`);
+      gSheen.addColorStop(0.45, `rgba(40, 34, 26, ${0.12 * fade})`);
+      gSheen.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, drawR * 0.98, 0, TAU);
+      ctx.fillStyle = gSheen;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(6, 8, 6, ${0.72 * fade})`;
+      ctx.lineWidth = 3.8;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(1.5, drawR - 1.2), 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(153, 27, 27, ${(0.62 + pulse * 0.18) * fade})`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(1.2, drawR - 0.6), 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(254, 202, 202, ${0.14 * fade})`;
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(1, drawR - 2.4), 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      drawCircle(ctx, p.x, p.y, R, "#2d1f12", 0.5 * fade);
+      drawCircle(ctx, p.x, p.y, R * 0.78, "#3f2f1e", (0.2 + 0.12 * pulse) * fade);
+      ctx.strokeStyle = `rgba(161, 98, 7, ${(0.45 + pulse * 0.2) * fade})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, R * (0.9 + 0.05 * pulse), 0, TAU);
+      ctx.stroke();
+    }
   }
 }
 
 export function drawSwampBlastBursts(ctx, bursts, now) {
   for (const b of bursts) {
     const t = clamp((now - b.bornAt) / Math.max(0.001, b.life), 0, 1);
-    const fade = 1 - t;
-    const rr = b.r * (0.2 + 0.95 * t);
-    drawCircle(ctx, b.x, b.y, rr, "#a16207", 0.22 * fade);
-    ctx.strokeStyle = `rgba(217, 119, 6, ${0.75 * fade})`;
-    ctx.lineWidth = 3.2 - t * 1.8;
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, rr, 0, TAU);
-    ctx.stroke();
-    ctx.strokeStyle = `rgba(254, 243, 199, ${0.5 * fade})`;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, rr * (0.72 + 0.15 * (1 - t)), 0, TAU);
-    ctx.stroke();
+    const fade = 1 - t * 0.2;
+    if (b.frogWave) {
+      const ease = 1 - Math.pow(1 - t, 2.45);
+      const rr = b.r * (0.02 + 0.98 * ease);
+      const vis = Math.pow(Math.sin(Math.min(1, t / 0.9) * Math.PI), 0.75);
+      const aMul = vis * (0.88 + 0.12 * (1 - t));
+      ctx.save();
+      const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, Math.max(rr, 2));
+      g.addColorStop(0, `rgba(30, 44, 32, ${0.5 * aMul})`);
+      g.addColorStop(0.38, `rgba(48, 40, 28, ${0.4 * aMul})`);
+      g.addColorStop(0.72, `rgba(26, 38, 30, ${0.2 * aMul})`);
+      g.addColorStop(1, "rgba(8, 12, 10, 0)");
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, rr, 0, TAU);
+      ctx.fillStyle = g;
+      ctx.fill();
+      const edgeA = 0.55 * aMul * (0.35 + 0.65 * ease);
+      ctx.strokeStyle = `rgba(140, 28, 28, ${0.82 * edgeA})`;
+      ctx.lineWidth = 1.6 + (1 - ease) * 1.4;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, rr, 0, TAU);
+      ctx.stroke();
+      const rippleStart = 0.58;
+      if (t >= rippleStart) {
+        const rip = clamp((t - rippleStart) / (1 - rippleStart), 0, 1);
+        const decay = (1 - rip) * (1 - rip);
+        const baseR = b.r;
+        for (let ring = 0; ring < 3; ring++) {
+          const lag = ring * 0.16;
+          const uRing = clamp((rip - lag) / Math.max(0.001, 1 - lag), 0, 1);
+          if (uRing <= 0.02) continue;
+          const ringR = baseR * (0.72 + 0.32 * uRing);
+          const ra = 0.38 * decay * (1 - ring * 0.18);
+          ctx.strokeStyle = `rgba(48, 36, 26, ${ra})`;
+          ctx.lineWidth = 5 + (1 - uRing) * 6;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, ringR, 0, TAU);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = `rgba(28, 44, 32, ${0.22 * decay})`;
+        ctx.lineWidth = 3.2;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, baseR * (0.68 + 0.36 * rip), 0, TAU);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(185, 45, 45, ${0.2 * decay})`;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, baseR * (0.82 + 0.28 * rip), 0, TAU);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      const rr = b.r * (0.2 + 0.95 * t);
+      drawCircle(ctx, b.x, b.y, rr, "#a16207", 0.22 * fade);
+      ctx.strokeStyle = `rgba(217, 119, 6, ${0.75 * fade})`;
+      ctx.lineWidth = 3.2 - t * 1.8;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, rr, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(254, 243, 199, ${0.5 * fade})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, rr * (0.72 + 0.15 * (1 - t)), 0, TAU);
+      ctx.stroke();
+    }
   }
 }
 

@@ -10,6 +10,7 @@ import {
   HEAL_CRYSTAL_LIFETIME_SEC,
   CARD_COLLECTIBLE_LIFETIME_SEC,
   HEAL_CRYSTAL_HP,
+  SWAMP_BOOTLEG_CRYSTAL_HP,
   ROULETTE_OUTER_PENALTY_HP,
   FORGE_OUTER_PENALTY_HP,
   SURGE_TILE_FLASH_SEC,
@@ -21,6 +22,12 @@ import {
   VALIANT_BUNNY_PICKUP_R,
   BULWARK_POST_HIT_INVULN_SEC,
   BULWARK_FLAG_MAX_HP,
+  SWAMP_INFECTION_CAP,
+  SWAMP_INFECTION_STACK_MIN_GAP_LEVEL2_SEC,
+  SWAMP_INFECTION_STACK_MIN_GAP_LEVEL3_SEC,
+  SWAMP_INFECTION_BURST_STUN_SEC,
+  SWAMP_INFECTION_BURST_SLOW_SEC,
+  SWAMP_INFECTION_TEN_DRIFT_SEC,
 } from "./balance.js";
 import { referenceTileGridFromCanvasHeight } from "./WorldGeneration/tileGenerator.js";
 import { attachArrowKeyState, attachHeldLetterKeys } from "./gameControls.js";
@@ -57,6 +64,7 @@ import {
   drawSurgeHexWorld,
   drawSafehouseHexWorld,
   drawRunStatsHud,
+  drawSwampBootlegCursesHud,
   drawDecoy,
   drawHealPickup,
   drawCardPickupWorld,
@@ -92,6 +100,21 @@ import { createForgeHexFlow } from "./specials/forgeHexFlow.js";
 import { createForgeWorldModal } from "./specials/forgeModal.js";
 import { createRouletteHexFlow } from "./specials/rouletteHexFlow.js";
 import { createRouletteModal } from "./specials/rouletteModal.js";
+import { createSwampBootlegCrystalModal } from "./specials/swampBootlegCrystalModal.js";
+import { rollTwoBootlegOffers } from "./swamp/swampBootlegCrystalPool.js";
+import {
+  tickSwampBootlegCurses,
+  purgeSwampBootlegNextCrystalCurses,
+  onSwampBootlegPlayerDamageHit,
+  getSwampBootlegMoveSpeedMult,
+  getSwampBootlegColourblind,
+  getSwampBootlegInvertMove,
+  getSwampBootlegFragileExtra,
+  tickSwampBootlegBloodTax,
+  applySwampBootlegOffer,
+  resetSwampBootlegState,
+  getSwampBootlegSidebarRows,
+} from "./swamp/swampBootlegRuntime.js";
 import { createSafehouseHexFlow } from "./specials/safehouseHexFlow.js";
 import { createEventHexController } from "./WorldGeneration/eventTiles/eventController.js";
 import { dropJokerRewardFromSpecialEvent } from "./items/jokerEventReward.js";
@@ -494,6 +517,37 @@ function boot() {
     }
     return obstacles;
   }
+
+  function knightHasClubsSevenSet() {
+    return countSuitsInActiveSlots(inventory).clubs >= SET_BONUS_SUIT_THRESHOLD;
+  }
+
+  /** When clubs terrain-phase / invis ends, snap Knight out of solid obstacles so collision resumes cleanly. */
+  function ejectKnightFromSolidTerrainIfNeeded() {
+    if (activeCharacterId !== "knight" || !knightHasClubsSevenSet()) return;
+    if (!circleOverlapsAnyRect(player.x, player.y, player.r, obstacles)) return;
+    const res = resolvePlayerAgainstRects(player.x, player.y, player.r, obstacles);
+    player.x = res.x;
+    player.y = res.y;
+    if (!circleOverlapsAnyRect(player.x, player.y, player.r, obstacles)) return;
+    const ox = player.x;
+    const oy = player.y;
+    const pr = player.r;
+    const maxPush = pr * 14;
+    for (let dist = 4; dist <= maxPush; dist += 4) {
+      for (let s = 0; s < 24; s++) {
+        const ang = (s / 24) * Math.PI * 2 + dist * 0.17;
+        const cx = ox + Math.cos(ang) * dist;
+        const cy = oy + Math.sin(ang) * dist;
+        if (!circleOverlapsAnyRect(cx, cy, pr, obstacles)) {
+          player.x = cx;
+          player.y = cy;
+          return;
+        }
+      }
+    }
+  }
+
   applyShellUiFromCharacter(document, character);
 
   function applyCombatFromCharacter() {
@@ -547,9 +601,35 @@ function boot() {
   let boneBlindDebuffFromBlueLaser = false;
   const BONE_BLIND_DEBUFF_PEAK_SEC = 0.92;
   const BONE_BLIND_DEBUFF_FADE_SEC = 0.55;
+  /** Tracks Knight clubs invisibility window for edge detection (eject from terrain when it ends). */
+  let prevKnightClubsInvisActive = false;
+  /** Tracks Knight burst terrain-phase window for edge detection. */
+  let prevKnightBurstTerrainPhase = false;
   const FIRE_GROWTH_ZONE_VISUAL_RADIUS_MULT = 1.9;
-  let swampInfectionPopupUntil = 0;
+  /** Sim time when infection hit 10 (for "10!" celebrate + drift HUD). */
+  let swampInfectionTenBurstAt = 0;
+  /** Full infection burst debuff (stun + slow): screen overlay until this time. */
+  let swampInfectionDebuffOverlayUntil = 0;
+  /** While active, infection stacks cannot rise and stay at cap until stun+slow ends (then cleared). */
+  let swampInfectionChainLockUntil = 0;
+  /** Sim time of last infection stack gain (L2+ throttle). */
+  let swampInfectionStackLastAt = 0;
   const swampDamageInstanceSeenAt = new Map();
+  /** Swamp: muddy wake behind the player (world px, sim time at sample). */
+  const swampMudTrail = /** @type {{ x: number; y: number; t: number }[]} */ ([]);
+  let swampMudTrailLastX = NaN;
+  let swampMudTrailLastY = NaN;
+  const SWAMP_MUD_TRAIL_MAX = 58;
+  const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
+  const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
+  const SWAMP_ENEMY_TRAIL_MAX = 36;
+  /** Swamp mud trails only for these hunter types (perf: close-range movers). */
+  const SWAMP_TRAIL_HUNTER_TYPES = new Set(["chaser", "frogChaser", "cutter"]);
+  /** Per-hunter muddy wake on swamp (keyed by hunter object from `hunterRuntime`). */
+  const swampHunterMudTrailByHunter = new WeakMap();
+  /** Knight Q dash landing — big muddy splash (swamp only); `pr` = player radius at impact. */
+  const knightSwampDashSplashes = /** @type {{ x: number; y: number; bornAt: number; pr: number }[]} */ ([]);
+  const KNIGHT_SWAMP_DASH_SPLASH_SEC = 0.62;
   const damagePopups = /** @type {{ x: number; y: number; bornAt: number; expiresAt: number; base: number; swampBonus: number; driftX: number }[]} */ ([]);
   /** Fire path L3+: stationary growing flame hazards tied to active tile lifetime. */
   const fireGrowthZones = /** @type {Array<{
@@ -692,8 +772,29 @@ function boot() {
    */
   function resetSwampInfection() {
     inventory.swampInfectionStacks = 0;
-    swampInfectionPopupUntil = 0;
+    swampInfectionTenBurstAt = 0;
+    swampInfectionDebuffOverlayUntil = 0;
+    swampInfectionChainLockUntil = 0;
+    swampInfectionStackLastAt = 0;
     swampDamageInstanceSeenAt.clear();
+  }
+
+  function finalizeSwampBootlegCrystalPick(offer) {
+    const h = Math.max(0, Math.floor(offer.heal ?? 0));
+    if (activeCharacterId === "lunatic") {
+      player.hp = Math.min(player.maxHp, player.hp + h);
+    } else if (activeCharacterId === "valiant" && typeof character.onHealCrystalPickup === "function") {
+      character.onHealCrystalPickup(buildAbilityContext(0), h);
+    } else {
+      player.hp = Math.min(player.maxHp, player.hp + h);
+    }
+    applySwampBootlegOffer(inventory, offer, simElapsed, () => {
+      swampBootlegCurseUid += 1;
+      return swampBootlegCurseUid;
+    });
+    fireIgniteUntil = 0;
+    fireIgniteNextTickAt = 0;
+    fireIgniteTickStep = 1;
   }
 
   function spawnDamagePopup(baseAmount, swampBonus, opts = {}) {
@@ -780,41 +881,509 @@ function boot() {
     }
   }
 
-  function drawSwampAtmosphereWorld(ctx, viewW, viewH) {
-    const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.2);
-    const r1 = Math.max(viewW, viewH) * 0.7;
-    const r2 = Math.max(viewW, viewH) * 1.02;
-    const g1 = ctx.createRadialGradient(player.x, player.y, r1 * 0.1, player.x, player.y, r1);
-    g1.addColorStop(0, `rgba(187, 247, 208, ${0.02 + pulse * 0.02})`);
-    g1.addColorStop(0.45, `rgba(110, 231, 183, ${0.02 + pulse * 0.015})`);
+  /** Viewport center in world space — stable swamp wash anchor (hex centroid jumps when tiles load). */
+  function getSwampAtmosphereAnchorWorld(viewW, viewH) {
+    return { x: cameraX + viewW * 0.5, y: cameraY + viewH * 0.5 };
+  }
+
+  /** Under obstacles: swamp murk + per-hex humidity / peat (world-anchored; bubbles drawn later). */
+  function drawSwampAtmosphereBackgroundWorld(ctx, viewW, viewH) {
+    const anchor = getSwampAtmosphereAnchorWorld(viewW, viewH);
+    const rMax = Math.max(viewW, viewH) * 0.95;
+    const g1 = ctx.createRadialGradient(anchor.x, anchor.y, rMax * 0.11, anchor.x, anchor.y, rMax * 0.52);
+    g1.addColorStop(0, "rgba(42, 58, 48, 0.095)");
+    g1.addColorStop(0.5, "rgba(22, 38, 30, 0.072)");
     g1.addColorStop(1, "rgba(15, 23, 42, 0)");
     ctx.fillStyle = g1;
-    ctx.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+    ctx.fillRect(cameraX - 28, cameraY - 28, viewW + 56, viewH + 56);
 
-    const g2 = ctx.createRadialGradient(player.x, player.y, r2 * 0.2, player.x, player.y, r2);
+    const g2 = ctx.createRadialGradient(anchor.x, anchor.y, rMax * 0.2, anchor.x, anchor.y, rMax);
     g2.addColorStop(0, "rgba(0, 0, 0, 0)");
-    g2.addColorStop(0.66, "rgba(22, 101, 52, 0.1)");
-    g2.addColorStop(1, "rgba(6, 78, 59, 0.23)");
+    g2.addColorStop(0.58, "rgba(6, 26, 18, 0.44)");
+    g2.addColorStop(0.82, "rgba(4, 16, 12, 0.56)");
+    g2.addColorStop(1, "rgba(2, 8, 6, 0.68)");
     ctx.fillStyle = g2;
-    ctx.fillRect(cameraX - 24, cameraY - 24, viewW + 48, viewH + 48);
+    ctx.fillRect(cameraX - 28, cameraY - 28, viewW + 56, viewH + 56);
 
-    // Slow miasma wisps in screen space.
-    const mistN = 7;
-    for (let i = 0; i < mistN; i++) {
-      const seed = i * 2.41;
-      const ox = Math.sin(simElapsed * 0.28 + seed) * (viewW * 0.18);
-      const oy = Math.cos(simElapsed * 0.22 + seed * 1.6) * (viewH * 0.14);
-      const cx = player.x + ox + Math.sin(simElapsed * 0.6 + i) * 28;
-      const cy = player.y + oy + Math.cos(simElapsed * 0.52 + i * 0.7) * 20;
-      const rr = Math.max(40, Math.min(95, viewW * 0.06 + i * 5));
-      const fog = ctx.createRadialGradient(cx, cy, 0, cx, cy, rr);
-      fog.addColorStop(0, "rgba(110, 231, 183, 0.045)");
-      fog.addColorStop(0.6, "rgba(16, 185, 129, 0.03)");
-      fog.addColorStop(1, "rgba(6, 78, 59, 0)");
+    const footY0 = cameraY + viewH * 0.66;
+    const footG = ctx.createLinearGradient(cameraX, footY0, cameraX, cameraY + viewH + 24);
+    footG.addColorStop(0, "rgba(28, 22, 16, 0)");
+    footG.addColorStop(0.35, "rgba(24, 30, 22, 0.06)");
+    footG.addColorStop(0.72, "rgba(20, 26, 20, 0.1)");
+    footG.addColorStop(1, "rgba(14, 20, 16, 0.14)");
+    ctx.fillStyle = footG;
+    ctx.fillRect(cameraX - 32, footY0 - 6, viewW + 64, viewH * 0.38 + 32);
+
+    const L = activeHexes.length;
+    if (!L) return;
+    for (const h of activeHexes) {
+      const mix = (h.q * 9283711 + h.r * 689287) >>> 0;
+      const { x: hx, y: hy } = hexToWorld(h.q, h.r);
+      const wobx = Math.sin((mix & 4095) * 0.0015) * HEX_SIZE * 0.07;
+      const woby = Math.cos(((mix >> 12) & 4095) * 0.0014) * HEX_SIZE * 0.06;
+
+      const peat = ctx.createRadialGradient(hx, hy + HEX_SIZE * 0.1, 0, hx, hy + HEX_SIZE * 0.08, HEX_SIZE * 0.95);
+      peat.addColorStop(0, "rgba(38, 30, 22, 0.22)");
+      peat.addColorStop(0.55, "rgba(22, 32, 26, 0.11)");
+      peat.addColorStop(1, "rgba(12, 22, 18, 0)");
+      ctx.fillStyle = peat;
+      ctx.beginPath();
+      ctx.arc(hx, hy + HEX_SIZE * 0.06, HEX_SIZE * 0.88, 0, Math.PI * 2);
+      ctx.fill();
+
+      const fr = HEX_SIZE * (0.88 + (mix % 5) * 0.04);
+      const fog = ctx.createRadialGradient(hx + wobx, hy + woby, 0, hx + wobx, hy + woby, fr);
+      fog.addColorStop(0, "rgba(55, 88, 72, 0.085)");
+      fog.addColorStop(0.55, "rgba(28, 52, 42, 0.06)");
+      fog.addColorStop(1, "rgba(10, 28, 22, 0)");
       ctx.fillStyle = fog;
       ctx.beginPath();
-      ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.arc(hx + wobx, hy + woby, fr, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  function pruneSwampMudTrailPoints(points) {
+    const cutoff = simElapsed - SWAMP_MUD_TRAIL_DECAY_SEC;
+    while (points.length > 0 && points[0].t < cutoff) points.shift();
+  }
+
+  function pruneSwampMudTrail() {
+    pruneSwampMudTrailPoints(swampMudTrail);
+  }
+
+  /**
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {{ x: number; y: number; t: number }[]} points
+   * @param {{ headR: number; salt: number }} opts
+   */
+  function drawSwampMudTrailStrip(ctx, points, opts) {
+    const n = points.length;
+    if (n < 2) return;
+    const decay = SWAMP_MUD_TRAIL_DECAY_SEC;
+    const SHELLS = 6;
+    const salt = opts.salt >>> 0;
+    const headR = Math.max(4, opts.headR);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let i = 1; i < n; i++) {
+      const p0 = points[i - 1];
+      const p1 = points[i];
+      const u0 = Math.max(0, 1 - (simElapsed - p0.t) / decay);
+      const u1 = Math.max(0, 1 - (simElapsed - p1.t) / decay);
+      const u = Math.min(u0, u1);
+      if (u <= 0.015) continue;
+      // World-anchored hash only (no segment index): index shifts when front points prune would re-randomise mottle/jag.
+      const mixH =
+        ((Math.floor(p0.x * 0.7) ^
+          Math.floor(p0.y * 0.61) ^
+          Math.floor(p1.x * 0.67) ^
+          Math.floor(p1.y * 0.6) ^
+          salt) >>>
+          0) %
+        4096;
+      const jagW = 0.55 + (mixH & 255) / 255 * 1.05;
+      const jagNarrow = 0.62 + ((mixH >> 8) & 255) / 255 * 0.55;
+      const wMax = (7 + u * 19) * jagW;
+      const aBase = (0.055 + u * 0.2) * (0.72 + ((mixH >> 4) & 127) / 127 * 0.48);
+      for (let s = SHELLS - 1; s >= 0; s--) {
+        const outerness = s / Math.max(1, SHELLS - 1);
+        const lw = wMax * (0.14 + 0.86 * outerness) * jagNarrow;
+        const wash = Math.pow(Math.max(0, u), 0.28 + outerness * 1.55);
+        if (wash < 0.02 || lw < 0.6) continue;
+        const aBr = aBase * wash;
+        const mottle = ((mixH >>> (s % 5)) ^ (s * 17489)) & 1;
+        const br = mottle
+          ? { r: 52, g: 38, b: 28, ir: 22, ig: 34, ib: 28 }
+          : { r: 28, g: 20, b: 14, ir: 12, ig: 22, ib: 16 };
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.strokeStyle = `rgba(${br.r}, ${br.g}, ${br.b}, ${aBr})`;
+        ctx.lineWidth = lw;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.strokeStyle = `rgba(${br.ir}, ${br.ig}, ${br.ib}, ${aBr * 0.5})`;
+        ctx.lineWidth = lw * 0.42;
+        ctx.stroke();
+      }
+    }
+    const newest = points[n - 1];
+    const nu = Math.max(0, 1 - (simElapsed - newest.t) / decay);
+    if (nu > 0.02) {
+      const splashR = headR * 1.65 + 10 + nu * 8;
+      const inward = 1 - nu;
+      const g = ctx.createRadialGradient(newest.x, newest.y, 0, newest.x, newest.y, splashR);
+      const mid = 0.22 + inward * 0.38;
+      const midA = (0.09 + nu * 0.06) * (1 - inward * 0.55);
+      g.addColorStop(0, `rgba(46, 36, 28, ${(0.12 + nu * 0.05) * (0.55 + 0.45 * nu)})`);
+      g.addColorStop(mid * 0.55, `rgba(38, 32, 26, ${midA * 0.95})`);
+      g.addColorStop(mid, `rgba(32, 40, 32, ${midA * 0.72})`);
+      g.addColorStop(mid + (1 - mid) * (0.35 + inward * 0.35), `rgba(24, 32, 26, ${midA * 0.35 * (1 - inward * 0.8)})`);
+      g.addColorStop(1, "rgba(14, 22, 18, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(newest.x, newest.y, splashR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** Disturbed mud / water on the floor — after murk, before tetris blocks. */
+  function drawSwampMudTrailWorld(ctx) {
+    pruneSwampMudTrail();
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    drawSwampMudTrailStrip(ctx, swampMudTrail, { headR: player.r, salt: 0 });
+    if (hunterRuntime) {
+      for (const h of hunterRuntime.entities.hunters) {
+        if (!SWAMP_TRAIL_HUNTER_TYPES.has(h.type)) continue;
+        const st = swampHunterMudTrailByHunter.get(h);
+        if (!st || st.points.length < 2) continue;
+        pruneSwampMudTrailPoints(st.points);
+        if (st.points.length < 2) continue;
+        const salt = ((h.bornAt * 1009) ^ (String(h.type).length * 131)) >>> 0;
+        drawSwampMudTrailStrip(ctx, st.points, { headR: h.r, salt });
+      }
+    }
+    ctx.restore();
+  }
+
+  function getSwampHunterMudTrailState(h) {
+    let st = swampHunterMudTrailByHunter.get(h);
+    if (!st) {
+      st = {
+        points: /** @type {{ x: number; y: number; t: number }[]} */ ([]),
+        lastX: NaN,
+        lastY: NaN,
+        prevX: h.x,
+        prevY: h.y,
+      };
+      swampHunterMudTrailByHunter.set(h, st);
+    }
+    return st;
+  }
+
+  function tickSwampHunterMudTrails(dt) {
+    if (!hunterRuntime) return;
+    const pdt = Math.max(dt, 1e-5);
+    for (const h of hunterRuntime.entities.hunters) {
+      if (!SWAMP_TRAIL_HUNTER_TYPES.has(h.type)) {
+        swampHunterMudTrailByHunter.delete(h);
+        continue;
+      }
+      const st = getSwampHunterMudTrailState(h);
+      const vx = (h.x - st.prevX) / pdt;
+      const vy = (h.y - st.prevY) / pdt;
+      st.prevX = h.x;
+      st.prevY = h.y;
+      const sp = Math.hypot(vx, vy);
+      pruneSwampMudTrailPoints(st.points);
+      if (sp > 20) {
+        if (!Number.isFinite(st.lastX)) {
+          st.points.push({ x: h.x, y: h.y, t: simElapsed });
+          st.lastX = h.x;
+          st.lastY = h.y;
+        } else {
+          const d = Math.hypot(h.x - st.lastX, h.y - st.lastY);
+          if (d >= SWAMP_MUD_TRAIL_SAMPLE_MIN) {
+            st.points.push({ x: h.x, y: h.y, t: simElapsed });
+            st.lastX = h.x;
+            st.lastY = h.y;
+            while (st.points.length > SWAMP_ENEMY_TRAIL_MAX) st.points.shift();
+          }
+        }
+      }
+    }
+  }
+
+  function clearSwampHunterMudTrails() {
+    if (!hunterRuntime) return;
+    for (const h of hunterRuntime.entities.hunters) {
+      swampHunterMudTrailByHunter.delete(h);
+    }
+  }
+
+  /** Knight dash end: heavy muddy splash — same palette / weight as mud trail (swamp only). */
+  function drawKnightSwampDashSplashesWorld(ctx) {
+    const dur = KNIGHT_SWAMP_DASH_SPLASH_SEC;
+    const now = simElapsed;
+    for (let i = knightSwampDashSplashes.length - 1; i >= 0; i--) {
+      if (now - knightSwampDashSplashes[i].bornAt > dur) knightSwampDashSplashes.splice(i, 1);
+    }
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const s of knightSwampDashSplashes) {
+      const u = (now - s.bornAt) / dur;
+      if (u >= 1) continue;
+      const pr = Math.max(12, Number(s.pr) || PLAYER_RADIUS);
+      const rx = s.x;
+      const ry = s.y;
+      const fade = Math.pow(1 - u, 1.05);
+      const hit = Math.sin(Math.min(1, u / 0.1) * Math.PI);
+      const vis = fade * (0.55 + 0.45 * hit);
+
+      const outerR = pr * 2.45 + 52 + u * (pr * 1.05 + 42);
+      const g = ctx.createRadialGradient(rx, ry + 4, 0, rx, ry, outerR);
+      g.addColorStop(0, `rgba(46, 34, 26, ${0.55 * vis})`);
+      g.addColorStop(0.22, `rgba(40, 30, 22, ${0.48 * vis})`);
+      g.addColorStop(0.45, `rgba(34, 42, 30, ${0.32 * vis})`);
+      g.addColorStop(0.72, `rgba(24, 34, 26, ${0.16 * fade})`);
+      g.addColorStop(1, "rgba(10, 16, 12, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(rx, ry + 6, outerR * 1.06, outerR * 0.86, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const salt = ((Math.floor(rx) * 92837111) ^ (Math.floor(ry) * 689287451)) >>> 0;
+      const spokes = 15;
+      const len0 = pr * 1.25 + 36;
+      for (let k = 0; k < spokes; k++) {
+        const ang = (k / spokes) * Math.PI * 2 + (salt & 4095) * 0.00035 + u * 0.15;
+        const len = len0 * (1.05 - u * 0.92) + ((salt >>> (k % 9)) & 19);
+        const inner = pr * 0.22;
+        const aSp = 0.38 * fade * (0.7 + 0.3 * hit);
+        ctx.strokeStyle = `rgba(52, 38, 28, ${aSp})`;
+        ctx.lineWidth = 6 + (1 - u) * 8;
+        ctx.beginPath();
+        ctx.moveTo(rx + Math.cos(ang) * inner, ry + Math.sin(ang) * inner);
+        ctx.lineTo(rx + Math.cos(ang) * (inner + len), ry + Math.sin(ang) * (inner + len));
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(20, 30, 24, ${aSp * 0.5})`;
+        ctx.lineWidth = 2.8;
+        ctx.beginPath();
+        ctx.moveTo(rx + Math.cos(ang) * inner, ry + Math.sin(ang) * inner);
+        ctx.lineTo(rx + Math.cos(ang) * (inner + len * 0.52), ry + Math.sin(ang) * (inner + len * 0.52));
+        ctx.stroke();
+      }
+
+      const ringR = pr * 2.15 + 28 + u * (pr + 56);
+      ctx.strokeStyle = `rgba(36, 28, 20, ${0.45 * fade})`;
+      ctx.lineWidth = 8 + (1 - u) * 7;
+      ctx.beginPath();
+      ctx.arc(rx, ry, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(22, 34, 26, ${0.28 * fade})`;
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.arc(rx, ry, ringR + 8 + u * 12, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Slow churn under the player — reads as sinking / dragging through mud. */
+  function drawSwampPlayerMudChurnWorld(ctx) {
+    const px = player.x;
+    const py = player.y;
+    const ph = 0.5 + 0.5 * Math.sin(simElapsed * 2.05);
+    const pw = 0.5 + 0.5 * Math.sin(simElapsed * 1.55 + 1.1);
+    const rOuter = player.r + 22 + ph * 10;
+    const g = ctx.createRadialGradient(px, py + 3, 0, px, py, rOuter);
+    g.addColorStop(0, `rgba(32, 24, 18, ${0.07 + ph * 0.05})`);
+    g.addColorStop(0.42, `rgba(28, 36, 28, ${0.075 + pw * 0.025})`);
+    g.addColorStop(1, "rgba(12, 20, 16, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(px, py, rOuter, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(22, 34, 26, ${0.045 + pw * 0.035})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(px, py, player.r + 9 + ph * 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(18, 28, 22, ${0.03 + ph * 0.02})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(px, py, player.r + 16 + pw * 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  /**
+   * One swamp bubble: fixed world X, rises slowly on Y, fades out (no wobble, no sawtooth snap at x).
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {number} x
+   * @param {number} y
+   * @param {number} R radius px (4–10)
+   * @param {number} alpha 0..1
+   */
+  function drawSwampBubbleGlyph(ctx, x, y, R, alpha) {
+    if (alpha <= 0.008 || R < 0.5) return;
+    const a = alpha;
+    ctx.fillStyle = `rgba(210, 232, 220, ${0.1 * a})`;
+    ctx.beginPath();
+    ctx.arc(x, y, R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(160, 190, 175, ${0.26 * a})`;
+    ctx.lineWidth = Math.max(0.85, R * 0.1);
+    ctx.beginPath();
+    ctx.arc(x, y, R, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.2 * a})`;
+    ctx.beginPath();
+    ctx.arc(x - R * 0.38, y - R * 0.4, R * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /** Deterministic inner point on a swamp mud rect (obstacle cell). */
+  function swampObstacleInnerPoint(o, salt) {
+    const xi = Math.floor(o.x) | 0;
+    const yi = Math.floor(o.y) | 0;
+    const h = ((xi * 92837111) ^ (yi * 689287451) ^ (salt * 374761393)) >>> 0;
+    const mx = 0.1 + ((h & 1023) / 1024) * 0.8;
+    const my = 0.1 + (((h >>> 10) & 1023) / 1024) * 0.8;
+    return { x: o.x + mx * o.w, y: o.y + my * o.h };
+  }
+
+  function clampSwampBugToObstacle(px, py, o, pad) {
+    return {
+      x: Math.min(o.x + o.w - pad, Math.max(o.x + pad, px)),
+      y: Math.min(o.y + o.h - pad, Math.max(o.y + pad, py)),
+    };
+  }
+
+  /** After obstacles: bubbles, faint steam, gnats, flies — hex / world only. */
+  function drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH) {
+    const L = activeHexes.length;
+    if (!L) return;
+    const pickHex = (i) => activeHexes[(((i * 17) ^ (i * 3) + (i >> 1)) >>> 0) % L];
+
+    for (const h of activeHexes) {
+      const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+      const mix = (h.q * 9283711 + h.r * 689287) >>> 0;
+      const nBubbles = 10 + (mix % 12);
+      for (let m = 0; m < nBubbles; m++) {
+        const hsh = (mix * 2654435761 + m * 1597334677 + h.q * 374761393 + h.r * 668265263) >>> 0;
+        const u01 = hsh / 4294967296;
+        const u02 = (hsh >>> 11) / 4294967296;
+        const ang = u01 * Math.PI * 2 + m * 1.713;
+        const radT = 0.11 + u02 * 0.26;
+        const spawnX = cx + Math.cos(ang) * HEX_SIZE * radT;
+        const spawnY0 = cy + Math.sin(ang * 1.09 + m * 0.37) * HEX_SIZE * radT * 0.92 + HEX_SIZE * 0.06;
+        const R = 2.55 + ((mix + m * 47 + (hsh & 15)) % 6) * 0.36;
+        const life = 15 + ((mix >> (m % 4)) & 7) * 1.6;
+        const phase = (hsh % 10000) / 10000;
+        const t = simElapsed + phase * life;
+        const u = (t % life) / life;
+        const travel = 52 + ((hsh >>> 8) % 5) * 16;
+        const speedMul = 1 + (7 * ((hsh >>> 20) % 1000) / 1000);
+        const x = spawnX;
+        const y = spawnY0 - u * travel * speedMul;
+        let alpha = 0.72;
+        if (u < 0.1) alpha *= u / 0.1;
+        else if (u > 0.62) alpha *= (1 - u) / 0.38;
+        drawSwampBubbleGlyph(ctx, x, y, R, alpha);
+      }
+    }
+
+    const steamN = 40;
+    for (let i = 0; i < steamN; i++) {
+      const fh = pickHex(i * 5 + 2);
+      const sm = (fh.q * 311 + fh.r * 177 + i * 41) >>> 0;
+      const { x: sx0, y: sy0 } = hexToWorld(fh.q, fh.r);
+      const rise = (simElapsed * (0.12 + (sm % 5) * 0.02) + sm * 0.003) % 1;
+      const sx = sx0 + Math.sin(sm * 0.02 + simElapsed * 0.12) * HEX_SIZE * 0.28;
+      const sy = sy0 - rise * HEX_SIZE * 0.85;
+      const hSteam = 18 + (sm % 6) * 4;
+      const wSteam = 4 + (sm % 3);
+      const sa = (0.026 + Math.sin(rise * Math.PI) * 0.036) * (0.9 + (i % 3) * 0.09);
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate((sm * 0.008 + simElapsed * 0.06) % (Math.PI * 2));
+      const st = ctx.createLinearGradient(0, hSteam * 0.5, 0, -hSteam * 0.5);
+      st.addColorStop(0, `rgba(40, 55, 48, ${sa * 0.6})`);
+      st.addColorStop(0.4, `rgba(95, 110, 98, ${sa * 0.45})`);
+      st.addColorStop(0.65, `rgba(200, 210, 198, ${sa * 0.75})`);
+      st.addColorStop(1, "rgba(220, 228, 218, 0)");
+      ctx.fillStyle = st;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, wSteam, hSteam, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    const mud = obstacles;
+    if (mud.length) {
+      const GNAT_CAP = 260;
+      let gnatPlaced = 0;
+      for (let oi = 0; oi < mud.length && gnatPlaced < GNAT_CAP; oi++) {
+        const o = mud[oi];
+        if (o.w < 0.5 || o.h < 0.5) continue;
+        const xi = Math.floor(o.x) | 0;
+        const yi = Math.floor(o.y) | 0;
+        const h0 = ((xi * 92837111) ^ (yi * 689287451) ^ (oi * 2654435761)) >>> 0;
+        const gn = 1 + ((h0 >> 2) & 1) + ((h0 >> 9) & 1);
+        const pad = 1.1;
+        const rx = Math.min(3.2, o.w * 0.38);
+        const ry = Math.min(3.2, o.h * 0.38);
+        for (let k = 0; k < gn && gnatPlaced < GNAT_CAP; k++) {
+          gnatPlaced++;
+          const base = swampObstacleInnerPoint(o, oi * 17 + k * 31);
+          const ks = h0 * 0.01 + k * 2.1 + oi * 0.11;
+          const t = simElapsed * 0.35;
+          const p = clampSwampBugToObstacle(
+            base.x + Math.sin(t + ks) * rx,
+            base.y + Math.cos(t * 0.95 + ks * 1.1) * ry,
+            o,
+            pad,
+          );
+          const gx = p.x;
+          const gy = p.y;
+          const gk = 0.5 + 0.5 * Math.sin(simElapsed * 2.8 + h0 + k);
+          const gr = 1.15 + (k % 3) * 0.55;
+          const ga = 0.32 + gk * 0.28;
+          ctx.fillStyle = `rgba(48, 56, 50, ${ga})`;
+          ctx.beginPath();
+          ctx.arc(gx, gy, gr, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = `rgba(22, 28, 24, ${Math.min(0.9, ga + 0.12)})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(gx, gy, gr, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+
+    const flyN = 118;
+    for (let i = 0; i < flyN; i++) {
+      if (!mud.length) break;
+      const seed = i * 11.27 + 0.55;
+      const o = mud[((i * 79 + 61 * (i % 11)) >>> 0) % mud.length];
+      if (o.w < 0.5 || o.h < 0.5) continue;
+      const base = swampObstacleInnerPoint(o, i * 7919 + 42);
+      const buzz = simElapsed * (5.5 + (i % 4) * 0.6);
+      const pad = 1.2;
+      const bx = Math.min(4, o.w * 0.42);
+      const by = Math.min(3.5, o.h * 0.42);
+      const p = clampSwampBugToObstacle(
+        base.x + Math.sin(buzz + seed) * bx + Math.sin(buzz * 2.1 + i) * (bx * 0.45),
+        base.y + Math.cos(buzz * 0.95 + seed * 2) * by + Math.cos(buzz * 2.4) * (by * 0.4),
+        o,
+        pad,
+      );
+      const fx = p.x;
+      const fy = p.y;
+      const wing = 0.5 + 0.5 * Math.sin(buzz * 3.2);
+      const wingA = 0.52 + wing * 0.38;
+      ctx.strokeStyle = `rgba(12, 18, 14, ${wingA})`;
+      ctx.lineWidth = 1.35;
+      ctx.beginPath();
+      ctx.moveTo(fx - 4.5, fy - 0.45);
+      ctx.lineTo(fx + 4.5, fy + 0.45);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(18, 26, 20, ${0.62 + wing * 0.28})`;
+      ctx.beginPath();
+      ctx.arc(fx, fy, 1.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(8, 12, 10, ${0.55 + wing * 0.2})`;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.arc(fx, fy, 1.45, 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
 
@@ -1017,9 +1586,20 @@ function boot() {
     const finalAmount = hooked?.amount ?? amount;
     const finalOpts = hooked?.opts ?? opts;
     const baseDamage = Math.max(0, Number(amount) || 0);
-    const damageBonus = Math.max(0, (Number(finalAmount) || 0) - baseDamage);
-    playerDamage.damagePlayer(finalAmount, finalOpts);
-    if (pathRuntime.getCurrentPathId() === "swamp" && runLevel >= 2 && Number(finalAmount) > 0) {
+    let dmgToApply = Math.max(0, Number(finalAmount) || 0);
+    if (
+      pathRuntime.getCurrentPathId() === "swamp" &&
+      dmgToApply > 0 &&
+      !finalOpts?.swampBootlegBloodTax
+    ) {
+      dmgToApply += getSwampBootlegFragileExtra(inventory, simElapsed);
+    }
+    const damageBonus = Math.max(0, dmgToApply - baseDamage);
+    playerDamage.damagePlayer(dmgToApply, finalOpts);
+    if (dmgToApply > 0 && !finalOpts?.swampBootlegBloodTax) {
+      onSwampBootlegPlayerDamageHit(inventory, simElapsed);
+    }
+    if (pathRuntime.getCurrentPathId() === "swamp" && runLevel >= 2 && Number(dmgToApply) > 0) {
       playerDamage.applySwampHitSlow();
     }
     if (pathRuntime.getCurrentPathId() === "bone" && Number(finalAmount) > 0) {
@@ -1027,8 +1607,14 @@ function boot() {
       boneBlindDebuffFadeEnd = boneBlindDebuffPeakEnd + BONE_BLIND_DEBUFF_FADE_SEC;
       boneBlindDebuffFromBlueLaser = !!finalOpts?.laserBlueSlow;
     }
-    if (finalAmount > 0) spawnDamagePopup(finalAmount, damageBonus, finalOpts);
-    if (pathRuntime.getCurrentPathId() === "swamp" && (finalOpts?.swampApplyInfection || finalAmount > 0)) {
+    if (dmgToApply > 0) spawnDamagePopup(dmgToApply, damageBonus, finalOpts);
+    if (
+      pathRuntime.getCurrentPathId() === "swamp" &&
+      !finalOpts?.swampInfectionBurst &&
+      !finalOpts?.swampBootlegBloodTax &&
+      (finalOpts?.swampApplyInfection || dmgToApply > 0) &&
+      simElapsed >= swampInfectionChainLockUntil
+    ) {
       const instanceId = finalOpts?.swampDamageInstanceId;
       let shouldAddStack = true;
       if (instanceId != null) {
@@ -1037,8 +1623,36 @@ function boot() {
         else swampDamageInstanceSeenAt.set(key, simElapsed);
       }
       if (shouldAddStack) {
-        inventory.swampInfectionStacks = Math.max(0, Math.floor((inventory.swampInfectionStacks ?? 0) + 1));
-        swampInfectionPopupUntil = simElapsed + 0.95;
+        const minGap =
+          runLevel >= 2
+            ? SWAMP_INFECTION_STACK_MIN_GAP_LEVEL3_SEC
+            : runLevel >= 1
+              ? SWAMP_INFECTION_STACK_MIN_GAP_LEVEL2_SEC
+              : 0;
+        if (minGap > 0 && swampInfectionStackLastAt > 0 && simElapsed - swampInfectionStackLastAt < minGap) {
+          shouldAddStack = false;
+        }
+      }
+      if (shouldAddStack) {
+        const prev = Math.max(0, Math.floor(inventory.swampInfectionStacks ?? 0));
+        const next = prev + 1;
+        if (next >= SWAMP_INFECTION_CAP) {
+          inventory.swampInfectionStacks = SWAMP_INFECTION_CAP;
+          swampInfectionChainLockUntil =
+            simElapsed + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+          swampInfectionTenBurstAt = simElapsed;
+          swampInfectionDebuffOverlayUntil =
+            simElapsed + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+          playerDamage.applySwampInfectionBurst(simElapsed);
+          damagePlayerThroughPath(1, {
+            sourceX: player.x,
+            sourceY: player.y,
+            swampInfectionBurst: true,
+          });
+        } else {
+          inventory.swampInfectionStacks = next;
+        }
+        swampInfectionStackLastAt = simElapsed;
       }
     }
     if ((finalOpts?.fireApplyIgnite ?? false) && !(finalOpts?.fireIgniteTick ?? false)) {
@@ -1051,20 +1665,29 @@ function boot() {
 
   /** @type {ReturnType<typeof createCardPickupModal> | null} */
   let cardPickup = null;
+  /** @type {ReturnType<typeof createSwampBootlegCrystalModal> | null} */
+  let swampBootlegCrystalModal = null;
+  let swampBootlegCurseUid = 0;
   function modalChromePausesWorld() {
     return (
       (cardPickup?.isPaused() ?? false) ||
       (rouletteModal?.isPaused() ?? false) ||
       (forgeWorldModal?.isForgePaused() ?? false) ||
-      safehouseHexFlow.isPausedForSafehousePrompt()
+      safehouseHexFlow.isPausedForSafehousePrompt() ||
+      (swampBootlegCrystalModal?.isPaused() ?? false)
     );
   }
 
   /** Simulation time advances (REFERENCE: elapsed keeps ticking during sanctuary Yes/No). */
   function simClockPaused() {
-    return manualPause || handsResetPause || (cardPickup?.isPaused() ?? false) ||
+    return (
+      manualPause ||
+      handsResetPause ||
+      (cardPickup?.isPaused() ?? false) ||
       (rouletteModal?.isPaused() ?? false) ||
-      (forgeWorldModal?.isForgePaused() ?? false);
+      (forgeWorldModal?.isForgePaused() ?? false) ||
+      (swampBootlegCrystalModal?.isPaused() ?? false)
+    );
   }
 
   function isWorldPaused() {
@@ -1162,6 +1785,10 @@ function boot() {
     boneBlindDebuffFromBlueLaser = false;
     resetSwampInfection();
     resetFireGrowthZones();
+    swampMudTrail.length = 0;
+    swampMudTrailLastX = NaN;
+    swampMudTrailLastY = NaN;
+    knightSwampDashSplashes.length = 0;
     damagePopups.length = 0;
     specials.resetSessionState();
     safehouseHexFlow.resetSession();
@@ -1202,6 +1829,8 @@ function boot() {
     }
     valiantWorld.reset(simElapsed);
     bulwarkWorld.reset();
+    prevKnightClubsInvisActive = false;
+    prevKnightBurstTerrainPhase = false;
     syncDeckHud();
   }
 
@@ -1254,6 +1883,17 @@ function boot() {
     },
     onDiamondEmpowerPicked: hideDiamondEmpowerOverlay,
   }), "cardModal", runLogger);
+  swampBootlegCrystalModal = createSwampBootlegCrystalModal({
+    onPausedChange: (paused) => {
+      if (paused) {
+        handsResetPause = false;
+        return;
+      }
+      if (runDead) return;
+      handsResetPause = true;
+      clearMovementKeys();
+    },
+  });
   wireDiamondEmpowerOverlay();
   syncDeckHud();
 
@@ -1471,6 +2111,8 @@ function boot() {
         ? character.getBulwarkWorld().getPlantedFlagForAi()
         : null,
     getDebugHunterTypeFilter: () => (huntersEnabled ? debugHunterTypeFilter : null),
+    getSwampBootlegColourblind: () =>
+      pathRuntime.getCurrentPathId() === "swamp" && getSwampBootlegColourblind(inventory, simElapsed),
     hitDecoyIfAny,
     hitDecoyAlongSegment,
     worldToHex,
@@ -1565,6 +2207,9 @@ function boot() {
     inventory.heartsResistanceReadyAt = 0;
     inventory.heartsResistanceCooldownDuration = 0;
     inventory.swampInfectionStacks = 0;
+    resetSwampBootlegState(inventory);
+    swampBootlegCurseUid = 0;
+    swampBootlegCrystalModal?.close?.();
     inventory.heartsRegenPerSec = 0;
     inventory.heartsRegenBank = 0;
     inventory.diamondEmpower = null;
@@ -1588,6 +2233,10 @@ function boot() {
     boneBlindDebuffFromBlueLaser = false;
     resetSwampInfection();
     resetFireGrowthZones();
+    swampMudTrail.length = 0;
+    swampMudTrailLastX = NaN;
+    swampMudTrailLastY = NaN;
+    knightSwampDashSplashes.length = 0;
     damagePopups.length = 0;
     specials.resetSessionState();
     safehouseHexFlow.resetSession();
@@ -1625,6 +2274,8 @@ function boot() {
     if (typeof character.resetRunState === "function") {
       character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
     }
+    prevKnightClubsInvisActive = false;
+    prevKnightBurstTerrainPhase = false;
     syncDeckHud();
     snapCameraToPlayer();
   }
@@ -1737,6 +2388,7 @@ function boot() {
     if (!v || v === "__all__") return null;
     if (
       v === "chaser" ||
+      v === "frogChaser" ||
       v === "cutter" ||
       v === "sniper" ||
       v === "ranged" ||
@@ -1831,6 +2483,7 @@ function boot() {
   const debugItemRankEl = document.getElementById("debug-item-rank");
   const debugItemEffectEl = document.getElementById("debug-item-effect");
   const debugItemDropBtn = document.getElementById("debug-item-drop-button");
+  const debugItemPopulateBuildBtn = document.getElementById("debug-item-populate-build-button");
 
   /**
    * @param {string} suit
@@ -1882,6 +2535,27 @@ function boot() {
       addDefaultBySuit(suit);
     }
     return opts;
+  }
+
+  const DEBUG_POPULATE_SUITS = ["diamonds", "hearts", "clubs", "spades", "joker"];
+
+  /**
+   * Random card for debug “full build” — same effect tables as the item dropper; `rank` matches deck slot when used in `deckByRank`.
+   * @param {number} rank
+   * @param {string} idTag
+   */
+  function makeRandomDebugBuildCard(rank, idTag) {
+    const suit = DEBUG_POPULATE_SUITS[Math.floor(Math.random() * DEBUG_POPULATE_SUITS.length)];
+    const options = debugEffectOptions(suit, rank);
+    if (!options.length) return null;
+    const chosen = options[Math.floor(Math.random() * options.length)];
+    return {
+      id: `debug-build-${Date.now()}-${idTag}-${Math.floor(Math.random() * 1e6)}`,
+      suit,
+      rank,
+      effect: chosen.effect,
+      ...(suit === "joker" ? { effectBorrowedSuit: chosen.effectBorrowedSuit ?? "spades" } : {}),
+    };
   }
 
   function refreshDebugItemEffectOptions() {
@@ -1969,6 +2643,18 @@ function boot() {
     });
   });
 
+  debugItemPopulateBuildBtn?.addEventListener("click", () => {
+    for (let r = 1; r <= 13; r++) {
+      inventory.deckByRank[r] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(r, `deck${r}`);
+    }
+    for (let i = 0; i < inventory.backpackSlots.length; i++) {
+      const rank = 1 + Math.floor(Math.random() * 13);
+      inventory.backpackSlots[i] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(rank, `bp${i}`);
+    }
+    syncDeckHud();
+    runLogger.log("debug", "populate build", { deckFilled: 13, backpackSlots: inventory.backpackSlots.length });
+  });
+
   function buildAbilityContext(dt) {
     return {
       player,
@@ -1980,6 +2666,11 @@ function boot() {
       circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstaclesForPlayerCollision()),
       spawnAttackRing: (x, y, r, color, durationSec) => {
         pushAttackRing(attackRings, x, y, r, color, simElapsed, durationSec);
+      },
+      spawnKnightDashEndSplash: (x, y) => {
+        if (pathRuntime.getCurrentPathId() !== "swamp") return;
+        knightSwampDashSplashes.push({ x, y, bornAt: simElapsed, pr: player.r });
+        while (knightSwampDashSplashes.length > 6) knightSwampDashSplashes.shift();
       },
       spawnUltimateEffect: (type, x, y, color, durationSec, radius, opts = {}) => {
         const bornAt = opts.bornAt ?? simElapsed;
@@ -2049,6 +2740,12 @@ function boot() {
       handsResetPause = false;
     }
     if (isWorldPaused()) return;
+    if (
+      (slot === "q" || slot === "w" || slot === "e") &&
+      simElapsed < (inventory.swampBootlegSpellSilenceUntil ?? 0)
+    ) {
+      return;
+    }
     if (simElapsed < playerTimelockUntil) return;
     const ctx = buildAbilityContext(0);
     if (slot === "r" && tryUseEquippedUltimate(ctx)) return;
@@ -2240,6 +2937,19 @@ function boot() {
 
     if (!simPaused && !runDead) {
       simElapsed += rawDt;
+      if (swampInfectionChainLockUntil > 0 && simElapsed >= swampInfectionChainLockUntil) {
+        swampInfectionChainLockUntil = 0;
+        inventory.swampInfectionStacks = 0;
+        swampInfectionStackLastAt = 0;
+      }
+      tickSwampBootlegCurses(inventory, simElapsed);
+      tickSwampBootlegBloodTax(inventory, simElapsed, (amt) =>
+        damagePlayerThroughPath(amt, {
+          swampBootlegBloodTax: true,
+          sourceX: player.x,
+          sourceY: player.y,
+        }),
+      );
       character.tick(buildAbilityContext(dt));
       pathRuntime.applyDebuffHooks({ dt, simElapsed, runLevel, player, inventory, activeCharacterId });
       const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
@@ -2275,6 +2985,20 @@ function boot() {
         boneBlindDebuffFromBlueLaser = false;
       }
       tickFireGrowthZones(rawDt);
+      if (activeCharacterId === "knight") {
+        const clubsInvis = simElapsed < (inventory.clubsInvisUntil ?? 0);
+        const burstTerrainPhase =
+          knightHasClubsSevenSet() &&
+          typeof character.getBurstVisualUntil === "function" &&
+          character.getBurstVisualUntil(simElapsed) > simElapsed;
+        if (prevKnightClubsInvisActive && !clubsInvis) ejectKnightFromSolidTerrainIfNeeded();
+        if (prevKnightBurstTerrainPhase && !burstTerrainPhase) ejectKnightFromSolidTerrainIfNeeded();
+        prevKnightClubsInvisActive = clubsInvis;
+        prevKnightBurstTerrainPhase = burstTerrainPhase;
+      } else {
+        prevKnightClubsInvisActive = false;
+        prevKnightBurstTerrainPhase = false;
+      }
       player.hp = Math.max(0, Math.min(player.maxHp, player.hp));
       if (activeCharacterId === "valiant") {
         const lootPlacementOpts = () => ({
@@ -2299,7 +3023,7 @@ function boot() {
       let vx = 0;
       let vy = 0;
       let rogueMovementIntent = false;
-      if (simElapsed < playerTimelockUntil) {
+      if (simElapsed < playerTimelockUntil || playerDamage.isSwampInfectionMoveLocked()) {
         player.velX = 0;
         player.velY = 0;
         player._px = player.x;
@@ -2322,7 +3046,12 @@ function boot() {
               inventory,
               PLAYER_SPEED,
               ultimateSpeedUntil,
-              laserSlowMult: playerDamage.getMovementSlowMult(),
+              laserSlowMult:
+                playerDamage.getMovementSlowMult() *
+                (pathRuntime.getCurrentPathId() === "swamp" && hunterRuntime
+                  ? hunterRuntime.getFrogMudPoolMoveMult(player.x, player.y, player.r, simElapsed)
+                  : 1) *
+                (pathRuntime.getCurrentPathId() === "swamp" ? getSwampBootlegMoveSpeedMult(inventory, simElapsed) : 1),
               getObsForCollision: () => obstaclesForPlayerCollision(),
               resolvePlayerAgainstRects,
               circleOverlapsAnyRect,
@@ -2352,6 +3081,10 @@ function boot() {
         if (isArrowHeld("ArrowRight")) vx += 1;
         if (isArrowHeld("ArrowUp")) vy -= 1;
         if (isArrowHeld("ArrowDown")) vy += 1;
+        if (pathRuntime.getCurrentPathId() === "swamp" && getSwampBootlegInvertMove(inventory, simElapsed)) {
+          vx = -vx;
+          vy = -vy;
+        }
         const len = Math.hypot(vx, vy);
         const rogueDashHold = activeCharacterId === "rogue" && rogueWorld.getDashAiming();
         if (len > 1e-6) {
@@ -2365,6 +3098,12 @@ function boot() {
               sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
             }
             sp *= playerDamage.getMovementSlowMult();
+            if (pathRuntime.getCurrentPathId() === "swamp" && hunterRuntime) {
+              sp *= hunterRuntime.getFrogMudPoolMoveMult(player.x, player.y, player.r, simElapsed);
+            }
+            if (pathRuntime.getCurrentPathId() === "swamp") {
+              sp *= getSwampBootlegMoveSpeedMult(inventory, simElapsed);
+            }
             vx = (vx / len) * sp * dt;
             vy = (vy / len) * sp * dt;
           } else {
@@ -2447,6 +3186,34 @@ function boot() {
       player._px = player.x;
       player._py = player.y;
 
+      pruneSwampMudTrail();
+      if (pathRuntime.getCurrentPathId() === "swamp") {
+        const sp = Math.hypot(player.velX, player.velY);
+        if (sp > 20) {
+          const ax = player.x;
+          const ay = player.y;
+          if (!Number.isFinite(swampMudTrailLastX)) {
+            swampMudTrail.push({ x: ax, y: ay, t: simElapsed });
+            swampMudTrailLastX = ax;
+            swampMudTrailLastY = ay;
+          } else {
+            const d = Math.hypot(ax - swampMudTrailLastX, ay - swampMudTrailLastY);
+            if (d >= SWAMP_MUD_TRAIL_SAMPLE_MIN) {
+              swampMudTrail.push({ x: ax, y: ay, t: simElapsed });
+              swampMudTrailLastX = ax;
+              swampMudTrailLastY = ay;
+              while (swampMudTrail.length > SWAMP_MUD_TRAIL_MAX) swampMudTrail.shift();
+            }
+          }
+        }
+      } else {
+        swampMudTrail.length = 0;
+        swampMudTrailLastX = NaN;
+        swampMudTrailLastY = NaN;
+        knightSwampDashSplashes.length = 0;
+        clearSwampHunterMudTrails();
+      }
+
       if (!simPaused && activeCharacterId === "rogue") {
         rogueWorld.tickNeeds(
           {
@@ -2511,6 +3278,7 @@ function boot() {
           if (collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS) {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
             if (pt) {
+              const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
               collectibles.push({
                 kind: "heal",
                 x: pt.x,
@@ -2518,7 +3286,8 @@ function boot() {
                 r: HEAL_PICKUP_HIT_R,
                 plusHalf: HEAL_PICKUP_PLUS_HALF,
                 plusThick: HEAL_PICKUP_ARM_THICK,
-                heal: HEAL_CRYSTAL_HP,
+                heal: onSwamp ? SWAMP_BOOTLEG_CRYSTAL_HP : HEAL_CRYSTAL_HP,
+                bootlegSwamp: onSwamp,
                 bornAt: simElapsed,
                 expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
               });
@@ -2564,6 +3333,16 @@ function boot() {
           const dy = player.y - c.y;
           if (dx * dx + dy * dy > rr * rr) continue;
           if (c.kind === "heal") {
+            if (pathRuntime.getCurrentPathId() === "swamp" && swampBootlegCrystalModal) {
+              collectibles.splice(i, 1);
+              const bundle = rollTwoBootlegOffers(() => Math.random(), simElapsed);
+              purgeSwampBootlegNextCrystalCurses(inventory);
+              void swampBootlegCrystalModal.openModal(bundle).then((side) => {
+                const offer = side === "a" ? bundle.left : bundle.right;
+                finalizeSwampBootlegCrystalPick(offer);
+              });
+              break;
+            }
             if (activeCharacterId === "lunatic") {
               player.maxHp += 1;
               player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -2587,12 +3366,14 @@ function boot() {
         !(cardPickup?.isPaused() ?? false) &&
         !(rouletteModal?.isPaused() ?? false) &&
         !(forgeWorldModal?.isForgePaused() ?? false) &&
+        !(swampBootlegCrystalModal?.isPaused() ?? false) &&
         !safehouseHexFlow.isPausedForSafehousePrompt();
       if (hexFlowsUnpaused) {
         const modalPause = () =>
           (cardPickup?.isPaused() ?? false) ||
           (rouletteModal?.isPaused() ?? false) ||
-          (forgeWorldModal?.isForgePaused() ?? false);
+          (forgeWorldModal?.isForgePaused() ?? false) ||
+          (swampBootlegCrystalModal?.isPaused() ?? false);
 
         rouletteHexFlow.tick({
           isWorldPaused: modalPause,
@@ -2768,9 +3549,15 @@ function boot() {
 
       if (huntersEnabled && !runDead) {
         hunterRuntime.tick(dt * worldTimeScale, { suppressRangedAttacks: timelockFrozen });
+        if (pathRuntime.getCurrentPathId() === "swamp") {
+          tickSwampHunterMudTrails(dt);
+        }
         if (pathRuntime.getCurrentPathId() === "fire" && runLevel >= 1) {
           spawnFireGrowthZonesFromFireArtillery();
         }
+      }
+      if (hunterRuntime && pathRuntime.getCurrentPathId() !== "swamp") {
+        clearSwampHunterMudTrails();
       }
       if (!runDead) {
         hexEventRuntime?.postHunterTick();
@@ -2901,12 +3688,22 @@ function boot() {
       bonePathActive && simElapsed < boneBlindDebuffFadeEnd && boneBlindDebuffFadeEnd > 0;
     const firePathActive = pathRuntime.getCurrentPathId() === "fire";
     const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
+    if (!swampPathActive) {
+      swampMudTrail.length = 0;
+      swampMudTrailLastX = NaN;
+      swampMudTrailLastY = NaN;
+      knightSwampDashSplashes.length = 0;
+      resetSwampBootlegState(inventory);
+      swampBootlegCrystalModal?.close?.();
+    }
     for (const h of activeHexes) {
       const { x: cx, y: cy } = hexToWorld(h.q, h.r);
       fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
     }
     if (firePathActive) drawFireAtmosphereWorld(ctx, viewW, viewH);
-    if (swampPathActive) drawSwampAtmosphereWorld(ctx, viewW, viewH);
+    if (swampPathActive) drawSwampAtmosphereBackgroundWorld(ctx, viewW, viewH);
+    if (swampPathActive) drawSwampMudTrailWorld(ctx);
+    if (swampPathActive) drawKnightSwampDashSplashesWorld(ctx);
     if (bonePathActive) {
       const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 1.6);
       const r1 = Math.max(viewW, viewH) * 0.62;
@@ -2937,6 +3734,7 @@ function boot() {
           ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 }
           : undefined,
     );
+    if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
     if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
       const lock = character.getBulwarkWorld().getDeathLock();
@@ -3015,7 +3813,10 @@ function boot() {
     }
     for (const c of collectibles) {
       if (c.kind === "heal") {
-        drawHealPickup(ctx, c, simElapsed, { lunaticMaxHpCrystal: activeCharacterId === "lunatic" });
+        drawHealPickup(ctx, c, simElapsed, {
+          lunaticMaxHpCrystal: activeCharacterId === "lunatic",
+          bootlegSwampCrystal: !!c.bootlegSwamp,
+        });
       } else if (c.kind === "card") {
         drawCardPickupWorld(ctx, c, simElapsed);
       }
@@ -3166,24 +3967,55 @@ function boot() {
     if (activeCharacterId === "rogue") {
       rogueWorld.drawSurvivalHudArcs(ctx, player, simElapsed);
     }
-    if (swampPathActive && simElapsed < swampInfectionPopupUntil) {
-      const u = clamp((swampInfectionPopupUntil - simElapsed) / 0.95, 0, 1);
-      const alpha = 0.25 + u * 0.75;
+    if (swampPathActive) {
       const extraHudYOffset = typeof character.getHpHudYOffset === "function" ? character.getHpHudYOffset() : 0;
       const infX = player.x + player.r + 34;
-      const infY = player.y - player.r - 10 - extraHudYOffset;
-      const inf = Math.max(0, Math.floor(inventory.swampInfectionStacks ?? 0));
-      const txt = `${inf}`;
-      ctx.save();
-      ctx.textAlign = "left";
-      ctx.textBaseline = "bottom";
-      ctx.font = 'bold 14px ui-sans-serif, system-ui, "Segoe UI", sans-serif';
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = `rgba(2, 6, 23, ${0.8 * alpha})`;
-      ctx.strokeText(txt, infX, infY);
-      ctx.fillStyle = `rgba(163, 230, 53, ${alpha})`;
-      ctx.fillText(txt, infX, infY);
-      ctx.restore();
+      const baseY = player.y - player.r - 10 - extraHudYOffset;
+      const stacks = Math.max(0, Math.floor(inventory.swampInfectionStacks ?? 0));
+      const tenEnd = swampInfectionTenBurstAt + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_TEN_DRIFT_SEC;
+      const showTenFx = swampInfectionTenBurstAt > 0 && simElapsed < tenEnd;
+      const showStackHud = stacks >= 1 && stacks <= SWAMP_INFECTION_CAP - 1;
+      const chainLocked = simElapsed < swampInfectionChainLockUntil;
+      const holdTenHud = chainLocked && stacks >= SWAMP_INFECTION_CAP && !showTenFx;
+      if (showTenFx || showStackHud || holdTenHud) {
+        ctx.save();
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        let txt = "";
+        let alpha = 1;
+        let infY = baseY;
+        let fontPx = 14;
+        if (showTenFx) {
+          const stunEnd = swampInfectionTenBurstAt + SWAMP_INFECTION_BURST_STUN_SEC;
+          txt = "10!";
+          fontPx = 17;
+          if (simElapsed < stunEnd) {
+            alpha = 1;
+            infY = baseY;
+          } else {
+            const driftU = clamp((simElapsed - stunEnd) / SWAMP_INFECTION_TEN_DRIFT_SEC, 0, 1);
+            infY = baseY - driftU * 36;
+            alpha = 1 - driftU;
+          }
+        } else if (holdTenHud) {
+          txt = "10";
+          fontPx = 15;
+          alpha = 0.74;
+        } else {
+          txt = stacks >= 8 ? `${stacks}!` : `${stacks}`;
+          if (stacks >= 8) fontPx = 15;
+        }
+        ctx.font = `bold ${fontPx}px ui-sans-serif, system-ui, "Segoe UI", sans-serif`;
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = `rgba(2, 6, 23, ${0.82 * alpha})`;
+        ctx.strokeText(txt, infX, infY);
+        ctx.fillStyle = `rgba(163, 230, 53, ${0.92 * alpha})`;
+        ctx.fillText(txt, infX, infY);
+        ctx.restore();
+      }
+      if (swampInfectionTenBurstAt > 0 && simElapsed >= tenEnd) {
+        swampInfectionTenBurstAt = 0;
+      }
     }
     const heartsResistanceCount = playerDamage.getHeartsResistanceCardCount?.() ?? 0;
     const heartsResistanceReady = heartsResistanceCount > 0 && simElapsed >= (inventory.heartsResistanceReadyAt ?? 0);
@@ -3229,6 +4061,7 @@ function boot() {
       ctx.arc(player.x, player.y, player.r + 6, 0, Math.PI * 2);
       ctx.stroke();
     }
+    if (swampPathActive) drawSwampPlayerMudChurnWorld(ctx);
     drawPlayerBody(ctx, player.x, player.y, player.r, player.facing, hurt01, bodyAlpha);
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkParryUntil === "function") {
       drawBulwarkParry(ctx, player, simElapsed, character.getBulwarkParryUntil());
@@ -3256,6 +4089,48 @@ function boot() {
 
     ctx.restore();
 
+    if (
+      pathRuntime.getCurrentPathId() === "swamp" &&
+      simElapsed < swampInfectionDebuffOverlayUntil
+    ) {
+      const dur = SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+      const fade = clamp((swampInfectionDebuffOverlayUntil - simElapsed) / dur, 0, 1);
+      const pulse = 0.88 + 0.12 * (0.5 + 0.5 * Math.sin(simElapsed * 11));
+      const a = fade * pulse;
+      ctx.save();
+      ctx.fillStyle = `rgba(4, 22, 12, ${0.58 * a})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.fillStyle = `rgba(12, 38, 22, ${0.38 * a})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      const cx = viewW * 0.5;
+      const cy = viewH * 0.5;
+      const r0 = Math.min(viewW, viewH) * 0.05;
+      const r1 = Math.max(viewW, viewH) * 0.88;
+      const g = ctx.createRadialGradient(cx, cy, r0, cx, cy, r1);
+      g.addColorStop(0, `rgba(45, 88, 52, ${0.38 * a})`);
+      g.addColorStop(0.32, `rgba(18, 52, 30, ${0.72 * a})`);
+      g.addColorStop(0.65, `rgba(6, 26, 14, ${0.86 * a})`);
+      g.addColorStop(1, `rgba(2, 10, 5, ${0.94 * a})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.strokeStyle = `rgba(52, 211, 102, ${0.72 * a})`;
+      ctx.lineWidth = 7;
+      ctx.strokeRect(2, 2, viewW - 4, viewH - 4);
+      ctx.strokeStyle = `rgba(16, 90, 48, ${0.45 * a})`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(10, 10, viewW - 20, viewH - 20);
+      ctx.fillStyle = `rgba(4, 22, 10, ${0.68 * a})`;
+      ctx.fillRect(0, 0, viewW, viewH * 0.14);
+      ctx.fillRect(0, viewH * 0.86, viewW, viewH * 0.14);
+      ctx.fillStyle = `rgba(22, 163, 74, ${0.2 * a})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.fillStyle = `rgba(34, 197, 94, ${0.1 * a})`;
+      ctx.globalCompositeOperation = "screen";
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.globalCompositeOperation = "source-over";
+      ctx.restore();
+    }
+
     drawRunStatsHud(ctx, {
       survivalSec: simElapsed,
       bestSec: bestSurvivalSec,
@@ -3263,6 +4138,10 @@ function boot() {
       wave: hunterRuntime?.spawnState?.wave ?? 0,
       hunterCount: hunterRuntime?.entities?.hunters?.length ?? 0,
     });
+
+    if (pathRuntime.getCurrentPathId() === "swamp") {
+      drawSwampBootlegCursesHud(ctx, viewW, viewH, getSwampBootlegSidebarRows(inventory, simElapsed));
+    }
 
     if (activeCharacterId === "valiant" && !runDead) {
       drawValiantScreenHud(ctx, {

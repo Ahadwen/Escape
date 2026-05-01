@@ -24,6 +24,8 @@ import {
   BULWARK_CHARGE_WALL_STUN_SEC,
   BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN,
   BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC,
+  FROG_MUD_POOL_MOVE_MULT,
+  SWAMP_L3PLUS_SNIPER_WAVE_KEEP_FRACTION,
 } from "../balance.js";
 import { SNIPER_ARTILLERY_WINDUP, SNIPER_ARTILLERY_LEAD, SNIPER_ARTILLERY_BANG_DURATION } from "../constants.js";
 import {
@@ -46,7 +48,14 @@ import {
   drawSwampBlastBursts,
   drawSpawnerChargeClocks,
   drawHunterLifeBars,
+  frogMudPoolGrowScale,
+  FROG_SPLASH_GROW_SEC,
 } from "./hunterDraw.js";
+
+/** Swamp frog: detonation / pool radius (px). ~3× the original ~35 (“~200% bigger”). */
+const SWAMP_FROG_BLAST_R = 105;
+/** Hop ends in explode if target within this distance (aligned ~with blast reach). */
+const SWAMP_FROG_LAND_EXPLODE_DIST = SWAMP_FROG_BLAST_R + 24;
 
 /**
  * @typedef {object} HunterRuntimeDeps
@@ -78,6 +87,7 @@ import {
  * @property {(circle: { x: number; y: number; r: number }, elapsed: number) => boolean} [collidesValiantEnemyShockField] — hunter-only shock rects (Valiant W)
  * @property {() => { x: number; y: number; r: number; lureR: number } | null} [getBulwarkPlantedFlag] — planted Bulwark flag lures hunters in radius
  * @property {() => string | null} [getDebugHunterTypeFilter] — debug-only forced wave spawn type (null = normal mix)
+ * @property {() => boolean} [getSwampBootlegColourblind] — swamp crystal curse: uniform grey-green hunter bodies
  */
 
 export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
@@ -110,6 +120,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     collidesValiantEnemyShockField: collidesValiantEnemyShockFieldDep,
     getBulwarkPlantedFlag: getBulwarkPlantedFlagDep,
     getDebugHunterTypeFilter: getDebugHunterTypeFilterDep,
+    getSwampBootlegColourblind: getSwampBootlegColourblindDep,
   } = deps;
 
   const worldToHex = worldToHexDep ?? (() => ({ q: 0, r: 0 }));
@@ -129,6 +140,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const pickRogueHunterTarget = pickRogueHunterTargetDep ?? null;
   const getBulwarkPlantedFlag = getBulwarkPlantedFlagDep ?? (() => null);
   const getDebugHunterTypeFilter = getDebugHunterTypeFilterDep ?? (() => null);
+  const getSwampBootlegColourblind = getSwampBootlegColourblindDep ?? (() => false);
 
   /** Ghost dashes run to predicted target + this many pixels along aim (not a fixed world cap). */
   const GHOST_PRED_OVERSHOOT_PX = 40;
@@ -339,7 +351,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
     const target = player;
     if (!getDecoys().length) return target;
-    if (hunter.type === "chaser" || hunter.type === "fast") {
+    if (hunter.type === "chaser" || hunter.type === "frogChaser" || hunter.type === "fast") {
       return nearestDecoy(hunter) || target;
     }
     if (hunter.type === "cutter") {
@@ -394,14 +406,26 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       if (er < 0.055) return "airSpawner";
       if (er < 0.11) return "laserBlue";
     }
+    const boneCrypt = bonePathActive() && getRunLevel() >= 2;
+    const cryptChance = boneCrypt ? 0.22 + 0.55 * getDangerRamp01() : 0;
+    if (boneCrypt && Math.random() < cryptChance) return "cryptSpawner";
     const roll = Math.random();
-    if (roll < 0.25) return "chaser";
+    if (roll < 0.25) return getActivePathId() === "swamp" ? "frogChaser" : "chaser";
     if (roll < 0.44) return "cutter";
-    if (roll < 0.61) return "sniper";
+    if (roll < 0.61) {
+      const swampL3Plus = getActivePathId() === "swamp" && getRunLevel() >= 2;
+      if (swampL3Plus && Math.random() > SWAMP_L3PLUS_SNIPER_WAVE_KEEP_FRACTION) {
+        const r2 = Math.random();
+        if (r2 < 0.45) return "frogChaser";
+        if (r2 < 0.8) return "cutter";
+        return "ranged";
+      }
+      return "sniper";
+    }
     if (roll < 0.78) return "ranged";
     if (roll < 0.93) return "laser";
     // Bone L3+: replace the normal spawner slot with the crypt mimic so it is clearly present.
-    if (bonePathActive() && getRunLevel() >= 2) return "cryptSpawner";
+    if (boneCrypt) return "cryptSpawner";
     return "spawner";
   }
 
@@ -418,6 +442,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (type === "airSpawner") return 26;
     if (type === "laser" || type === "laserBlue") return 13;
     if (type === "fast") return 9;
+    if (type === "frogChaser") return 11;
     return 10;
   }
 
@@ -497,6 +522,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       lastShotAt = elapsed + rand(0.3, 1.1);
       h.chaserDashPhase = "chase";
       h.chaserDashNextReady = elapsed + rand(0.35, 1.0);
+    } else if (type === "frogChaser") {
+      r = 11;
+      life = 8;
+      lastShotAt = elapsed + rand(0.3, 1.1);
+      h.chaserDashPhase = "chase";
+      h.chaserDashNextReady = elapsed;
     } else if (type === "cutter") {
       r = 10;
       life = 8;
@@ -532,6 +563,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       life = 2;
       lastShotAt = elapsed + 999;
       if (opts?.boneSwarmPhasing) h.boneSwarmPhasing = true;
+      if (opts?.swampMudSpawn) h.swampMudSpawn = true;
     } else if (type === "spawner") {
       r = 18;
       life = 8;
@@ -797,6 +829,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
             });
           }
         }
+        // Swamp display level 3+ (`runLevel >= 2`): sniper shell lands like a frog detonation (mud wave + pool + mud spawns).
+        if (getActivePathId() === "swamp" && getRunLevel() >= 2 && !zone.firePath) {
+          applySwampFrogExplosionAt(zone.x, zone.y, elapsed);
+        }
       }
       if (
         zone.exploded &&
@@ -821,35 +857,49 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
-  function triggerSwampChaserBlast(h, elapsed) {
+  /** Swamp frog-chaser / L3+ sniper shell: large mud wave, 4s pool, spawner-style mud fasts (+ optional center hit). */
+  function applySwampFrogExplosionAt(wx, wy, elapsed) {
     const player = getPlayer();
-    const blastR = 52;
-    if (!hitDecoyIfAny({ x: h.x, y: h.y }, blastR, { damage: 1 })) {
+    const blastR = SWAMP_FROG_BLAST_R;
+    const center = { x: wx, y: wy };
+    if (!hitDecoyIfAny(center, blastR, { damage: 1 })) {
       const rr = blastR + player.r;
-      if (distSq(h, player) <= rr * rr) {
+      if (distSq(center, player) <= rr * rr) {
         damagePlayer(1, {
-          sourceX: h.x,
-          sourceY: h.y,
+          sourceX: wx,
+          sourceY: wy,
           swampApplyInfection: true,
         });
       }
     }
     entities.swampPools.push({
-      x: h.x,
-      y: h.y,
-      r: 46,
+      x: wx,
+      y: wy,
+      r: blastR,
       bornAt: elapsed,
       expiresAt: elapsed + 4,
       nextTickAt: elapsed + 0.22,
       tickInterval: 0.48,
+      frogMudPool: true,
     });
     entities.swampBursts.push({
-      x: h.x,
-      y: h.y,
+      x: wx,
+      y: wy,
       r: blastR,
       bornAt: elapsed,
-      life: 0.34,
+      life: FROG_SPLASH_GROW_SEC,
+      frogWave: true,
     });
+    const fastR = 10;
+    const swarmN = 5;
+    for (let i = 0; i < swarmN; i++) {
+      const open = randomOpenPointAround(wx, wy, 40, 78, fastR, 34, { excludeSpecialHex: true });
+      spawnHunter("fast", open.x, open.y, { swampMudSpawn: true });
+    }
+  }
+
+  function triggerSwampFrogExplosion(h, elapsed) {
+    applySwampFrogExplosionAt(h.x, h.y, elapsed);
     h._removeNow = true;
   }
 
@@ -1160,19 +1210,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const toward = vectorToTarget(h, target);
         desired = d2 < 200 * 200 ? away : toward;
       } else if (h.type === "chaser") {
-        const swampPath = getActivePathId() === "swamp";
         const target = pickTargetForHunter(h);
         const toT = vectorToTarget(h, target);
         const dist = Math.hypot(target.x - h.x, target.y - h.y);
-
-        if (h.chaserDashPhase === "swampExplodeWindup") {
-          if (elapsed >= (h.swampExplodeAt ?? 0)) {
-            triggerSwampChaserBlast(h, elapsed);
-            h.chaserDashPhase = "chase";
-            h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
-          }
-          continue;
-        }
 
         if (h.chaserDashPhase === "windup") {
           h.dir.x = toT.x;
@@ -1197,25 +1237,15 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
             collidesAnyObstacle(test) ||
             !!collidesValiantEnemyShockFieldDep?.(test, elapsed)
           ) {
-            if (swampPath) {
-              h.chaserDashPhase = "swampExplodeWindup";
-              h.swampExplodeAt = elapsed + 0.1;
-            } else {
-              h.chaserDashPhase = "chase";
-              h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
-            }
+            h.chaserDashPhase = "chase";
+            h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
           } else {
             h.x = nx;
             h.y = ny;
             h.chaserDashDist -= stepLen;
             if (h.chaserDashDist <= 0) {
-              if (swampPath) {
-                h.chaserDashPhase = "swampExplodeWindup";
-                h.swampExplodeAt = elapsed + 0.1;
-              } else {
-                h.chaserDashPhase = "chase";
-                h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
-              }
+              h.chaserDashPhase = "chase";
+              h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
             }
           }
           continue;
@@ -1230,6 +1260,73 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           h.dir.y = toT.y;
           continue;
         }
+      } else if (h.type === "frogChaser") {
+        const target = pickTargetForHunter(h);
+        const toT = vectorToTarget(h, target);
+        const dist = Math.hypot(target.x - h.x, target.y - h.y);
+
+        if (h.chaserDashPhase === "swampExplodeWindup") {
+          if (elapsed >= (h.swampExplodeAt ?? 0)) triggerSwampFrogExplosion(h, elapsed);
+          continue;
+        }
+
+        if (h.chaserDashPhase === "windup") {
+          h.dir.x = toT.x;
+          h.dir.y = toT.y;
+          if (elapsed >= h.chaserDashWindupEnd) {
+            h.chaserDashPhase = "dashing";
+            h.chaserDashDir = { x: toT.x, y: toT.y };
+            h.chaserDashDist = rand(85, 122);
+          } else {
+            continue;
+          }
+        }
+
+        if (h.chaserDashPhase === "dashing") {
+          const dashSpeed = 356 * sm * speedFactor * midgameEnemySpeedMult();
+          const stepLen = Math.min(dashSpeed * spDt, 21);
+          const nx = h.x + h.chaserDashDir.x * stepLen;
+          const ny = h.y + h.chaserDashDir.y * stepLen;
+          const test = { x: nx, y: ny, r: h.r };
+          const landChase = () => {
+            h.chaserDashPhase = "chase";
+            h.chaserDashNextReady = elapsed + rand(0.72, 1.38);
+          };
+          const tryExplode = () => {
+            const snap = Math.hypot(target.x - h.x, target.y - h.y);
+            if (snap <= SWAMP_FROG_LAND_EXPLODE_DIST && hasLineOfSight({ x: h.x, y: h.y, r: h.r }, target)) {
+              h.chaserDashPhase = "swampExplodeWindup";
+              h.swampExplodeAt = elapsed + 0.07;
+            } else landChase();
+          };
+          if (
+            outOfBoundsCircle(test) ||
+            collidesAnyObstacle(test) ||
+            !!collidesValiantEnemyShockFieldDep?.(test, elapsed)
+          ) {
+            landChase();
+          } else {
+            h.x = nx;
+            h.y = ny;
+            h.chaserDashDist -= stepLen;
+            if (h.chaserDashDist <= 0) tryExplode();
+          }
+          continue;
+        }
+
+        if (h.chaserDashPhase === "chase") {
+          h.dir.x = toT.x;
+          h.dir.y = toT.y;
+          const canHop = elapsed >= (h.chaserDashNextReady ?? 0);
+          if (canHop) {
+            h.chaserDashPhase = "windup";
+            h.chaserDashWindupEnd = elapsed + 0.14;
+            h.dir.x = toT.x;
+            h.dir.y = toT.y;
+          }
+          continue;
+        }
+        continue;
       } else {
         const target = pickTargetForHunter(h);
         desired = vectorToTarget(h, target);
@@ -1405,7 +1502,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
       if (elapsed < (p.nextTickAt ?? Infinity)) continue;
       p.nextTickAt += p.tickInterval ?? 0.48;
-      const rr = p.r + player.r;
+      const rPool = p.frogMudPool ? p.r * frogMudPoolGrowScale(p.bornAt, elapsed) : p.r;
+      const rr = rPool + player.r;
       if (distSq(p, player) <= rr * rr) {
         damagePlayer(0, {
           sourceX: p.x,
@@ -1415,6 +1513,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         });
       }
     }
+  }
+
+  /** While overlapping a frog mud pool (growing radius), movement uses {@link FROG_MUD_POOL_MOVE_MULT}. */
+  function getFrogMudPoolMoveMult(px, py, pr, elapsed) {
+    for (const p of entities.swampPools) {
+      if (!p.frogMudPool) continue;
+      if (elapsed >= p.expiresAt) continue;
+      const rPool = p.r * frogMudPoolGrowScale(p.bornAt, elapsed);
+      const rr = rPool + pr;
+      if (distSq(p, { x: px, y: py }) <= rr * rr) return FROG_MUD_POOL_MOVE_MULT;
+    }
+    return 1;
   }
 
   function updateSwampBursts() {
@@ -1567,6 +1677,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     for (let i = entities.hunters.length - 1; i >= 0; i--) {
       const h = entities.hunters[i];
       if (elapsed >= h.dieAt) {
+        if (h.type === "frogChaser") {
+          triggerSwampFrogExplosion(h, elapsed);
+          entities.hunters.splice(i, 1);
+          continue;
+        }
         if (h.type === "ghost") scheduleNextBoneGhostSpawn(elapsed, true);
         entities.hunters.splice(i, 1);
       }
@@ -1714,8 +1829,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       drawLaserBeamFancy(ctx, beam, now);
     }
     drawSpawnerChargeClocks(ctx, entities.hunters, now);
+    const colourblind = getSwampBootlegColourblind();
     for (const h of entities.hunters) {
-      drawHunterBody(ctx, h);
+      drawHunterBody(ctx, h, { colourblind });
     }
     drawHunterLifeBars(ctx, entities.hunters, now);
     drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);
@@ -1806,5 +1922,6 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     bulwarkChargePushHunters,
     bulwarkChargeApplyTerrainGroupStun,
     bulwarkParryPushHunters,
+    getFrogMudPoolMoveMult,
   };
 }

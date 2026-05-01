@@ -12,6 +12,9 @@ import {
   LASER_BLUE_PLAYER_SLOW_SEC,
   SWAMP_HIT_SLOW_MULT,
   SWAMP_HIT_SLOW_SEC,
+  SWAMP_INFECTION_BURST_STUN_SEC,
+  SWAMP_INFECTION_BURST_SLOW_SEC,
+  SWAMP_INFECTION_BURST_SLOW_MULT,
   HEARTS_13_DEATH_DEFY_CD_SEC,
   CLUBS_13_UNTARGETABLE_SEC,
 } from "./balance.js";
@@ -62,6 +65,8 @@ export function createPlayerDamage(deps) {
     screenShakeStrength: 0,
     playerLaserSlowUntil: 0,
     playerSwampSlowUntil: 0,
+    swampInfectionMoveLockUntil: 0,
+    swampInfectionBurstSlowEnd: 0,
     heartsDeathDefyReadyAt: 0,
   };
 
@@ -235,12 +240,29 @@ export function createPlayerDamage(deps) {
     combat.playerSwampSlowUntil = elapsed + SWAMP_HIT_SLOW_SEC;
   }
 
+  /** Full infection burst at 10 stacks: brief root, then brief slow (no HP here). */
+  function applySwampInfectionBurst(elapsed) {
+    combat.swampInfectionMoveLockUntil = elapsed + SWAMP_INFECTION_BURST_STUN_SEC;
+    combat.swampInfectionBurstSlowEnd = elapsed + SWAMP_INFECTION_BURST_STUN_SEC + SWAMP_INFECTION_BURST_SLOW_SEC;
+  }
+
+  function isSwampInfectionMoveLocked() {
+    return getSimElapsed() < combat.swampInfectionMoveLockUntil;
+  }
+
   /** Multiplicative product of path/debuff movement slows (e.g. blue laser × swamp hit). */
   function getMovementSlowMult() {
     const elapsed = getSimElapsed();
     let m = 1;
     if (elapsed < combat.playerLaserSlowUntil) m *= LASER_BLUE_PLAYER_SLOW_MULT;
     if (elapsed < combat.playerSwampSlowUntil) m *= SWAMP_HIT_SLOW_MULT;
+    if (
+      combat.swampInfectionBurstSlowEnd > 0 &&
+      elapsed >= combat.swampInfectionMoveLockUntil &&
+      elapsed < combat.swampInfectionBurstSlowEnd
+    ) {
+      m *= SWAMP_INFECTION_BURST_SLOW_MULT;
+    }
     return m;
   }
 
@@ -252,6 +274,8 @@ export function createPlayerDamage(deps) {
     combat.screenShakeStrength = 0;
     combat.playerLaserSlowUntil = 0;
     combat.playerSwampSlowUntil = 0;
+    combat.swampInfectionMoveLockUntil = 0;
+    combat.swampInfectionBurstSlowEnd = 0;
     combat.heartsDeathDefyReadyAt = 0;
   }
 
@@ -282,6 +306,8 @@ export function createPlayerDamage(deps) {
     getShakeOffset,
     isLaserSlowActive,
     applySwampHitSlow,
+    applySwampInfectionBurst,
+    isSwampInfectionMoveLocked,
     getMovementSlowMult,
     resetCombatState,
     bumpScreenShake,

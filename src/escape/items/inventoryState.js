@@ -14,6 +14,12 @@ export function createEmptyInventory() {
     heartsResistanceReadyAt: 0,
     heartsResistanceCooldownDuration: 0,
     swampInfectionStacks: 0,
+    /** Swamp bootleg crystal curses (runtime rows; cleared on run / path reset). */
+    swampBootlegCurses: /** @type {object[]} */ ([]),
+    swampBootlegCdDash: 0,
+    swampBootlegCdBurst: 0,
+    swampBootlegSpellSilenceUntil: 0,
+    swampBootlegBloodTax: null,
     spadesObstacleBoostUntil: 0,
     aceUltimateReadyAt: 0,
     /** Seven diamonds in rank deck — larger dash range and smoke radius (rogue). */

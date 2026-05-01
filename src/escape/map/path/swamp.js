@@ -20,13 +20,8 @@ export const SWAMP_PATH_DEF = {
       };
     }
     if (amount <= 0) return payload;
-    const stacks = Math.max(0, Math.floor(Number(payload.inventory?.swampInfectionStacks ?? 0)));
-    const runLevel = Math.max(0, Math.floor(Number(payload.runLevel ?? 0)));
-    const divisor = runLevel >= 2 ? 8 : 10;
-    const bonus = Math.floor(stacks / divisor);
     return {
       ...payload,
-      amount: amount + bonus,
       opts: { ...opts, swampApplyInfection: true },
     };
   },
