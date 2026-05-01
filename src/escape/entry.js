@@ -95,7 +95,10 @@ import { countSuitsInActiveSlots } from "./items/setBonusPresentation.js";
 import { createCardPickupModal } from "./items/cardPickupModal.js";
 import { invisBurstDurationSeconds } from "./items/defaultCardEffects.js";
 import { syncDeckSlotsFromInventory } from "./items/deckHudSync.js";
-import { getModalSetBonusProgressLines } from "./items/setBonusPresentation.js";
+import {
+  getHudSetBonusCompactLine,
+  getModalSetBonusProgressLines,
+} from "./items/setBonusPresentation.js";
 import { createForgeHexFlow } from "./specials/forgeHexFlow.js";
 import { createForgeWorldModal } from "./specials/forgeModal.js";
 import { createRouletteHexFlow } from "./specials/rouletteHexFlow.js";
@@ -1704,8 +1707,7 @@ function boot() {
       forgeWorldModal?.isForgePaused() ?? false,
     );
     if (setBonusStatusEl) {
-      const lines = getModalSetBonusProgressLines(inventory, cardPickup?.getPendingCard() ?? null, getItemRulesForCharacter(activeCharacterId));
-      setBonusStatusEl.textContent = lines.length ? lines.join("\n") : "";
+      setBonusStatusEl.textContent = getHudSetBonusCompactLine(inventory);
     }
     maybePromptDiamondEmpowerChoice();
   }

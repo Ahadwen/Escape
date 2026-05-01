@@ -3070,6 +3070,27 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   function suitDisplayNameForModal(suit) {
     return { diamonds: "Diamonds", hearts: "Hearts", clubs: "Clubs", spades: "Spades" }[suit] ?? suit;
   }
+  function getHudSetBonusCompactLine(inventory2) {
+    const suits = countSuitsInActiveSlots(inventory2);
+    const parts = [];
+    for (const suit of MODAL_SET_SUIT_ORDER) {
+      const n = suits[suit];
+      if (n < 1) continue;
+      const g = SUIT_GLYPH[suit] ?? "?";
+      if (n < SET_BONUS_SUIT_THRESHOLD) {
+        parts.push(`${g} ${n}/${SET_BONUS_SUIT_THRESHOLD}`);
+        continue;
+      }
+      const cap = SET_BONUS_SUIT_MAX;
+      const tierProg = Math.min(n, cap);
+      if (tierProg < cap) {
+        parts.push(`${g} ${SET_BONUS_SUIT_THRESHOLD}/${SET_BONUS_SUIT_THRESHOLD} ${g} ${tierProg}/${cap}`);
+      } else {
+        parts.push(`${g} ${SET_BONUS_SUIT_THRESHOLD}/${SET_BONUS_SUIT_THRESHOLD} ${g} ${cap}/${cap}`);
+      }
+    }
+    return parts.join("  |  ");
+  }
   function suitInventoryGlowClass(card, suits) {
     if (!card?.suit) return "";
     if (card.suit === "joker") return "card-set-glow-white";
@@ -13312,8 +13333,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         forgeWorldModal?.isForgePaused() ?? false
       );
       if (setBonusStatusEl) {
-        const lines = getModalSetBonusProgressLines(inventory2, cardPickup?.getPendingCard() ?? null, getItemRulesForCharacter(activeCharacterId));
-        setBonusStatusEl.textContent = lines.length ? lines.join("\n") : "";
+        setBonusStatusEl.textContent = getHudSetBonusCompactLine(inventory2);
       }
       maybePromptDiamondEmpowerChoice();
     }

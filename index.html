@@ -603,9 +603,12 @@
       }
 
       body.is-mobile-ui .player-deck-panel,
-      body.is-mobile-ui .danger-ramp-wrap,
-      body.is-mobile-ui .set-bonus-status {
+      body.is-mobile-ui .danger-ramp-wrap {
         margin-top: clamp(6px, 1.8vw, 10px);
+      }
+
+      body.is-mobile-ui .danger-ramp-wrap > .set-bonus-status {
+        margin-top: 0;
       }
 
       body.is-mobile-ui .player-deck-panel {
@@ -2015,10 +2018,14 @@
       }
 
       .set-bonus-status {
-        margin: 4px 0 4px;
-        color: #93c5fd;
-        font-size: 12px;
-        min-height: 18px;
+        margin: 0 0 6px;
+        color: #e2e8f0;
+        font-weight: 700;
+        font-size: clamp(12.5px, 3vw, 16px);
+        line-height: 1.4;
+        font-variant-numeric: tabular-nums;
+        min-height: 1.2em;
+        letter-spacing: 0.02em;
       }
 
       .modal-set-bonus-status {
@@ -2606,6 +2613,7 @@
         </div>
       </div>
       <div class="danger-ramp-wrap" aria-label="Spawn pressure ramp">
+        <div id="set-bonus-status" class="set-bonus-status" aria-label="Deck set bonuses"></div>
         <div class="danger-ramp-head">
           <strong>Danger</strong>
           <span id="danger-ramp-caption">Spawns tighten over 5:00</span>
@@ -2619,7 +2627,6 @@
           </button>
         </div>
       </div>
-      <div id="set-bonus-status" class="set-bonus-status"></div>
       <div class="play-row">
         <div class="canvas-col canvas-stage">
           <canvas id="game" width="1120" height="700"></canvas>

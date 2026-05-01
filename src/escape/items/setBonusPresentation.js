@@ -1,4 +1,4 @@
-import { MODAL_SET_SUIT_ORDER, CARD_SET_GLOW_CLASSES } from "./cardUtils.js";
+import { MODAL_SET_SUIT_ORDER, CARD_SET_GLOW_CLASSES, SUIT_GLYPH } from "./cardUtils.js";
 import { forEachDeckCard } from "./inventoryState.js";
 import { SET_BONUS_SUIT_MAX, SET_BONUS_SUIT_THRESHOLD } from "../balance.js";
 
@@ -28,6 +28,32 @@ export function countSuitsInActiveSlots(inventory) {
 
 export function suitDisplayNameForModal(suit) {
   return { diamonds: "Diamonds", hearts: "Hearts", clubs: "Clubs", spades: "Spades" }[suit] ?? suit;
+}
+
+/**
+ * One-line set progress for the main HUD (plain suit glyphs like deck tiles, not emoji).
+ * @param {object} inventory
+ */
+export function getHudSetBonusCompactLine(inventory) {
+  const suits = countSuitsInActiveSlots(inventory);
+  const parts = [];
+  for (const suit of MODAL_SET_SUIT_ORDER) {
+    const n = suits[suit];
+    if (n < 1) continue;
+    const g = SUIT_GLYPH[suit] ?? "?";
+    if (n < SET_BONUS_SUIT_THRESHOLD) {
+      parts.push(`${g} ${n}/${SET_BONUS_SUIT_THRESHOLD}`);
+      continue;
+    }
+    const cap = SET_BONUS_SUIT_MAX;
+    const tierProg = Math.min(n, cap);
+    if (tierProg < cap) {
+      parts.push(`${g} ${SET_BONUS_SUIT_THRESHOLD}/${SET_BONUS_SUIT_THRESHOLD} ${g} ${tierProg}/${cap}`);
+    } else {
+      parts.push(`${g} ${SET_BONUS_SUIT_THRESHOLD}/${SET_BONUS_SUIT_THRESHOLD} ${g} ${cap}/${cap}`);
+    }
+  }
+  return parts.join("  |  ");
 }
 
 /**
