@@ -1,7 +1,7 @@
 /**
  * Maps active run path → document CSS variables for the HTML chrome (deck, modals, dev shell).
  * Uses the same “panel slightly lighter than deepest ink” relationship as the default navy,
- * shifted per path (fire / swamp / bone). Base run (no path yet) keeps the original slate stack.
+ * shifted per path (fire / swamp / bone / depths / halls). Base run (no path yet) keeps the original slate stack.
  */
 
 /** @typedef {keyof typeof SHELL_THEMES} ShellThemeId */
@@ -75,6 +75,40 @@ const SHELL_THEMES = {
     deepRgb: "35, 38, 45",
     panelRgb: "52, 56, 66",
   },
+  depths: {
+    body: "#0c1018",
+    panel: "#1a2440",
+    deep: "#101828",
+    mid: "#0b1220",
+    veil: "#070b12",
+    panelAlt: "#162238",
+    border: "#2a3a5c",
+    borderBright: "#3d5080",
+    hover: "#33466e",
+    bpA: "#141d32",
+    bpB: "#080c14",
+    inkOnLight: "#101828",
+    inkRgb: "8, 12, 22",
+    deepRgb: "16, 24, 40",
+    panelRgb: "26, 36, 64",
+  },
+  halls: {
+    body: "#16130f",
+    panel: "#3a3428",
+    deep: "#252018",
+    mid: "#14110d",
+    veil: "#0c0a08",
+    panelAlt: "#322d22",
+    border: "#4a4336",
+    borderBright: "#5e5645",
+    hover: "#524a3c",
+    bpA: "#2e281f",
+    bpB: "#15120e",
+    inkOnLight: "#252018",
+    inkRgb: "18, 16, 12",
+    deepRgb: "37, 32, 24",
+    panelRgb: "58, 52, 40",
+  },
 };
 
 /**
@@ -82,7 +116,13 @@ const SHELL_THEMES = {
  */
 export function applyPathShellTheme(pathId) {
   const key =
-    pathId === "fire" || pathId === "swamp" || pathId === "bone" ? /** @type {ShellThemeId} */ (pathId) : "default";
+    pathId === "fire" ||
+    pathId === "swamp" ||
+    pathId === "bone" ||
+    pathId === "depths" ||
+    pathId === "halls"
+      ? /** @type {ShellThemeId} */ (pathId)
+      : "default";
   const t = SHELL_THEMES[key];
   const r = document.documentElement;
   r.style.setProperty("--escape-ui-body", t.body);

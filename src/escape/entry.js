@@ -56,6 +56,7 @@ import { generateHexTileObstacles } from "./tiles.js";
 import {
   drawObstacles,
   fillPointyHexCell,
+  fillHallsMarbleHexCell,
   drawPlayerBody,
   drawPlayerHpHud,
   drawKnightBurstAura,
@@ -149,7 +150,10 @@ const FLOOR_HEX_FILL = "#0f172a";
 /** Until character select exists, default active hero id. */
 let activeCharacterId = "knight";
 
-/** REFERENCE `state.runLevel` — tier from accepted safehouse level-ups (slice: stays 0 → display 1). */
+/**
+ * REFERENCE `state.runLevel` — tier from accepted safehouse level-ups (display level = runLevel + 1).
+ * Path bands: L1 none, L2–3 Fire/Bone/Swamp, L4–5 Depths/Halls (`pathRuntime.ensurePathAssignedForLevel`).
+ */
 let runLevel = 0;
 
 const BEST_SURVIVAL_LS_KEY = "escape-best-survival-sec";
@@ -882,6 +886,127 @@ function boot() {
       ctx.arc(sx, sy, rr, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  /** Depths path: abyssal water wash, slow waves, rare lightning (world-anchored to camera). */
+  function drawDepthsAtmosphereWorld(ctx, viewW, viewH) {
+    const pad = 48;
+    const x0 = cameraX - pad;
+    const y0 = cameraY - pad;
+    const w = viewW + pad * 2;
+    const h = viewH + pad * 2;
+    const px = player.x;
+    const py = player.y;
+    const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 0.85);
+
+    const deep = ctx.createRadialGradient(px, py, 28, px, py, Math.max(viewW, viewH) * 0.72);
+    deep.addColorStop(0, `rgba(15, 55, 82, ${0.14 + pulse * 0.05})`);
+    deep.addColorStop(0.35, "rgba(6, 28, 48, 0.28)");
+    deep.addColorStop(0.72, "rgba(3, 14, 28, 0.42)");
+    deep.addColorStop(1, "rgba(1, 6, 14, 0.58)");
+    ctx.fillStyle = deep;
+    ctx.fillRect(x0, y0, w, h);
+
+    const abyss = ctx.createLinearGradient(x0, y0 + h * 0.35, x0, y0 + h);
+    abyss.addColorStop(0, "rgba(0, 0, 0, 0)");
+    abyss.addColorStop(0.55, "rgba(0, 12, 24, 0.22)");
+    abyss.addColorStop(1, "rgba(0, 4, 12, 0.5)");
+    ctx.fillStyle = abyss;
+    ctx.fillRect(x0, y0, w, h);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    for (let band = 0; band < 9; band++) {
+      const yBase = y0 + (h / 11) * (band + 0.65);
+      const speed = 0.95 + band * 0.11;
+      const amp = 5 + band * 1.4;
+      ctx.beginPath();
+      for (let x = x0; x <= x0 + w; x += 10) {
+        const wave =
+          Math.sin(x * 0.0065 + simElapsed * speed) * amp +
+          Math.sin(x * 0.017 - simElapsed * (0.55 + band * 0.04)) * (amp * 0.35);
+        const y = yBase + wave;
+        if (x <= x0 + 0.001) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      const a = 0.045 + band * 0.008;
+      ctx.strokeStyle = `rgba(56, 189, 248, ${a})`;
+      ctx.lineWidth = 1.15;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    const strike01 = (n) => ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
+    const period = 3.6 + strike01(Math.floor(simElapsed * 0.12)) * 4.4;
+    const cycle = simElapsed % period;
+    const strikeIdx = Math.floor(simElapsed / period);
+    const flashDur = 0.038 + strike01(Math.floor(simElapsed * 0.19) + 17) * 0.062;
+    const wantDouble = strike01(strikeIdx + 10007) < 0.38;
+    const gap = 0.07 + strike01(strikeIdx + 20021) * 0.22;
+    const flashDur2 = 0.024 + strike01(strikeIdx + 30047) * 0.055;
+    const t2 = flashDur + gap;
+    const inStrike1 = cycle < flashDur;
+    const inStrike2 = wantDouble && cycle >= t2 && cycle < t2 + flashDur2;
+    const strike = inStrike1 || inStrike2;
+
+    const drawOneBolt = (u, seed) => {
+      const alpha = Math.max(0, Math.min(1, u)) * 0.92;
+      const sx = x0 + w * (0.1 + strike01(seed) * 0.8);
+      const segN = 11 + (seed % 6);
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = alpha * 0.14;
+      ctx.fillStyle = "rgba(220, 245, 255, 1)";
+      ctx.fillRect(x0, y0, w, h);
+
+      ctx.globalAlpha = alpha * 0.88;
+      ctx.strokeStyle = "rgba(248, 252, 255, 0.95)";
+      ctx.lineWidth = 2.2;
+      ctx.shadowColor = "rgba(186, 230, 253, 0.9)";
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      let x = sx;
+      let y = y0 + 12 + (strike01(seed + 3) * 56);
+      ctx.moveTo(x, y);
+      for (let s = 0; s < segN; s++) {
+        const jx =
+          Math.sin(seed * 0.02 + s * 2.1) * (14 + strike01(seed + s) * 10) + Math.cos(simElapsed * 22 + s) * 5;
+        const jy = 18 + ((s * s * 7 + (seed >>> 3)) % 20);
+        x += jx;
+        y += jy;
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    };
+
+    if (strike) {
+      const baseSeed = strikeIdx * 2654435761 + Math.floor(period * 1000);
+      if (inStrike1) drawOneBolt(cycle / flashDur, baseSeed);
+      if (inStrike2) drawOneBolt((cycle - t2) / flashDur2, baseSeed + 0x9e3779b9);
+    }
+  }
+
+  /** Halls path: soft warm marble sheen over the floor (call after terrain blocks). */
+  function drawHallsAtmosphereWorld(ctx, viewW, viewH) {
+    const pad = 36;
+    const x0 = cameraX - pad;
+    const y0 = cameraY - pad;
+    const w = viewW + pad * 2;
+    const h = viewH + pad * 2;
+    const t = simElapsed * 0.35;
+    const g = ctx.createLinearGradient(
+      x0 + Math.cos(t) * 40,
+      y0 + Math.sin(t * 0.7) * 30,
+      x0 + w * 0.92,
+      y0 + h * 0.88,
+    );
+    g.addColorStop(0, "rgba(255, 253, 248, 0.035)");
+    g.addColorStop(0.45, "rgba(255, 255, 255, 0.012)");
+    g.addColorStop(1, "rgba(200, 188, 168, 0.028)");
+    ctx.fillStyle = g;
+    ctx.fillRect(x0, y0, w, h);
   }
 
   /** Viewport center in world space — stable swamp wash anchor (hex centroid jumps when tiles load). */
@@ -3682,9 +3807,15 @@ function boot() {
     ctx.translate(-cameraX + shake.x, -cameraY + shake.y);
 
     const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
+    const depthsPathActive = pathRuntime.getCurrentPathId() === "depths";
+    const hallsPathActive = pathRuntime.getCurrentPathId() === "halls";
     const floorHexFill = bonePathActive
       ? "#1b1d24"
-      : pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
+      : depthsPathActive
+        ? "#050f18"
+        : hallsPathActive
+          ? "#c9c2b8"
+          : pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
     const boneAmbientOverlay = bonePathActive;
     const boneBlindDebuffActive =
       bonePathActive && simElapsed < boneBlindDebuffFadeEnd && boneBlindDebuffFadeEnd > 0;
@@ -3700,9 +3831,14 @@ function boot() {
     }
     for (const h of activeHexes) {
       const { x: cx, y: cy } = hexToWorld(h.q, h.r);
-      fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
+      if (hallsPathActive) {
+        fillHallsMarbleHexCell(ctx, cx, cy, HEX_SIZE, h.q, h.r, simElapsed, player.x, player.y);
+      } else {
+        fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
+      }
     }
     if (firePathActive) drawFireAtmosphereWorld(ctx, viewW, viewH);
+    if (depthsPathActive) drawDepthsAtmosphereWorld(ctx, viewW, viewH);
     if (swampPathActive) drawSwampAtmosphereBackgroundWorld(ctx, viewW, viewH);
     if (swampPathActive) drawSwampMudTrailWorld(ctx);
     if (swampPathActive) drawKnightSwampDashSplashesWorld(ctx);
@@ -3732,10 +3868,25 @@ function boot() {
         ? { fill: "#3b2d20", stroke: "#7c5a3b" }
         : firePathActive
           ? { fill: "#3a1812", stroke: "#fca5a5", glowColor: "rgba(251, 113, 133, 0.45)", glowBlur: 8 }
-        : bonePathActive
-          ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 }
-          : undefined,
+          : bonePathActive
+            ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 }
+            : hallsPathActive
+              ? {
+                  fill: "#f4eee6",
+                  stroke: "rgba(140, 104, 22, 0.92)",
+                  glowColor: "rgba(253, 224, 138, 0.38)",
+                  glowBlur: 12,
+                }
+              : depthsPathActive
+                ? {
+                    fill: "#0a2434",
+                    stroke: "rgba(45, 156, 190, 0.45)",
+                    glowColor: "rgba(34, 211, 238, 0.22)",
+                    glowBlur: 14,
+                  }
+                : undefined,
     );
+    if (hallsPathActive) drawHallsAtmosphereWorld(ctx, viewW, viewH);
     if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
     if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {

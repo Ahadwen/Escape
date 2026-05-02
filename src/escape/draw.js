@@ -192,6 +192,87 @@ export function fillPointyHexCell(ctx, cx, cy, vertexRadius, fillStyle, strokeSt
   }
 }
 
+/**
+ * Halls path floor: marble field continuous with the player — world-space grain + large speculars
+ * anchored near the player (camera follows), not per-hex highlights. Same vertex bleed as `fillPointyHexCell`.
+ * @param {number} q axial q (micro tint only)
+ * @param {number} r axial r
+ * @param {number} timeSec sim time
+ * @param {number} playerX world x (view anchor)
+ * @param {number} playerY world y
+ */
+export function fillHallsMarbleHexCell(ctx, cx, cy, vertexRadius, q, r, timeSec, playerX, playerY) {
+  const mix = (q * 9283711 + r * 689287) >>> 0;
+  const fillBleed = 0.85;
+  const R = vertexRadius + fillBleed;
+  const warmLift = ((mix % 19) / 19) * 0.018;
+
+  const worldAng = timeSec * 0.052 + 0.25;
+  const span = 960;
+  const gx1 = playerX + Math.cos(worldAng) * span;
+  const gy1 = playerY + Math.sin(worldAng) * span;
+  const gx2 = playerX - Math.cos(worldAng) * span;
+  const gy2 = playerY - Math.sin(worldAng) * span;
+
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (Math.PI / 3) * i;
+    const x = cx + Math.cos(a) * R;
+    const y = cy + Math.sin(a) * R;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  const base = ctx.createLinearGradient(gx1, gy1, gx2, gy2);
+  /** Cooler, lower floor plane — lighter alabaster terrain pops on top (see `drawObstacles` halls). */
+  base.addColorStop(0, `rgba(198, 192, 186, ${0.97 - warmLift})`);
+  base.addColorStop(0.32, `rgba(184, 178, 170, ${0.96})`);
+  base.addColorStop(0.55, `rgba(168, 162, 154, ${0.97})`);
+  base.addColorStop(0.8, `rgba(152, 146, 138, ${0.98})`);
+  base.addColorStop(1, `rgba(136, 130, 122, ${0.99})`);
+  ctx.fillStyle = base;
+  ctx.fill();
+
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (Math.PI / 3) * i;
+    const x = cx + Math.cos(a) * vertexRadius;
+    const y = cy + Math.sin(a) * vertexRadius;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.clip();
+
+  const vr = vertexRadius;
+  const driftA = timeSec * 0.41;
+  const driftB = timeSec * 0.36;
+  const glint1X = playerX + Math.cos(driftA) * 140 + Math.sin(timeSec * 0.19) * 28;
+  const glint1Y = playerY + Math.sin(driftB) * 110 + Math.cos(timeSec * 0.17) * 22;
+  const glint2X = playerX + Math.cos(driftA + 1.9) * 95;
+  const glint2Y = playerY + Math.sin(driftB + 2.1) * 85;
+
+  const spec = ctx.createRadialGradient(glint1X, glint1Y, 0, glint1X, glint1Y, 480);
+  spec.addColorStop(0, "rgba(255, 255, 255, 0.22)");
+  spec.addColorStop(0.18, "rgba(255, 252, 246, 0.08)");
+  spec.addColorStop(0.45, "rgba(255, 255, 255, 0.025)");
+  spec.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.globalCompositeOperation = "soft-light";
+  ctx.fillStyle = spec;
+  ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
+
+  const spec2 = ctx.createRadialGradient(glint2X, glint2Y, 0, glint2X, glint2Y, 340);
+  spec2.addColorStop(0, "rgba(255, 255, 255, 0.09)");
+  spec2.addColorStop(0.3, "rgba(255, 255, 255, 0.03)");
+  spec2.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = spec2;
+  ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.restore();
+}
+
 export function drawDecoy(ctx, d) {
   ctx.save();
   ctx.globalAlpha = 0.36;

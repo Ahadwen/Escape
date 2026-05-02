@@ -4191,6 +4191,69 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       ctx.stroke();
     }
   }
+  function fillHallsMarbleHexCell(ctx, cx, cy, vertexRadius, q, r, timeSec, playerX, playerY) {
+    const mix = q * 9283711 + r * 689287 >>> 0;
+    const fillBleed = 0.85;
+    const R = vertexRadius + fillBleed;
+    const warmLift = mix % 19 / 19 * 0.018;
+    const worldAng = timeSec * 0.052 + 0.25;
+    const span = 960;
+    const gx1 = playerX + Math.cos(worldAng) * span;
+    const gy1 = playerY + Math.sin(worldAng) * span;
+    const gx2 = playerX - Math.cos(worldAng) * span;
+    const gy2 = playerY - Math.sin(worldAng) * span;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + Math.PI / 3 * i;
+      const x = cx + Math.cos(a) * R;
+      const y = cy + Math.sin(a) * R;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    const base = ctx.createLinearGradient(gx1, gy1, gx2, gy2);
+    base.addColorStop(0, `rgba(198, 192, 186, ${0.97 - warmLift})`);
+    base.addColorStop(0.32, `rgba(184, 178, 170, ${0.96})`);
+    base.addColorStop(0.55, `rgba(168, 162, 154, ${0.97})`);
+    base.addColorStop(0.8, `rgba(152, 146, 138, ${0.98})`);
+    base.addColorStop(1, `rgba(136, 130, 122, ${0.99})`);
+    ctx.fillStyle = base;
+    ctx.fill();
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + Math.PI / 3 * i;
+      const x = cx + Math.cos(a) * vertexRadius;
+      const y = cy + Math.sin(a) * vertexRadius;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.clip();
+    const vr = vertexRadius;
+    const driftA = timeSec * 0.41;
+    const driftB = timeSec * 0.36;
+    const glint1X = playerX + Math.cos(driftA) * 140 + Math.sin(timeSec * 0.19) * 28;
+    const glint1Y = playerY + Math.sin(driftB) * 110 + Math.cos(timeSec * 0.17) * 22;
+    const glint2X = playerX + Math.cos(driftA + 1.9) * 95;
+    const glint2Y = playerY + Math.sin(driftB + 2.1) * 85;
+    const spec = ctx.createRadialGradient(glint1X, glint1Y, 0, glint1X, glint1Y, 480);
+    spec.addColorStop(0, "rgba(255, 255, 255, 0.22)");
+    spec.addColorStop(0.18, "rgba(255, 252, 246, 0.08)");
+    spec.addColorStop(0.45, "rgba(255, 255, 255, 0.025)");
+    spec.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.globalCompositeOperation = "soft-light";
+    ctx.fillStyle = spec;
+    ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
+    const spec2 = ctx.createRadialGradient(glint2X, glint2Y, 0, glint2X, glint2Y, 340);
+    spec2.addColorStop(0, "rgba(255, 255, 255, 0.09)");
+    spec2.addColorStop(0.3, "rgba(255, 255, 255, 0.03)");
+    spec2.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = spec2;
+    ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.restore();
+  }
   function drawDecoy(ctx, d) {
     ctx.save();
     ctx.globalAlpha = 0.36;
@@ -11738,6 +11801,25 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
   };
 
+  // src/escape/map/path/depths.js
+  var DEPTHS_PATH_DEF = {
+    id: "depths",
+    label: "Depths",
+    tileTint: "#050f18",
+    /** @param {any} payload */
+    onDamage(payload) {
+      return payload;
+    },
+    /** @param {any} payload */
+    onEnemy(payload) {
+      return payload;
+    },
+    /** @param {any} payload */
+    onDebuff(payload) {
+      return payload;
+    }
+  };
+
   // src/escape/map/path/fire.js
   var FIRE_PATH_DEF = {
     id: "fire",
@@ -11755,6 +11837,25 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           fireApplyIgnite: true
         }
       };
+    },
+    /** @param {any} payload */
+    onEnemy(payload) {
+      return payload;
+    },
+    /** @param {any} payload */
+    onDebuff(payload) {
+      return payload;
+    }
+  };
+
+  // src/escape/map/path/halls.js
+  var HALLS_PATH_DEF = {
+    id: "halls",
+    label: "Halls",
+    tileTint: "#c9c2b8",
+    /** @param {any} payload */
+    onDamage(payload) {
+      return payload;
     },
     /** @param {any} payload */
     onEnemy(payload) {
@@ -11800,8 +11901,12 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   };
 
   // src/escape/run/pathRuntime.js
-  var PATH_DEFS = [BONE_PATH_DEF, FIRE_PATH_DEF, SWAMP_PATH_DEF];
+  var EARLY_PATH_IDS = /* @__PURE__ */ new Set(["bone", "fire", "swamp"]);
+  var LATE_PATH_IDS = /* @__PURE__ */ new Set(["depths", "halls"]);
+  var PATH_DEFS = [BONE_PATH_DEF, FIRE_PATH_DEF, SWAMP_PATH_DEF, DEPTHS_PATH_DEF, HALLS_PATH_DEF];
   var PATH_BY_ID = new Map(PATH_DEFS.map((d) => [d.id, d]));
+  var EARLY_PATH_DEFS = [BONE_PATH_DEF, FIRE_PATH_DEF, SWAMP_PATH_DEF];
+  var LATE_PATH_DEFS = [DEPTHS_PATH_DEF, HALLS_PATH_DEF];
   function normalizePathId(value) {
     if (typeof value !== "string") return null;
     return PATH_BY_ID.has(
@@ -11822,19 +11927,34 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       forcedPathId = null;
       assignedAtLevel = null;
     }
-    function pickRandomPathId() {
-      const i = Math.max(0, Math.min(PATH_DEFS.length - 1, Math.floor(rng() * PATH_DEFS.length)));
-      return PATH_DEFS[i].id;
+    function pickRandomEarlyPathId() {
+      const i = Math.max(0, Math.min(EARLY_PATH_DEFS.length - 1, Math.floor(rng() * EARLY_PATH_DEFS.length)));
+      return EARLY_PATH_DEFS[i].id;
+    }
+    function pickRandomLatePathId() {
+      const i = Math.max(0, Math.min(LATE_PATH_DEFS.length - 1, Math.floor(rng() * LATE_PATH_DEFS.length)));
+      return LATE_PATH_DEFS[i].id;
     }
     function ensurePathAssignedForLevel(runLevel2) {
       if (forcedPathId) {
         currentPathId = forcedPathId;
-        assignedAtLevel = Math.max(1, runLevel2);
+        assignedAtLevel = Math.max(0, runLevel2);
         return currentPathId;
       }
-      if (runLevel2 < 1) return currentPathId;
-      if (!currentPathId) {
-        currentPathId = pickRandomPathId();
+      if (runLevel2 < 1) {
+        currentPathId = null;
+        assignedAtLevel = null;
+        return null;
+      }
+      if (runLevel2 >= 3) {
+        if (currentPathId == null || EARLY_PATH_IDS.has(currentPathId)) {
+          currentPathId = pickRandomLatePathId();
+          assignedAtLevel = runLevel2;
+        }
+        return currentPathId;
+      }
+      if (currentPathId == null || LATE_PATH_IDS.has(currentPathId)) {
+        currentPathId = pickRandomEarlyPathId();
         assignedAtLevel = runLevel2;
       }
       return currentPathId;
@@ -11954,10 +12074,44 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       inkRgb: "12, 14, 18",
       deepRgb: "35, 38, 45",
       panelRgb: "52, 56, 66"
+    },
+    depths: {
+      body: "#0c1018",
+      panel: "#1a2440",
+      deep: "#101828",
+      mid: "#0b1220",
+      veil: "#070b12",
+      panelAlt: "#162238",
+      border: "#2a3a5c",
+      borderBright: "#3d5080",
+      hover: "#33466e",
+      bpA: "#141d32",
+      bpB: "#080c14",
+      inkOnLight: "#101828",
+      inkRgb: "8, 12, 22",
+      deepRgb: "16, 24, 40",
+      panelRgb: "26, 36, 64"
+    },
+    halls: {
+      body: "#16130f",
+      panel: "#3a3428",
+      deep: "#252018",
+      mid: "#14110d",
+      veil: "#0c0a08",
+      panelAlt: "#322d22",
+      border: "#4a4336",
+      borderBright: "#5e5645",
+      hover: "#524a3c",
+      bpA: "#2e281f",
+      bpB: "#15120e",
+      inkOnLight: "#252018",
+      inkRgb: "18, 16, 12",
+      deepRgb: "37, 32, 24",
+      panelRgb: "58, 52, 40"
     }
   };
   function applyPathShellTheme(pathId) {
-    const key = pathId === "fire" || pathId === "swamp" || pathId === "bone" ? (
+    const key = pathId === "fire" || pathId === "swamp" || pathId === "bone" || pathId === "depths" || pathId === "halls" ? (
       /** @type {ShellThemeId} */
       pathId
     ) : "default";
@@ -12627,6 +12781,113 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         ctx2.arc(sx, sy, rr, 0, Math.PI * 2);
         ctx2.fill();
       }
+    }
+    function drawDepthsAtmosphereWorld(ctx2, viewW, viewH) {
+      const pad = 48;
+      const x0 = cameraX - pad;
+      const y0 = cameraY - pad;
+      const w = viewW + pad * 2;
+      const h = viewH + pad * 2;
+      const px = player.x;
+      const py = player.y;
+      const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 0.85);
+      const deep = ctx2.createRadialGradient(px, py, 28, px, py, Math.max(viewW, viewH) * 0.72);
+      deep.addColorStop(0, `rgba(15, 55, 82, ${0.14 + pulse * 0.05})`);
+      deep.addColorStop(0.35, "rgba(6, 28, 48, 0.28)");
+      deep.addColorStop(0.72, "rgba(3, 14, 28, 0.42)");
+      deep.addColorStop(1, "rgba(1, 6, 14, 0.58)");
+      ctx2.fillStyle = deep;
+      ctx2.fillRect(x0, y0, w, h);
+      const abyss = ctx2.createLinearGradient(x0, y0 + h * 0.35, x0, y0 + h);
+      abyss.addColorStop(0, "rgba(0, 0, 0, 0)");
+      abyss.addColorStop(0.55, "rgba(0, 12, 24, 0.22)");
+      abyss.addColorStop(1, "rgba(0, 4, 12, 0.5)");
+      ctx2.fillStyle = abyss;
+      ctx2.fillRect(x0, y0, w, h);
+      ctx2.save();
+      ctx2.globalCompositeOperation = "screen";
+      for (let band = 0; band < 9; band++) {
+        const yBase = y0 + h / 11 * (band + 0.65);
+        const speed = 0.95 + band * 0.11;
+        const amp = 5 + band * 1.4;
+        ctx2.beginPath();
+        for (let x = x0; x <= x0 + w; x += 10) {
+          const wave = Math.sin(x * 65e-4 + simElapsed * speed) * amp + Math.sin(x * 0.017 - simElapsed * (0.55 + band * 0.04)) * (amp * 0.35);
+          const y = yBase + wave;
+          if (x <= x0 + 1e-3) ctx2.moveTo(x, y);
+          else ctx2.lineTo(x, y);
+        }
+        const a = 0.045 + band * 8e-3;
+        ctx2.strokeStyle = `rgba(56, 189, 248, ${a})`;
+        ctx2.lineWidth = 1.15;
+        ctx2.stroke();
+      }
+      ctx2.restore();
+      const strike01 = (n) => (n * 134775813 + 1 & 2147483647) / 2147483647;
+      const period = 3.6 + strike01(Math.floor(simElapsed * 0.12)) * 4.4;
+      const cycle = simElapsed % period;
+      const strikeIdx = Math.floor(simElapsed / period);
+      const flashDur = 0.038 + strike01(Math.floor(simElapsed * 0.19) + 17) * 0.062;
+      const wantDouble = strike01(strikeIdx + 10007) < 0.38;
+      const gap = 0.07 + strike01(strikeIdx + 20021) * 0.22;
+      const flashDur2 = 0.024 + strike01(strikeIdx + 30047) * 0.055;
+      const t2 = flashDur + gap;
+      const inStrike1 = cycle < flashDur;
+      const inStrike2 = wantDouble && cycle >= t2 && cycle < t2 + flashDur2;
+      const strike = inStrike1 || inStrike2;
+      const drawOneBolt = (u, seed) => {
+        const alpha = Math.max(0, Math.min(1, u)) * 0.92;
+        const sx = x0 + w * (0.1 + strike01(seed) * 0.8);
+        const segN = 11 + seed % 6;
+        ctx2.save();
+        ctx2.globalCompositeOperation = "screen";
+        ctx2.globalAlpha = alpha * 0.14;
+        ctx2.fillStyle = "rgba(220, 245, 255, 1)";
+        ctx2.fillRect(x0, y0, w, h);
+        ctx2.globalAlpha = alpha * 0.88;
+        ctx2.strokeStyle = "rgba(248, 252, 255, 0.95)";
+        ctx2.lineWidth = 2.2;
+        ctx2.shadowColor = "rgba(186, 230, 253, 0.9)";
+        ctx2.shadowBlur = 18;
+        ctx2.beginPath();
+        let x = sx;
+        let y = y0 + 12 + strike01(seed + 3) * 56;
+        ctx2.moveTo(x, y);
+        for (let s = 0; s < segN; s++) {
+          const jx = Math.sin(seed * 0.02 + s * 2.1) * (14 + strike01(seed + s) * 10) + Math.cos(simElapsed * 22 + s) * 5;
+          const jy = 18 + (s * s * 7 + (seed >>> 3)) % 20;
+          x += jx;
+          y += jy;
+          ctx2.lineTo(x, y);
+        }
+        ctx2.stroke();
+        ctx2.shadowBlur = 0;
+        ctx2.restore();
+      };
+      if (strike) {
+        const baseSeed = strikeIdx * 2654435761 + Math.floor(period * 1e3);
+        if (inStrike1) drawOneBolt(cycle / flashDur, baseSeed);
+        if (inStrike2) drawOneBolt((cycle - t2) / flashDur2, baseSeed + 2654435769);
+      }
+    }
+    function drawHallsAtmosphereWorld(ctx2, viewW, viewH) {
+      const pad = 36;
+      const x0 = cameraX - pad;
+      const y0 = cameraY - pad;
+      const w = viewW + pad * 2;
+      const h = viewH + pad * 2;
+      const t = simElapsed * 0.35;
+      const g = ctx2.createLinearGradient(
+        x0 + Math.cos(t) * 40,
+        y0 + Math.sin(t * 0.7) * 30,
+        x0 + w * 0.92,
+        y0 + h * 0.88
+      );
+      g.addColorStop(0, "rgba(255, 253, 248, 0.035)");
+      g.addColorStop(0.45, "rgba(255, 255, 255, 0.012)");
+      g.addColorStop(1, "rgba(200, 188, 168, 0.028)");
+      ctx2.fillStyle = g;
+      ctx2.fillRect(x0, y0, w, h);
     }
     function getSwampAtmosphereAnchorWorld(viewW, viewH) {
       return { x: cameraX + viewW * 0.5, y: cameraY + viewH * 0.5 };
@@ -15121,7 +15382,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         ctx.save();
         ctx.translate(-cameraX + shake.x, -cameraY + shake.y);
         const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
-        const floorHexFill = bonePathActive ? "#1b1d24" : pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
+        const depthsPathActive = pathRuntime.getCurrentPathId() === "depths";
+        const hallsPathActive = pathRuntime.getCurrentPathId() === "halls";
+        const floorHexFill = bonePathActive ? "#1b1d24" : depthsPathActive ? "#050f18" : hallsPathActive ? "#c9c2b8" : pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
         const boneAmbientOverlay = bonePathActive;
         const boneBlindDebuffActive = bonePathActive && simElapsed < boneBlindDebuffFadeEnd && boneBlindDebuffFadeEnd > 0;
         const firePathActive = pathRuntime.getCurrentPathId() === "fire";
@@ -15136,9 +15399,14 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         }
         for (const h of activeHexes) {
           const { x: cx, y: cy } = hexToWorld(h.q, h.r);
-          fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
+          if (hallsPathActive) {
+            fillHallsMarbleHexCell(ctx, cx, cy, HEX_SIZE, h.q, h.r, simElapsed, player.x, player.y);
+          } else {
+            fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
+          }
         }
         if (firePathActive) drawFireAtmosphereWorld(ctx, viewW, viewH);
+        if (depthsPathActive) drawDepthsAtmosphereWorld(ctx, viewW, viewH);
         if (swampPathActive) drawSwampAtmosphereBackgroundWorld(ctx, viewW, viewH);
         if (swampPathActive) drawSwampMudTrailWorld(ctx);
         if (swampPathActive) drawKnightSwampDashSplashesWorld(ctx);
@@ -15162,8 +15430,19 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         drawObstacles(
           ctx,
           obstacles,
-          swampPathActive ? { fill: "#3b2d20", stroke: "#7c5a3b" } : firePathActive ? { fill: "#3a1812", stroke: "#fca5a5", glowColor: "rgba(251, 113, 133, 0.45)", glowBlur: 8 } : bonePathActive ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 } : void 0
+          swampPathActive ? { fill: "#3b2d20", stroke: "#7c5a3b" } : firePathActive ? { fill: "#3a1812", stroke: "#fca5a5", glowColor: "rgba(251, 113, 133, 0.45)", glowBlur: 8 } : bonePathActive ? { fill: "#151821", stroke: "#aeb7c9", glowColor: "rgba(226, 232, 240, 0.55)", glowBlur: 12 } : hallsPathActive ? {
+            fill: "#f4eee6",
+            stroke: "rgba(140, 104, 22, 0.92)",
+            glowColor: "rgba(253, 224, 138, 0.38)",
+            glowBlur: 12
+          } : depthsPathActive ? {
+            fill: "#0a2434",
+            stroke: "rgba(45, 156, 190, 0.45)",
+            glowColor: "rgba(34, 211, 238, 0.22)",
+            glowBlur: 14
+          } : void 0
         );
+        if (hallsPathActive) drawHallsAtmosphereWorld(ctx, viewW, viewH);
         if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
         if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);
         if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
