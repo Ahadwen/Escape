@@ -21,6 +21,9 @@
   var SPECIAL_PROCEDURAL_DENOM_START = 30;
   var SPECIAL_PROCEDURAL_DENOM_MIN = 12;
   var SPECIAL_PROCEDURAL_RAMP_STEP_SEC = 10;
+  var SAFEHOUSE_PROC_MIN_SIM_LEVEL_3_4_SEC = 200;
+  var SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_LO = 2;
+  var SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_HI = 3;
   var _SQRT3 = Math.sqrt(3);
   var ARENA_NEXUS_INNER_HEX_SCALE = 0.62;
   var ARENA_NEXUS_INNER_ENTER_R = HEX_SIZE * ARENA_NEXUS_INNER_HEX_SCALE * (_SQRT3 / 2) * 0.96;
@@ -3703,9 +3706,24 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       return { obstacles, activePlayerHex, activeHexes, lastPlayerHexKey };
     }
+    function voidHexTerrain(q, r) {
+      const key = hexKey2(q, r);
+      const c = hexToWorld(q, r);
+      tryProceduralRareSpecialHex(q, r);
+      tileCache.set(
+        key,
+        generateHexTileObstacles2(q, r, {
+          ...tileConfig,
+          centerX: c.x,
+          centerY: c.y,
+          emptyTerrain: true
+        })
+      );
+    }
     return {
       clearCache,
-      ensureTilesForPlayer
+      ensureTilesForPlayer,
+      voidHexTerrain
     };
   }
 
@@ -3720,7 +3738,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     HEX_DIRS: HEX_DIRS2,
     hexKey: hexKey2,
     getIsLunatic = () => false,
-    getSimElapsed = () => 0
+    getSimElapsed = () => 0,
+    getRunLevel = () => 0
   }) {
     const west = HEX_DIRS2[3];
     const westTestQ = west.q;
@@ -3772,6 +3791,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (testWestKind === "safehouse") return "safehouse";
       return null;
     }
+    function isProceduralSafehouseEarlyCapBlocked(simNow) {
+      const lv = getRunLevel();
+      if (lv < SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_LO || lv > SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_HI) return false;
+      return simNow < SAFEHOUSE_PROC_MIN_SIM_LEVEL_3_4_SEC;
+    }
     function tryProceduralRareSpecialHex(q, r) {
       if (isSpawnHex(q, r)) return;
       if (isWestTestHex(q, r)) return;
@@ -3795,6 +3819,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (getIsLunatic()) {
         const dSafe2 = proceduralSpecialDenominator(sim, safeRampBaseSim);
         if (Math.random() >= 1 / dSafe2) return;
+        if (isProceduralSafehouseEarlyCapBlocked(sim)) return;
         proceduralSafehouse.add(k);
         onProceduralSafehousePlaced?.();
         safeRampBaseSim = sim;
@@ -3813,6 +3838,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       const dSafe = proceduralSpecialDenominator(sim, safeRampBaseSim);
       if (Math.random() >= 1 / dSafe) return;
+      if (isProceduralSafehouseEarlyCapBlocked(sim)) return;
       proceduralSafehouse.add(k);
       onProceduralSafehousePlaced?.();
       safeRampBaseSim = sim;
@@ -8698,6 +8724,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         return { light: "#fde68a", core: "#d97706", shadow: "#78350f", rim: "#fcd34d", mark: "#fffbeb" };
       case "sniper":
         return { light: "#fbcfe8", core: "#db2777", shadow: "#831843", rim: "#f9a8d4", mark: "#fdf2f8" };
+      /** Depths path sniper — violet / abyss teal (matches bolt minion & grapple laser family). */
+      case "depthsSniper":
+        return { light: "#c4b5fd", core: "#5b21b6", shadow: "#1e1b4b", rim: "#2dd4bf", mark: "#e0e7ff" };
       case "laser":
         return { light: "#fecaca", core: "#ef4444", shadow: "#7f1d1d", rim: "#f87171", mark: "#fef2f2" };
       case "laserBlue":
@@ -8706,12 +8735,21 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         return { light: "#fecdd3", core: "#e11d48", shadow: "#881337", rim: "#fb7185", mark: "#fff1f2" };
       case "airSpawner":
         return { light: "#ddd6fe", core: "#7c3aed", shadow: "#4c1d95", rim: "#a78bfa", mark: "#f5f3ff" };
+      case "depthsBoltSpawner":
+        return { light: "#99f6e4", core: "#0d9488", shadow: "#134e4a", rim: "#5eead4", mark: "#ccfbf1" };
+      case "depthsShardChaser":
+        return { light: "#e9d5ff", core: "#7e22ce", shadow: "#3b0764", rim: "#c084fc", mark: "#f3e8ff" };
+      case "depthsGrappleLaser":
+        return { light: "#a5f3fc", core: "#6366f1", shadow: "#312e81", rim: "#818cf8", mark: "#e0e7ff" };
       case "cryptSpawner":
         return { light: "#f8fafc", core: "#e2e8f0", shadow: "#475569", rim: "#f1f5f9", mark: "#ffffff" };
       case "ranged":
         return { light: "#bae6fd", core: "#0284c7", shadow: "#0c4a6e", rim: "#38bdf8", mark: "#f0f9ff" };
       case "fast":
         return { light: "#fed7aa", core: "#ea580c", shadow: "#7c2d12", rim: "#fb923c", mark: "#fff7ed" };
+      /** Depths bolt-spawner shot — not a spawn `type`; used from `drawHunterBody` when `h.depthsBoltMinion`. */
+      case "depthsBoltMinion":
+        return { light: "#a7f3d0", core: "#5b21b6", shadow: "#134e4a", rim: "#2dd4bf", mark: "#ede9fe" };
       case "ghost":
         return { light: "#f3f4f6", core: "#cbd5e1", shadow: "#6b7280", rim: "#e5e7eb", mark: "#ffffff" };
       default:
@@ -8934,9 +8972,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       return;
     }
     const boneSwarmGhostFast = h.type === "fast" && !!h.boneSwarmPhasing;
+    const depthsBoltFast = h.type === "fast" && !!h.depthsBoltMinion;
     const swampMudFast = h.type === "fast" && !!h.swampMudSpawn;
     const colourblind = !!opts.colourblind;
-    const pal = colourblind ? { light: "#9ca89a", core: "#5a6658", shadow: "#3a4239", rim: "#6b7569", mark: "#b4c0b0" } : boneSwarmGhostFast ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" } : swampMudFast ? { light: "#5c4a3a", core: "#342a1f", shadow: "#120e0a", rim: "#3d3024", mark: "#2a2218" } : hunterPalette(h.type);
+    const depthsSniperPal = h.type === "sniper" && !!opts.depthsPath;
+    const pal = colourblind ? { light: "#9ca89a", core: "#5a6658", shadow: "#3a4239", rim: "#6b7569", mark: "#b4c0b0" } : boneSwarmGhostFast ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" } : depthsBoltFast ? hunterPalette("depthsBoltMinion") : swampMudFast ? { light: "#5c4a3a", core: "#342a1f", shadow: "#120e0a", rim: "#3d3024", mark: "#2a2218" } : depthsSniperPal ? hunterPalette("depthsSniper") : hunterPalette(h.type);
     const { x, y, r } = h;
     const alpha = clamp7(Number(h.opacity ?? 1), 0, 1);
     const cryptRevealU = h.type === "cryptSpawner" ? clamp7(Number(h.cryptRevealU ?? 1), 0, 1) : 1;
@@ -9081,6 +9121,35 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     ctx.translate(x1, y1);
     ctx.rotate(ang);
     ctx.lineCap = "round";
+    if (beam.depthsPurpleLaser) {
+      const t = beam.warning ? clamp7((now - beam.bornAt) / Math.max(1e-3, beam.expiresAt - beam.bornAt), 0, 1) : 0;
+      const fade = 0.48 + 0.5 * (1 - t * 0.3);
+      ctx.shadowBlur = 22;
+      ctx.shadowColor = "rgba(167, 139, 250, 0.5)";
+      const gWide = ctx.createLinearGradient(0, 0, len, 0);
+      gWide.addColorStop(0, `rgba(204, 251, 241, ${0.16 * fade})`);
+      gWide.addColorStop(0.38, `rgba(45, 212, 191, ${0.42 * fade + 0.12 * pulse})`);
+      gWide.addColorStop(0.72, `rgba(167, 139, 250, ${0.38 * fade})`);
+      gWide.addColorStop(1, `rgba(88, 28, 135, ${0.36 * fade})`);
+      ctx.strokeStyle = gWide;
+      ctx.lineWidth = (beam.warning ? 10 : 9) + pulse * 4;
+      if (beam.warning) ctx.setLineDash([15, 10]);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(len, 0);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(216, 180, 254, ${0.44 + 0.34 * pulse})`;
+      ctx.lineWidth = 2.8 + pulse * 1.6;
+      if (beam.warning) ctx.setLineDash([8, 12]);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(len, 0);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      return;
+    }
     if (beam.warning) {
       const t = clamp7((now - beam.bornAt) / Math.max(1e-3, beam.expiresAt - beam.bornAt), 0, 1);
       const fade = 0.42 + 0.48 * (1 - t * 0.4);
@@ -9215,20 +9284,79 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     ctx.restore();
   }
+  function drawDepthsSniperZoneSinking(ctx, zone, now) {
+    const { x, y, r } = zone;
+    const t0 = zone.detonateAt;
+    const t1 = zone.lingerUntil ?? t0;
+    const raw = (now - t0) / Math.max(1e-3, t1 - t0);
+    const u = clamp7(raw, 0, 1);
+    const sink = u * u * (3 - 2 * u);
+    const visR = r * (1 - 0.3 * Math.pow(sink, 1.12));
+    const bodyA = (1 - sink * 0.94) * 0.52;
+    ctx.save();
+    const g = ctx.createRadialGradient(x, y, visR * 0.06, x, y, visR * 1.02);
+    g.addColorStop(0, `rgba(45, 212, 191, ${0.1 * (1 - sink * 0.85)})`);
+    g.addColorStop(0.32, `rgba(67, 56, 202, ${0.2 * bodyA})`);
+    g.addColorStop(0.58, `rgba(49, 46, 129, ${0.26 * bodyA})`);
+    g.addColorStop(0.88, `rgba(15, 23, 42, ${0.14 * bodyA})`);
+    g.addColorStop(1, "rgba(3, 8, 16, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, visR, 0, TAU);
+    ctx.fill();
+    const rimA = 0.62 * (1 - sink) * (1 - sink);
+    ctx.strokeStyle = `rgba(45, 212, 191, ${rimA})`;
+    ctx.lineWidth = 2.4 * (1 - sink * 0.72);
+    ctx.beginPath();
+    ctx.arc(x, y, visR * (0.9 - 0.08 * sink), 0, TAU);
+    ctx.stroke();
+    const lag = clamp7((sink - 0.08) / 0.92, 0, 1);
+    if (lag > 0.02 && lag < 0.995) {
+      const ripR = r * (0.92 - 0.48 * lag);
+      ctx.strokeStyle = `rgba(167, 139, 250, ${0.38 * (1 - lag) * (1 - lag)})`;
+      ctx.lineWidth = 1.15 * (1 - lag);
+      ctx.beginPath();
+      ctx.arc(x, y, ripR, 0, TAU);
+      ctx.stroke();
+    }
+    const deep = ctx.createRadialGradient(x, y, visR * 0.02, x, y, visR * 0.88);
+    deep.addColorStop(0, `rgba(2, 6, 14, ${0.12 * sink})`);
+    deep.addColorStop(0.55, `rgba(4, 12, 24, ${0.35 * sink * sink})`);
+    deep.addColorStop(1, "rgba(2, 8, 18, 0)");
+    ctx.fillStyle = deep;
+    ctx.beginPath();
+    ctx.arc(x, y, visR * 0.96, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
   function drawArtilleryDetonationBang(ctx, zone, u) {
     const { x, y, r } = zone;
     const fade = 1 - u * u;
     const coreR = r * (0.5 + 0.2 * (1 - u));
-    drawCircle2(ctx, x, y, coreR, "#fef3c7", 0.38 * fade);
-    drawCircle2(ctx, x, y, coreR * 0.42, "#fffbeb", 0.48 * fade);
-    const ringR = r * (0.4 + u * 1.25);
-    ctx.save();
-    ctx.strokeStyle = `rgba(254, 215, 170, ${0.72 * fade})`;
-    ctx.lineWidth = 2.6 * (1 - u * 0.45);
-    ctx.beginPath();
-    ctx.arc(x, y, ringR, 0, TAU);
-    ctx.stroke();
-    ctx.restore();
+    const depths = !!zone.depthsSniperZone;
+    if (depths) {
+      drawCircle2(ctx, x, y, coreR, "#312e81", 0.44 * fade);
+      drawCircle2(ctx, x, y, coreR * 0.42, "#5eead4", 0.36 * fade);
+      const ringR = r * (0.4 + u * 1.25);
+      ctx.save();
+      ctx.strokeStyle = `rgba(167, 139, 250, ${0.7 * fade})`;
+      ctx.lineWidth = 2.6 * (1 - u * 0.45);
+      ctx.beginPath();
+      ctx.arc(x, y, ringR, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      drawCircle2(ctx, x, y, coreR, "#fef3c7", 0.38 * fade);
+      drawCircle2(ctx, x, y, coreR * 0.42, "#fffbeb", 0.48 * fade);
+      const ringR = r * (0.4 + u * 1.25);
+      ctx.save();
+      ctx.strokeStyle = `rgba(254, 215, 170, ${0.72 * fade})`;
+      ctx.lineWidth = 2.6 * (1 - u * 0.45);
+      ctx.beginPath();
+      ctx.arc(x, y, ringR, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
   function drawDangerZones(ctx, dangerZones, now, sniperBangDuration) {
     for (const zone of dangerZones) {
@@ -9238,38 +9366,59 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const tSinceDet = now - zone.detonateAt;
       const inBang = zone.exploded && lingering && tSinceDet < sniperBangDuration;
       if (!zone.exploded) {
-        const pulse = 1 + Math.sin(now * 20) * 0.08;
-        const radius = zone.r * pulse;
+        const radius = zone.r * (1 - 0.045 * life);
         const firePath = !!zone.firePath;
-        drawCircle2(ctx, zone.x, zone.y, radius, firePath ? "#dc2626" : "#ef4444", 0.25 + life * 0.4);
-        ctx.strokeStyle = firePath ? "#fb7185" : "#f87171";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(zone.x, zone.y, radius, 0, TAU);
-        ctx.stroke();
-        if (firePath) {
-          const inner = radius * (0.58 + 0.08 * Math.sin(now * 9));
-          drawCircle2(ctx, zone.x, zone.y, inner, "#fb7185", 0.16 + 0.1 * life);
-          ctx.strokeStyle = "rgba(254, 226, 226, 0.55)";
+        const depthsSnipe = !!zone.depthsSniperZone;
+        if (depthsSnipe) {
+          drawCircle2(ctx, zone.x, zone.y, radius, "#4c1d95", 0.22 + life * 0.42);
+          ctx.strokeStyle = "#2dd4bf";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, radius, 0, TAU);
+          ctx.stroke();
+          const inner = radius * 0.58;
+          drawCircle2(ctx, zone.x, zone.y, inner, "#6d28d9", 0.14 + 0.12 * life);
+          ctx.strokeStyle = "rgba(196, 181, 253, 0.5)";
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.arc(zone.x, zone.y, radius * 0.78, 0, TAU);
           ctx.stroke();
+        } else {
+          drawCircle2(ctx, zone.x, zone.y, radius, firePath ? "#dc2626" : "#ef4444", 0.25 + life * 0.4);
+          ctx.strokeStyle = firePath ? "#fb7185" : "#f87171";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, radius, 0, TAU);
+          ctx.stroke();
+          if (firePath) {
+            const inner = radius * 0.58;
+            drawCircle2(ctx, zone.x, zone.y, inner, "#fb7185", 0.16 + 0.1 * life);
+            ctx.strokeStyle = "rgba(254, 226, 226, 0.55)";
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.arc(zone.x, zone.y, radius * 0.78, 0, TAU);
+            ctx.stroke();
+          }
         }
       } else if (lingering) {
         const r = zone.r;
         const firePath = !!zone.firePath;
-        drawCircle2(ctx, zone.x, zone.y, r, firePath ? "#991b1b" : "#9f1239", firePath ? 0.46 : 0.38);
-        ctx.strokeStyle = firePath ? "rgba(251, 113, 133, 0.95)" : "rgba(248, 113, 113, 0.95)";
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.arc(zone.x, zone.y, r, 0, TAU);
-        ctx.stroke();
-        ctx.strokeStyle = "rgba(254, 202, 202, 0.55)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(zone.x, zone.y, r * 0.72, 0, TAU);
-        ctx.stroke();
+        const depthsSnipe = !!zone.depthsSniperZone;
+        if (depthsSnipe) {
+          drawDepthsSniperZoneSinking(ctx, zone, now);
+        } else {
+          drawCircle2(ctx, zone.x, zone.y, r, firePath ? "#991b1b" : "#9f1239", firePath ? 0.46 : 0.38);
+          ctx.strokeStyle = firePath ? "rgba(251, 113, 133, 0.95)" : "rgba(248, 113, 113, 0.95)";
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, r, 0, TAU);
+          ctx.stroke();
+          ctx.strokeStyle = "rgba(254, 202, 202, 0.55)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, r * 0.72, 0, TAU);
+          ctx.stroke();
+        }
         if (firePath) {
           const swirl = now * 2.6;
           const ringR = r * (0.5 + 0.08 * Math.sin(now * 7));
@@ -9460,12 +9609,14 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const life = clamp7((now - b.bornAt) / b.life, 0, 1);
       const x = b.x + (b.tx - b.x) * life;
       const y = b.y + (b.ty - b.y) * life;
-      drawCircle2(ctx, x, y, 2, "#fca5a5");
+      const col = b.depthsShell ? "#5eead4" : "#fca5a5";
+      drawCircle2(ctx, x, y, 2, col);
     }
   }
   function drawSpawnerChargeClocks(ctx, hunters, now) {
     for (const h of hunters) {
-      if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") continue;
+      if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner" && h.type !== "depthsBoltSpawner")
+        continue;
       if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
       if (now >= h.spawnDelayUntil) continue;
       const delayTotal = h.type === "airSpawner" ? 2.1 : 2;
@@ -9577,6 +9728,19 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const getBulwarkPlantedFlag = getBulwarkPlantedFlagDep ?? (() => null);
     const getDebugHunterTypeFilter = getDebugHunterTypeFilterDep ?? (() => null);
     const getSwampBootlegColourblind2 = getSwampBootlegColourblindDep ?? (() => false);
+    const DEPTHS_BOLT_AGENCY_DIST = HEX_SIZE * Math.sqrt(3) / 2;
+    const DEPTHS_BOLT_SPAWN_INTERVAL_SEC = 0.9;
+    const DEPTHS_SNIPER_ZONE_R_MULT = 3;
+    const DEPTHS_SNIPER_WINDUP_MULT = 0.8;
+    const DEPTHS_SHARD_SPREAD_RAD = 20 * Math.PI / 180;
+    const DEPTHS_SHARD_DASH_MULT = 3;
+    const DEPTHS_SHARD_BASE_DASH = 124;
+    let nextHunterUid = 0;
+    function pushHunter(h) {
+      nextHunterUid += 1;
+      h.hunterUid = nextHunterUid;
+      entities.hunters.push(h);
+    }
     const GHOST_PRED_OVERSHOOT_PX = 40;
     const GHOST_DASH_LEN_MIN = 72;
     const entities = {
@@ -9759,7 +9923,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       const target = player;
       if (!getDecoys().length) return target;
-      if (hunter.type === "chaser" || hunter.type === "frogChaser" || hunter.type === "fast") {
+      if (hunter.type === "chaser" || hunter.type === "frogChaser" || hunter.type === "fast" || hunter.type === "depthsShardChaser") {
         return nearestDecoy(hunter) || target;
       }
       if (hunter.type === "cutter") {
@@ -9774,7 +9938,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       for (const h of entities.hunters) {
         if (h === excludedHunter) continue;
         if (h.type === "depthsTentacle") continue;
-        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" && h.cryptDisguised)
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "depthsBoltSpawner" || h.type === "cryptSpawner" && h.cryptDisguised)
           continue;
         if (elapsed < (h.stunnedUntil || 0)) continue;
         if (hasLineOfSight(h, player)) return true;
@@ -9807,6 +9971,13 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       return { x: mixX / len, y: mixY / len };
     }
     function pickRegularHunterType() {
+      if (depthsPathActive()) {
+        const r = Math.random();
+        if (r < 0.25) return "depthsBoltSpawner";
+        if (r < 0.5) return "depthsShardChaser";
+        if (r < 0.75) return "depthsGrappleLaser";
+        return "sniper";
+      }
       if (relDifficultySurvivalSec() >= LATE_GAME_ELITE_SPAWN_SEC) {
         const er = Math.random();
         if (er < 0.055) return "airSpawner";
@@ -9843,8 +10014,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (type === "ghost") return 14;
       if (type === "depthsTentacle") return 8;
       if (type === "spawner" || type === "cryptSpawner") return 18;
-      if (type === "airSpawner") return 26;
-      if (type === "laser" || type === "laserBlue") return 13;
+      if (type === "airSpawner" || type === "depthsBoltSpawner") return 26;
+      if (type === "laser" || type === "laserBlue" || type === "depthsGrappleLaser") return 13;
+      if (type === "depthsShardChaser") return 10;
       if (type === "fast") return 9;
       if (type === "frogChaser") return 11;
       return 10;
@@ -9958,6 +10130,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         lastShotAt = elapsed + 999;
         if (opts?.boneSwarmPhasing) h.boneSwarmPhasing = true;
         if (opts?.swampMudSpawn) h.swampMudSpawn = true;
+        if (opts?.depthsBoltMinion) {
+          h.depthsBoltMinion = true;
+          h.depthsBoltUnagitated = true;
+          const bdx = opts.depthsBoltDir?.x ?? 1;
+          const bdy = opts.depthsBoltDir?.y ?? 0;
+          const bl = Math.hypot(bdx, bdy) || 1;
+          h.depthsBoltDir = { x: bdx / bl, y: bdy / bl };
+          h.depthsBoltOx = opts.depthsBoltOx != null ? opts.depthsBoltOx : h.x;
+          h.depthsBoltOy = opts.depthsBoltOy != null ? opts.depthsBoltOy : h.y;
+        }
       } else if (type === "spawner") {
         r = 18;
         life = 8;
@@ -9989,6 +10171,39 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         h.swarmInterval = 0.62;
         h.swarmN = 5;
         h.fastR = 10;
+      } else if (type === "depthsBoltSpawner") {
+        r = 26;
+        life = 9;
+        lastShotAt = elapsed + 999;
+        h.spawnDelayUntil = elapsed;
+        h.spawnActiveUntil = elapsed + 9;
+        h.nextSwarmAt = elapsed;
+        h.swarmInterval = DEPTHS_BOLT_SPAWN_INTERVAL_SEC;
+        h.swarmN = 1;
+        h.fastR = 10;
+      } else if (type === "depthsShardChaser") {
+        r = 10;
+        life = 8;
+        lastShotAt = elapsed + rand(0.3, 1.1);
+        if (opts?.shardClone) {
+          h.chaserDashPhase = "dashing";
+          h.chaserDashDir = { x: opts.shardDashDir.x, y: opts.shardDashDir.y };
+          h.chaserDashDist = opts.shardDashDist ?? DEPTHS_SHARD_BASE_DASH * DEPTHS_SHARD_DASH_MULT;
+          h.shardsSyncDashReady = opts.shardsSyncDashReady ?? elapsed + 1.65;
+        } else {
+          h.chaserDashPhase = "chase";
+          h.chaserDashNextReady = elapsed + rand(0.35, 1);
+        }
+      } else if (type === "depthsGrappleLaser") {
+        r = 13;
+        life = 8;
+        lastShotAt = elapsed + rand(0.6, 1.2);
+        h.laserState = "move";
+        h.aimStartedAt = 0;
+        h.nextLaserReadyAt = elapsed + rand(0.7, 1.4);
+        h.laserCooldown = 1;
+        h.laserWarning = 0.42;
+        h.laserAim = null;
       } else if (type === "depthsTentacle") {
         h.depthsSpinRad = 260 * Math.PI / 180;
         r = 8;
@@ -10041,6 +10256,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       h.life = life;
       h.dieAt = type === "depthsTentacle" ? h.dieAt : elapsed + life;
       h.lastShotAt = lastShotAt;
+      if (opts?.dieAtOverride != null) h.dieAt = opts.dieAtOverride;
       if (opts?.arenaNexusSpawn) {
         h.arenaNexusSpawn = true;
         h.dieAt = Math.max(h.dieAt, elapsed + ARENA_NEXUS_SIEGE_SEC + 2.5);
@@ -10062,10 +10278,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           h.y = customY;
         }
         if (type === "depthsTentacle") {
-          entities.hunters.push(h);
+          pushHunter(h);
           return;
         }
-        if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
+        if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner" || type === "depthsBoltSpawner") {
           for (let attempt = 0; attempt < 56; attempt++) {
             ejectSpawnerHunterFromSpecialHexFootprint(h);
             const circ = { x: h.x, y: h.y, r: h.r };
@@ -10077,10 +10293,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           }
         }
         relocateIfForbidden();
-        entities.hunters.push(h);
+        pushHunter(h);
         return;
       }
-      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
+      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner" || type === "depthsBoltSpawner") {
         for (let attempt = 0; attempt < 64; attempt++) {
           const ang2 = Math.random() * Math.PI * 2;
           const d2 = rand(320, 760);
@@ -10089,7 +10305,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           if (isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y)) continue;
           const circ = { x: h.x, y: h.y, r: h.r };
           if (collidesAnyObstacle(circ)) continue;
-          entities.hunters.push(h);
+          pushHunter(h);
           return;
         }
       }
@@ -10097,10 +10313,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const d = rand(320, 760);
       h.x = player.x + Math.cos(ang) * d;
       h.y = player.y + Math.sin(ang) * d;
-      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner")
+      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner" || type === "depthsBoltSpawner")
         ejectSpawnerHunterFromSpecialHexFootprint(h);
       relocateIfForbidden();
-      entities.hunters.push(h);
+      pushHunter(h);
     }
     function scheduleWaveSpawns() {
       const jobs = [];
@@ -10168,7 +10384,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           continue;
         }
         h.lastShotAt = elapsed;
-        const windup = SNIPER_ARTILLERY_WINDUP;
+        const firePath = getActivePathId() === "fire";
+        const depthSnipe = depthsPathActive() && !firePath;
+        const windup = depthSnipe ? SNIPER_ARTILLERY_WINDUP * DEPTHS_SNIPER_WINDUP_MULT : SNIPER_ARTILLERY_WINDUP;
         const leadT = windup * SNIPER_ARTILLERY_LEAD;
         const tvx = target === player ? player.velX ?? 0 : 0;
         const tvy = target === player ? player.velY ?? 0 : 0;
@@ -10180,8 +10398,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           h.lastShotAt = elapsed;
           continue;
         }
-        const firePath = getActivePathId() === "fire";
-        const zoneR = firePath ? 54 : 28;
+        const zoneRBase = firePath ? 54 : 28;
+        const zoneR = firePath ? zoneRBase : depthSnipe ? zoneRBase * DEPTHS_SNIPER_ZONE_R_MULT : zoneRBase;
         const lingerDur = firePath ? 4.6 : 1.8;
         const tickInterval = firePath ? 0.22 : 0.3;
         entities.dangerZones.push({
@@ -10195,7 +10413,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           tickInterval,
           windup,
           exploded: false,
-          firePath
+          firePath,
+          depthsSniperZone: depthSnipe
         });
         const dist = Math.hypot(aimX - h.x, aimY - h.y) || 1;
         entities.bullets.push({
@@ -10204,7 +10423,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           tx: aimX,
           ty: aimY,
           bornAt: elapsed,
-          life: clamp7(0.14 + dist / 2200, 0.16, 0.32)
+          life: clamp7(0.14 + dist / 2200, 0.16, 0.32),
+          depthsShell: depthSnipe
         });
       }
       for (let i = entities.bullets.length - 1; i >= 0; i--) {
@@ -10335,7 +10555,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         if (h.type === "spawner" || h.type === "cryptSpawner") continue;
         if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle") continue;
         const spDt = dt * spades13AuraEnemyDtMult();
-        if (h.type === "airSpawner") {
+        if (h.type === "airSpawner" || h.type === "depthsBoltSpawner") {
           const target = pickTargetForHunter(h);
           const desired2 = vectorToTarget(h, target);
           const sm2 = runLevelEnemySpeedMult();
@@ -10616,11 +10836,33 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const lifeSpan = h.life || Math.max(1e-4, h.dieAt - h.bornAt);
         const age = clamp7((elapsed - h.bornAt) / lifeSpan, 0, 1);
         const speedFactor = 1 + age * HUNTER_SPEED_AGE_COEFF;
-        const baseSpeed = h.type === "sniper" ? 100 : h.type === "cutter" ? 116 : h.type === "laser" || h.type === "laserBlue" ? h.type === "laserBlue" ? 156 : 138 : h.type === "ranged" ? 85 : h.type === "fast" ? 150 : 110;
+        const baseSpeed = h.type === "sniper" ? 100 : h.type === "cutter" ? 116 : h.type === "laser" || h.type === "laserBlue" || h.type === "depthsGrappleLaser" ? h.type === "laserBlue" ? 156 : 138 : h.type === "ranged" ? 85 : h.type === "fast" ? 150 : h.type === "depthsShardChaser" ? 110 : 110;
         const sm = runLevelEnemySpeedMult();
         const steerW = Math.min(0.42, 0.26 * runLevelEnemyAccelMult());
         const inertiaW = 1 - steerW;
         let speed = baseSpeed * sm * speedFactor * midgameEnemySpeedMult() * boneEnemySpeedMult();
+        if (h.type === "fast" && h.depthsBoltUnagitated) {
+          const boltDir = h.depthsBoltDir || { x: 1, y: 0 };
+          const boltSpeed = 468 * sm * speedFactor * midgameEnemySpeedMult() * boneEnemySpeedMult();
+          const { touchedObstacle } = moveCircleWithCollisions(
+            h,
+            boltDir.x * boltSpeed,
+            boltDir.y * boltSpeed,
+            spDt,
+            { blockValiantEnemyShockFields: true, ignoreObstacles: true }
+          );
+          if (touchedObstacle) h.depthsBoltUnagitated = false;
+          else {
+            const ox = Number(h.depthsBoltOx ?? h.x);
+            const oy = Number(h.depthsBoltOy ?? h.y);
+            const dx = h.x - ox;
+            const dy = h.y - oy;
+            if (dx * dx + dy * dy >= DEPTHS_BOLT_AGENCY_DIST * DEPTHS_BOLT_AGENCY_DIST) h.depthsBoltUnagitated = false;
+          }
+          h.dir.x = boltDir.x;
+          h.dir.y = boltDir.y;
+          continue;
+        }
         let desired;
         if (h.type === "cutter") {
           const target = pickTargetForHunter(h);
@@ -10644,8 +10886,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           const away = vectorToTarget(target, h);
           const toward = vectorToTarget(h, target);
           desired = d2 < 240 * 240 ? away : toward;
-        } else if (h.type === "laser" || h.type === "laserBlue") {
+        } else if (h.type === "laser" || h.type === "laserBlue" || h.type === "depthsGrappleLaser") {
           const isBlue = h.type === "laserBlue";
+          const isDepthsPurple = h.type === "depthsGrappleLaser";
           const target = pickTargetForHunter(h);
           const los = isBlue ? hasLineOfSight(h, target, { ignoreObstacles: true }) : hasLineOfSight(h, target);
           if (suppressRangedAttacksNow) {
@@ -10674,7 +10917,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                 active: true,
                 blueLaser: isBlue,
                 damageId: laserDamageId,
-                ...bone && !isBlue ? { boneGhostBeam: true } : {},
+                ...isDepthsPurple ? { depthsPurpleLaser: true } : {},
+                ...bone && !isBlue && !isDepthsPurple ? { boneGhostBeam: true } : {},
                 ...bone && isBlue ? { boneGhostBlueBeam: true } : {}
               });
               if (!hitDecoyAlongSegment(aim.x1, aim.y1, aim.x2, aim.y2, 5, { laserOneShotId: laserDamageId })) {
@@ -10719,7 +10963,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               warning: true,
               active: false,
               blueLaser: isBlue,
-              ...boneW && !isBlue ? { boneGhostBeam: true } : {},
+              ...isDepthsPurple ? { depthsPurpleLaser: true } : {},
+              ...boneW && !isBlue && !isDepthsPurple ? { boneGhostBeam: true } : {},
               ...boneW && isBlue ? { boneGhostBlueBeam: true } : {}
             });
             continue;
@@ -10728,38 +10973,58 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           const away = vectorToTarget(target, h);
           const toward = vectorToTarget(h, target);
           desired = d2 < 200 * 200 ? away : toward;
-        } else if (h.type === "chaser") {
+        } else if (h.type === "chaser" || h.type === "depthsShardChaser") {
           const target = pickTargetForHunter(h);
           const toT = vectorToTarget(h, target);
           const dist = Math.hypot(target.x - h.x, target.y - h.y);
+          const isShard = h.type === "depthsShardChaser";
+          const dashLenFull = isShard ? DEPTHS_SHARD_BASE_DASH * DEPTHS_SHARD_DASH_MULT : 124;
           if (h.chaserDashPhase === "windup") {
             h.dir.x = toT.x;
             h.dir.y = toT.y;
             if (elapsed >= h.chaserDashWindupEnd) {
+              if (isShard) {
+                const baseAng = Math.atan2(toT.y, toT.x);
+                const syncReady = elapsed + 1.92;
+                const sharedDie = h.dieAt;
+                for (const da of [-DEPTHS_SHARD_SPREAD_RAD, 0, DEPTHS_SHARD_SPREAD_RAD]) {
+                  const ang = baseAng + da;
+                  spawnHunter("depthsShardChaser", h.x, h.y, {
+                    shardClone: true,
+                    shardDashDir: { x: Math.cos(ang), y: Math.sin(ang) },
+                    shardDashDist: dashLenFull,
+                    shardsSyncDashReady: syncReady,
+                    dieAtOverride: sharedDie
+                  });
+                }
+                h._removeNow = true;
+                continue;
+              }
               h.chaserDashPhase = "dashing";
               h.chaserDashDir = { x: toT.x, y: toT.y };
-              h.chaserDashDist = 124;
+              h.chaserDashDist = dashLenFull;
             } else {
               continue;
             }
           }
           if (h.chaserDashPhase === "dashing") {
             const dashSpeed = 405 * sm * speedFactor * midgameEnemySpeedMult();
-            const stepLen = Math.min(dashSpeed * spDt, 24);
+            const stepCap = isShard ? 28 : 24;
+            const stepLen = Math.min(dashSpeed * spDt, stepCap);
             const nx = h.x + h.chaserDashDir.x * stepLen;
             const ny = h.y + h.chaserDashDir.y * stepLen;
             const test = { x: nx, y: ny, r: h.r };
-            if (outOfBoundsCircle(test) || collidesAnyObstacle(test) || !!collidesValiantEnemyShockFieldDep?.(test, elapsed)) {
+            const resumeChase = () => {
               h.chaserDashPhase = "chase";
-              h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
+              h.chaserDashNextReady = h.shardsSyncDashReady != null ? h.shardsSyncDashReady : elapsed + rand(1.45, 2.05);
+            };
+            if (outOfBoundsCircle(test) || collidesAnyObstacle(test) || !!collidesValiantEnemyShockFieldDep?.(test, elapsed)) {
+              resumeChase();
             } else {
               h.x = nx;
               h.y = ny;
               h.chaserDashDist -= stepLen;
-              if (h.chaserDashDist <= 0) {
-                h.chaserDashPhase = "chase";
-                h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
-              }
+              if (h.chaserDashDist <= 0) resumeChase();
             }
             continue;
           }
@@ -11032,15 +11297,36 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function updateSpawners() {
       const elapsed = getSimElapsed();
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner")
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsBoltSpawner")
           ejectSpawnerHunterFromSpecialHexFootprint(h);
       }
       for (const h of entities.hunters) {
-        if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") continue;
+        if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner" && h.type !== "depthsBoltSpawner")
+          continue;
         if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
         if (elapsed < h.spawnDelayUntil) continue;
         if (elapsed >= h.spawnActiveUntil) continue;
         if (elapsed < h.nextSwarmAt) continue;
+        if (h.type === "depthsBoltSpawner") {
+          const boltIv = Math.max(0.35, Number(h.swarmInterval) || DEPTHS_BOLT_SPAWN_INTERVAL_SEC);
+          let safety2 = 0;
+          while (elapsed >= h.nextSwarmAt && safety2 < 4) {
+            h.nextSwarmAt += boltIv;
+            safety2++;
+            const target = pickTargetForHunter(h);
+            const to = vectorToTarget(h, target);
+            const sx = h.x + to.x * (h.r + 12);
+            const sy = h.y + to.y * (h.r + 12);
+            const open = nearestLegalPointForSmallHunter(sx, sy, 9);
+            spawnHunter("fast", open.x, open.y, {
+              depthsBoltMinion: true,
+              depthsBoltDir: { x: to.x, y: to.y },
+              depthsBoltOx: open.x,
+              depthsBoltOy: open.y
+            });
+          }
+          continue;
+        }
         let safety = 0;
         while (elapsed >= h.nextSwarmAt && safety < 4) {
           h.nextSwarmAt += h.swarmInterval;
@@ -11062,7 +11348,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const halfArc = arcDeg * Math.PI / 360;
       const shieldR = player.r + 30;
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsBoltSpawner")
+          continue;
         const dx = h.x - player.x;
         const dy = h.y - player.y;
         const d = Math.hypot(dx, dy) || 1;
@@ -11140,7 +11427,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function tickLaserBeamExpiry() {
       const elapsed = getSimElapsed();
       for (let i = entities.laserBeams.length - 1; i >= 0; i--) {
-        if (elapsed >= entities.laserBeams[i].expiresAt) entities.laserBeams.splice(i, 1);
+        const b = entities.laserBeams[i];
+        if (b._orphanExpire || elapsed >= b.expiresAt) entities.laserBeams.splice(i, 1);
       }
     }
     function tickSpawnWavesAndLifetime() {
@@ -11219,7 +11507,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         const h = entities.hunters[i];
         const hq = worldToHex(h.x, h.y);
         if (hq.q !== q || hq.r !== r) continue;
-        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") {
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsBoltSpawner") {
           ejectSpawnerHunterFromSpecialHexFootprint(h);
           continue;
         }
@@ -11279,6 +11567,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       entities.swampPools.length = 0;
       entities.swampBursts.length = 0;
       boneGhostNextSpawnAt = null;
+      nextHunterUid = 0;
       spawnState.wave = 0;
       spawnState.spawnInterval = SPAWN_INTERVAL_START;
       spawnState.spawnScheduled.length = 0;
@@ -11300,8 +11589,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       drawSpawnerChargeClocks(ctx, entities.hunters, now);
       const colourblind = getSwampBootlegColourblind2();
+      const depthsPath = depthsPathActive();
       for (const h of entities.hunters) {
-        drawHunterBody(ctx, h, { colourblind, simElapsed: now });
+        drawHunterBody(ctx, h, { colourblind, simElapsed: now, depthsPath });
       }
       drawHunterLifeBars(ctx, entities.hunters, now);
       drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);
@@ -12607,17 +12897,40 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   var DEPTHS_TENTACLE_HIT_PROGRESS = 0.5;
   var DEPTHS_TENTACLE_BURST_PAUSE_SEC = 0.3;
   var DEPTHS_TENTACLE_BURST_INTERVAL_SEC = 0.2;
-  var DEPTHS_TENTACLE_BURST_SPAN_SEC = 0.6;
-  var DEPTHS_TENTACLE_SPAWN_RADIUS_PX = 120;
+  var DEPTHS_TENTACLE_BURST_SPAN_SEC = 1.2;
+  var DEPTHS_TENTACLE_SPAWN_RADIUS_PX = 320;
   var DEPTHS_TENTACLE_BURST_COUNT = Math.round(DEPTHS_TENTACLE_BURST_SPAN_SEC / DEPTHS_TENTACLE_BURST_INTERVAL_SEC) + 1;
+  var DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE = 1 / 5;
+  var DEPTHS_WHIRLPOOL_PULL_MULT = 2.88;
+  var DEPTHS_WHIRLPOOL_SWIRL_EDGE = 215;
+  var DEPTHS_WHIRLPOOL_CENTER_EPS = 20;
+  var DEPTHS_WHIRLPOOL_CENTER_STUN_SEC = 0.3;
+  var DEPTHS_WHIRLPOOL_TARGET_SEC = 0.48;
+  var DEPTHS_WHIRLPOOL_BITE_SEC = 0.4;
+  var DEPTHS_WHIRLPOOL_WARN_INNER_R = PLAYER_RADIUS * 4.2 * 2;
+  var DEPTHS_WHIRLPOOL_WARN_OUTER_R = PLAYER_RADIUS * 7.9 * 2;
+  var DEPTHS_WHIRLPOOL_ESCAPE_DIST = DEPTHS_WHIRLPOOL_WARN_OUTER_R + PLAYER_RADIUS * 2.2;
+  var DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_MULT = 0.96;
+  var DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R = DEPTHS_WHIRLPOOL_WARN_OUTER_R * DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_MULT;
+  var DEPTHS_WHIRLPOOL_BITE_HIT_R = DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R;
+  var DEPTHS_WHIRLPOOL_PULL_TIMEOUT_SEC = 4.5;
+  var DEPTHS_WHIRLPOOL_DASH_TELEPORT_MIN = 28;
+  var DEPTHS_WHIRLPOOL_TOOTH_VISUAL_SCALE = 0.75;
   function depthsStormHash01(n) {
     return (n * 134775813 + 1 & 2147483647) / 2147483647;
+  }
+  function getDepthsStormWaveWashTiming(idx) {
+    const washDur = 0.58 + depthsStormHash01(idx + 501) * 0.92;
+    const washStart = depthsStormHash01(idx + 709) * Math.max(0.08, DEPTHS_STORM_WAVE_PERIOD_SEC - washDur - 0.55);
+    return { washDur, washStart };
+  }
+  function depthsStormWaveUsesWhirlpoolInsteadOfWash(idx) {
+    return depthsStormHash01(idx + 3333) < DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE;
   }
   function getDepthsStormWaveState(simElapsed) {
     const idx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
     const cycle = simElapsed % DEPTHS_STORM_WAVE_PERIOD_SEC;
-    const washDur = 0.58 + depthsStormHash01(idx + 501) * 0.92;
-    const washStart = depthsStormHash01(idx + 709) * Math.max(0.08, DEPTHS_STORM_WAVE_PERIOD_SEC - washDur - 0.55);
+    const { washDur, washStart } = getDepthsStormWaveWashTiming(idx);
     const active = cycle >= washStart && cycle < washStart + washDur;
     const progress = active ? (cycle - washStart) / washDur : 0;
     const bandAngle = depthsStormHash01(idx + 923) * Math.PI * 2;
@@ -12720,7 +13033,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       HEX_DIRS,
       hexKey,
       getIsLunatic: () => activeCharacterId === "lunatic",
-      getSimElapsed: () => simElapsed
+      getSimElapsed: () => simElapsed,
+      getRunLevel: () => runLevel
     }), "specials", runLogger);
     const safehouseHexFlow = instrumentObjectMethods(createSafehouseHexFlow(), "safehouse", runLogger);
     specials.setOnProceduralSafehousePlaced(() => safehouseHexFlow.onProceduralSafehousePlaced());
@@ -12991,6 +13305,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     let depthsTentacleBurstScheduledWaveIdx = -1;
     let depthsTentacleBurstHitSim = 0;
     let depthsTentacleBurstLastSpawnK = -1;
+    let depthsWhirlpoolPhase = "idle";
+    let depthsWhirlpoolTriggeredWaveIdx = -1;
+    let depthsWhirlpoolQ = 0;
+    let depthsWhirlpoolR = 0;
+    let depthsWhirlpoolCx = 0;
+    let depthsWhirlpoolCy = 0;
+    let depthsWhirlpoolPhaseStartSim = 0;
+    let depthsWhirlpoolEscaped = false;
+    let depthsWhirlpoolLastTInWave = Number.NaN;
     const SWAMP_MUD_TRAIL_MAX = 58;
     const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
     const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
@@ -13223,6 +13546,292 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         ctx2.fill();
       }
     }
+    function endDepthsWhirlpoolEncounter() {
+      depthsWhirlpoolPhase = "idle";
+      depthsWhirlpoolEscaped = false;
+    }
+    function resetDepthsWhirlpoolForRun() {
+      endDepthsWhirlpoolEncounter();
+      depthsWhirlpoolTriggeredWaveIdx = -1;
+      depthsWhirlpoolPhaseStartSim = 0;
+      depthsWhirlpoolLastTInWave = Number.NaN;
+    }
+    function beginDepthsWhirlpoolEncounter(opts = {}) {
+      const markWaveIdx = opts.markWaveIdx !== void 0 && opts.markWaveIdx !== null ? opts.markWaveIdx : Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+      depthsWhirlpoolTriggeredWaveIdx = markWaveIdx;
+      const hx = worldToHex(player.x, player.y);
+      depthsWhirlpoolQ = hx.q;
+      depthsWhirlpoolR = hx.r;
+      tiles.voidHexTerrain(hx.q, hx.r);
+      lastPlayerHexKey = "";
+      ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+        player,
+        obstacles,
+        activePlayerHex,
+        activeHexes,
+        lastPlayerHexKey
+      }));
+      const wc = hexToWorld(depthsWhirlpoolQ, depthsWhirlpoolR);
+      depthsWhirlpoolCx = wc.x;
+      depthsWhirlpoolCy = wc.y;
+      depthsWhirlpoolPhase = "pull";
+      depthsWhirlpoolPhaseStartSim = simElapsed;
+      depthsWhirlpoolEscaped = false;
+    }
+    function tickDepthsWhirlpoolPhasesAfterMove(dt) {
+      if (pathRuntime.getCurrentPathId() !== "depths") {
+        if (depthsWhirlpoolPhase !== "idle") resetDepthsWhirlpoolForRun();
+        return;
+      }
+      const wc = Math.hypot(player.x - depthsWhirlpoolCx, player.y - depthsWhirlpoolCy);
+      if ((depthsWhirlpoolPhase === "target" || depthsWhirlpoolPhase === "bite") && wc > DEPTHS_WHIRLPOOL_ESCAPE_DIST) {
+        depthsWhirlpoolEscaped = true;
+      }
+      if (depthsWhirlpoolPhase === "pull") {
+        const cx = depthsWhirlpoolCx;
+        const cy = depthsWhirlpoolCy;
+        const radialSpeed = PLAYER_SPEED * DEPTHS_WHIRLPOOL_PULL_MULT;
+        const substeps = Math.min(12, Math.max(1, Math.ceil(radialSpeed * dt / 14)));
+        const subDt = dt / substeps;
+        const edgeR = HEX_SIZE * 1.08;
+        for (let k = 0; k < substeps; k++) {
+          const d = Math.max(0.5, Math.hypot(player.x - cx, player.y - cy));
+          const step = Math.min(radialSpeed * subDt, Math.max(0, d - DEPTHS_WHIRLPOOL_CENTER_EPS * 0.45));
+          if (d > 9) {
+            const swirl = DEPTHS_WHIRLPOOL_SWIRL_EDGE * subDt * clamp7(d / edgeR, 0.12, 1);
+            const tx = -(player.y - cy) / d;
+            const ty = (player.x - cx) / d;
+            player.x += tx * swirl;
+            player.y += ty * swirl;
+          }
+          if (step > 2e-3) {
+            player.x += (cx - player.x) / d * step;
+            player.y += (cy - player.y) / d * step;
+          }
+          const wr = resolvePlayerAgainstRects(player.x, player.y, player.r, obstaclesForPlayerCollision());
+          player.x = wr.x;
+          player.y = wr.y;
+        }
+        if (Math.hypot(player.x - depthsWhirlpoolCx, player.y - depthsWhirlpoolCy) < DEPTHS_WHIRLPOOL_CENTER_EPS) {
+          depthsWhirlpoolPhase = "target";
+          depthsWhirlpoolPhaseStartSim = simElapsed;
+          playerTimelockUntil = Math.max(playerTimelockUntil, simElapsed + DEPTHS_WHIRLPOOL_CENTER_STUN_SEC);
+        } else if (simElapsed - depthsWhirlpoolPhaseStartSim > DEPTHS_WHIRLPOOL_PULL_TIMEOUT_SEC) {
+          endDepthsWhirlpoolEncounter();
+        }
+      } else if (depthsWhirlpoolPhase === "target") {
+        if (simElapsed - depthsWhirlpoolPhaseStartSim >= DEPTHS_WHIRLPOOL_TARGET_SEC) {
+          depthsWhirlpoolPhase = "bite";
+          depthsWhirlpoolPhaseStartSim = simElapsed;
+        }
+      } else if (depthsWhirlpoolPhase === "bite") {
+        if (simElapsed - depthsWhirlpoolPhaseStartSim >= DEPTHS_WHIRLPOOL_BITE_SEC) {
+          const wc2 = Math.hypot(player.x - depthsWhirlpoolCx, player.y - depthsWhirlpoolCy);
+          if (!depthsWhirlpoolEscaped && wc2 <= DEPTHS_WHIRLPOOL_BITE_HIT_R + player.r * 0.65) {
+            damagePlayerThroughPath(1, { sourceX: depthsWhirlpoolCx, sourceY: depthsWhirlpoolCy });
+            playerDamage.bumpScreenShake(16, 0.24);
+          }
+          endDepthsWhirlpoolEncounter();
+        }
+      }
+    }
+    function drawWhirlpoolMawToothRing(ctx2, cx, cy, ringR, toothN, rotRad, biteT, ringIndex, emergeFromShadow01) {
+      if (ringR < 6) return;
+      const close = Math.min(1, Math.max(0, biteT));
+      const ts = DEPTHS_WHIRLPOOL_TOOTH_VISUAL_SCALE;
+      const spread = Math.PI / toothN * 0.72 * ts;
+      const tipReach = ringR * (0.1 + close * (0.84 + ringIndex * 0.2)) * ts;
+      const eRing = clamp7(emergeFromShadow01 * 1.08 - ringIndex * 0.11, 0, 1);
+      const sr = 14;
+      const sg = 10;
+      const sb = 20;
+      for (let i = 0; i < toothN; i++) {
+        const a = i / toothN * Math.PI * 2 + rotRad;
+        const wob = 0.88 + 0.12 * Math.sin(i * 2.07 + ringIndex * 1.4 + simElapsed * 3.5);
+        const hw = spread * wob;
+        const xL = cx + Math.cos(a - hw) * ringR;
+        const yL = cy + Math.sin(a - hw) * ringR;
+        const xR = cx + Math.cos(a + hw) * ringR;
+        const yR = cy + Math.sin(a + hw) * ringR;
+        const xT = cx + Math.cos(a) * (ringR - tipReach);
+        const yT = cy + Math.sin(a) * (ringR - tipReach);
+        ctx2.beginPath();
+        ctx2.moveTo(xL, yL);
+        ctx2.lineTo(xT, yT);
+        ctx2.lineTo(xR, yR);
+        ctx2.closePath();
+        const bone = 92 + (i + ringIndex * 7) % 7 * 4;
+        const gBone = 86 - ringIndex * 9;
+        const rBone = 78 - ringIndex * 7;
+        const br = Math.round(sr + (bone - sr) * eRing);
+        const bg = Math.round(sg + (gBone - sg) * eRing);
+        const bb = Math.round(sb + (rBone - sb) * eRing);
+        const baseA = 0.38 + 0.035 * Math.sin(simElapsed * 8 + i * 0.7);
+        const fillA = baseA * (0.28 + 0.72 * eRing) * 0.92;
+        ctx2.fillStyle = `rgba(${br}, ${bg}, ${bb}, ${fillA})`;
+        ctx2.fill();
+        const strokeBase = 0.38 + close * 0.22;
+        ctx2.strokeStyle = `rgba(6, 8, 14, ${strokeBase * (0.1 + 0.55 * eRing)})`;
+        ctx2.lineWidth = Math.max(0.85, 1.05 * ts);
+        ctx2.stroke();
+      }
+    }
+    function drawWhirlpoolAbyssalMawTarget(ctx2, cx, cy, ro, ri) {
+      const t = simElapsed;
+      ctx2.fillStyle = "rgba(6, 0, 14, 0.44)";
+      ctx2.beginPath();
+      if (typeof ctx2.ellipse === "function") {
+        ctx2.ellipse(cx, cy + ro * 0.52, ro * 1.44, ro * 0.53, 0, 0, Math.PI * 2);
+      } else {
+        ctx2.arc(cx, cy + ro * 0.52, ro * 1.22, 0, Math.PI * 2);
+      }
+      ctx2.fill();
+      const gThroat = ctx2.createRadialGradient(cx, cy, 2, cx, cy, ri * 1.42);
+      gThroat.addColorStop(0, "rgba(0, 0, 4, 0.92)");
+      gThroat.addColorStop(0.5, "rgba(12, 18, 34, 0.48)");
+      gThroat.addColorStop(1, "rgba(16, 26, 42, 0)");
+      ctx2.fillStyle = gThroat;
+      ctx2.beginPath();
+      ctx2.arc(cx, cy, ri * 1.15, 0, Math.PI * 2);
+      ctx2.fill();
+      const rawEmerge = clamp7((t - depthsWhirlpoolPhaseStartSim) / DEPTHS_WHIRLPOOL_TARGET_SEC, 0, 1);
+      const emerge = 1 - (1 - rawEmerge) ** 1.35;
+      const breathe = 0.05 * Math.sin(t * 5.5);
+      drawWhirlpoolMawToothRing(ctx2, cx, cy, DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R, 30, t * 0.3, breathe, 0, emerge);
+      drawWhirlpoolMawToothRing(ctx2, cx, cy, ro * 0.75, 24, -t * 0.24 + 0.42, breathe * 0.88, 1, emerge);
+      drawWhirlpoolMawToothRing(ctx2, cx, cy, ro * 0.55, 18, t * 0.44 + 0.78, breathe * 0.72, 2, emerge);
+      for (let k = 0; k < 26; k++) {
+        const a = k / 26 * Math.PI * 2 + t * 1.05;
+        const rr = ro * (0.82 + 0.035 * Math.sin(t * 2.6 + k));
+        const speckA = (k % 5 === 0 ? 0.14 : 0.09) * (0.25 + 0.75 * emerge);
+        ctx2.fillStyle = k % 5 === 0 ? `rgba(72, 48, 98, ${speckA})` : `rgba(28, 72, 78, ${speckA})`;
+        ctx2.beginPath();
+        ctx2.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 1.7 + k % 3 * 0.45, 0, Math.PI * 2);
+        ctx2.fill();
+      }
+    }
+    function drawWhirlpoolAbyssalMawBite(ctx2, cx, cy, ro, ri, u) {
+      const bite01 = u * u * (3 - 2 * u);
+      const chomp = 1 - (1 - bite01) ** 2.2;
+      ctx2.fillStyle = `rgba(10, 0, 16, ${0.4 + bite01 * 0.45})`;
+      ctx2.beginPath();
+      if (typeof ctx2.ellipse === "function") {
+        ctx2.ellipse(cx, cy + ro * 0.4, ro * (1.34 - bite01 * 0.52), ro * (0.5 - bite01 * 0.2), 0, 0, Math.PI * 2);
+      } else {
+        ctx2.arc(cx, cy, ro * (1.05 - bite01 * 0.28), 0, Math.PI * 2);
+      }
+      ctx2.fill();
+      const gGulp = ctx2.createRadialGradient(cx, cy, 0, cx, cy, ri * (1.5 - bite01 * 0.52));
+      gGulp.addColorStop(0, `rgba(0, 0, 2, ${0.68 + bite01 * 0.25})`);
+      gGulp.addColorStop(1, "rgba(8, 14, 26, 0)");
+      ctx2.fillStyle = gGulp;
+      ctx2.beginPath();
+      ctx2.arc(cx, cy, ri * 1.18, 0, Math.PI * 2);
+      ctx2.fill();
+      drawWhirlpoolMawToothRing(ctx2, cx, cy, DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R, 30, simElapsed * 0.3 + chomp * 0.62, chomp, 0, 1);
+      drawWhirlpoolMawToothRing(ctx2, cx, cy, ro * 0.75, 24, -simElapsed * 0.24 + 0.5 + chomp * 1.02, Math.min(1, chomp * 1.28), 1, 1);
+      drawWhirlpoolMawToothRing(
+        ctx2,
+        cx,
+        cy,
+        ro * 0.55 * (1 - chomp * 0.14),
+        18,
+        simElapsed * 0.46,
+        Math.min(1, chomp * 1.38 + 0.06),
+        2,
+        1
+      );
+      if (u > 0.72) {
+        const f = (u - 0.72) / 0.28;
+        const h = (1 - f) * (1 - f);
+        ctx2.fillStyle = `rgba(40, 36, 52, ${0.14 * h})`;
+        ctx2.beginPath();
+        ctx2.arc(cx, cy, ri * (0.48 - f * 0.22), 0, Math.PI * 2);
+        ctx2.fill();
+      }
+    }
+    function drawDepthsWhirlpoolWorld(ctx2) {
+      if (depthsWhirlpoolPhase === "idle") return;
+      const cx = depthsWhirlpoolCx;
+      const cy = depthsWhirlpoolCy;
+      const ro = DEPTHS_WHIRLPOOL_WARN_OUTER_R;
+      const ri = DEPTHS_WHIRLPOOL_WARN_INNER_R;
+      ctx2.save();
+      ctx2.lineJoin = "round";
+      if (depthsWhirlpoolPhase === "pull") {
+        const maxR = HEX_SIZE * 0.94;
+        const t = simElapsed;
+        ctx2.lineCap = "round";
+        const bowlPulse = 0.5 + 0.5 * Math.sin(t * 1.25);
+        const gBowl = ctx2.createRadialGradient(cx, cy, maxR * 0.06, cx, cy, maxR);
+        gBowl.addColorStop(0, `rgba(4, 16, 30, ${0.36 + bowlPulse * 0.06})`);
+        gBowl.addColorStop(0.42, "rgba(6, 36, 56, 0.2)");
+        gBowl.addColorStop(0.78, "rgba(10, 58, 82, 0.09)");
+        gBowl.addColorStop(1, "rgba(14, 76, 102, 0)");
+        ctx2.fillStyle = gBowl;
+        ctx2.beginPath();
+        ctx2.arc(cx, cy, maxR, 0, Math.PI * 2);
+        ctx2.fill();
+        const ringN = 5;
+        for (let r = 0; r < ringN; r++) {
+          const bandR = maxR * (0.26 + r * 0.145);
+          const sweep = Math.PI * 1.42;
+          const spin2 = t * (0.72 + r * 0.11);
+          const start = spin2 + r * 1.55;
+          ctx2.strokeStyle = `rgba(72, 158, 186, ${0.055 + (ringN - r) * 0.022})`;
+          ctx2.lineWidth = 4.2 - r * 0.65;
+          ctx2.beginPath();
+          ctx2.arc(cx, cy, bandR, start, start + sweep);
+          ctx2.stroke();
+        }
+        const spin = t * 2.15;
+        const arms = 6;
+        const turns = 2.28;
+        const segs = 50;
+        for (let s = 0; s < arms; s++) {
+          ctx2.beginPath();
+          for (let i = 0; i <= segs; i++) {
+            const u = i / segs;
+            const rad = 22 + u * (maxR - 26);
+            const ang = spin + u * turns * Math.PI * 2 + s / arms * Math.PI * 2;
+            const x = cx + Math.cos(ang) * rad;
+            const y = cy + Math.sin(ang) * rad;
+            if (i === 0) ctx2.moveTo(x, y);
+            else ctx2.lineTo(x, y);
+          }
+          const a = 0.12 + s % 3 * 0.028;
+          ctx2.strokeStyle = `rgba(148, 210, 228, ${a})`;
+          ctx2.lineWidth = 1.65;
+          ctx2.stroke();
+        }
+        const foamR = maxR * 0.81;
+        const tickN = 36;
+        for (let i = 0; i < tickN; i++) {
+          const a = i / tickN * Math.PI * 2 + t * 0.38;
+          const tickLen = 5 + i % 4 * 2.2;
+          const wobble = Math.sin(t * 2.1 + i * 0.61) * 1.5;
+          ctx2.strokeStyle = `rgba(200, 232, 242, ${0.08 + i % 5 * 0.018})`;
+          ctx2.lineWidth = 1.1;
+          ctx2.beginPath();
+          ctx2.moveTo(cx + Math.cos(a) * (foamR - tickLen + wobble), cy + Math.sin(a) * (foamR - tickLen + wobble));
+          ctx2.lineTo(cx + Math.cos(a) * (foamR + 3), cy + Math.sin(a) * (foamR + 3));
+          ctx2.stroke();
+        }
+        ctx2.strokeStyle = "rgba(52, 148, 176, 0.16)";
+        ctx2.lineWidth = 1;
+        ctx2.beginPath();
+        ctx2.arc(cx, cy, maxR * 0.97, 0, Math.PI * 2);
+        ctx2.stroke();
+      }
+      if (depthsWhirlpoolPhase === "target") {
+        drawWhirlpoolAbyssalMawTarget(ctx2, cx, cy, ro, ri);
+      }
+      if (depthsWhirlpoolPhase === "bite") {
+        const u = clamp7((simElapsed - depthsWhirlpoolPhaseStartSim) / DEPTHS_WHIRLPOOL_BITE_SEC, 0, 1);
+        drawWhirlpoolAbyssalMawBite(ctx2, cx, cy, ro, ri, u);
+      }
+      ctx2.restore();
+    }
     function drawDepthsAtmosphereWorld(ctx2, viewW, viewH) {
       const pad = 48;
       const x0 = cameraX - pad;
@@ -13264,14 +13873,15 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         ctx2.stroke();
       }
       ctx2.restore();
+      const depthsStormWaveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
       const dw = getDepthsStormWaveState(simElapsed);
-      if (dw.active) {
+      if (dw.active && !depthsStormWaveUsesWhirlpoolInsteadOfWash(depthsStormWaveIdx)) {
         const xMid = x0 + w * 0.5;
         const yMid = y0 + h * 0.5;
         const diag = Math.hypot(w, h) * 0.52 + dw.bandThickness;
         const xPosBase = -diag + dw.progress * (2 * diag);
         const shell = Math.sin(Math.PI * dw.progress);
-        const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+        const waveIdx = depthsStormWaveIdx;
         const ripplePhase = simElapsed * 1.65 + waveIdx * 2.71;
         const kRipple = 0.0108;
         const ampCrest = dw.bandThickness * 0.44;
@@ -14218,6 +14828,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       depthsStormLastProgress = -1;
       depthsTentacleBurstScheduledWaveIdx = -1;
       depthsTentacleBurstLastSpawnK = -1;
+      resetDepthsWhirlpoolForRun();
       hexEventRuntime?.reset();
       if (typeof character.resetRunState === "function") {
         character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
@@ -14538,6 +15149,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       depthsStormLastProgress = -1;
       depthsTentacleBurstScheduledWaveIdx = -1;
       depthsTentacleBurstLastSpawnK = -1;
+      resetDepthsWhirlpoolForRun();
       character = instrumentObjectMethods(createCharacterController(activeCharacterId, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
         skip: ["getAbilityHud"]
       });
@@ -14726,7 +15338,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (typeof value !== "string") return null;
       const v = value.trim();
       if (!v || v === "__all__") return null;
-      if (v === "chaser" || v === "frogChaser" || v === "cutter" || v === "sniper" || v === "ranged" || v === "laser" || v === "laserBlue" || v === "spawner" || v === "airSpawner" || v === "cryptSpawner" || v === "ghost" || v === "fast" || v === "depthsTentacle") {
+      if (v === "chaser" || v === "frogChaser" || v === "cutter" || v === "sniper" || v === "ranged" || v === "laser" || v === "laserBlue" || v === "spawner" || v === "airSpawner" || v === "cryptSpawner" || v === "ghost" || v === "fast" || v === "depthsTentacle" || v === "depthsBoltSpawner" || v === "depthsShardChaser" || v === "depthsGrappleLaser") {
         return v;
       }
       return null;
@@ -14743,6 +15355,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         depthsStormLastProgress = -1;
         depthsTentacleBurstScheduledWaveIdx = -1;
         depthsTentacleBurstLastSpawnK = -1;
+        resetDepthsWhirlpoolForRun();
       });
     }
     if (devHunterTypeFilterEl && "value" in devHunterTypeFilterEl) {
@@ -14759,6 +15372,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         depthsStormLastProgress = -1;
         depthsTentacleBurstScheduledWaveIdx = -1;
         depthsTentacleBurstLastSpawnK = -1;
+        resetDepthsWhirlpoolForRun();
       });
     }
     const debugRunLevelDecEl = document.getElementById("debug-run-level-dec");
@@ -14962,6 +15576,16 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       syncDeckHud();
       runLogger.log("debug", "populate build", { deckFilled: 13, backpackSlots: inventory2.backpackSlots.length });
+    });
+    document.getElementById("debug-depths-whirlpool-trigger")?.addEventListener("click", () => {
+      if (runDead) return;
+      if (pathRuntime.getCurrentPathId() !== "depths") {
+        runLogger.log("debug", "depths whirlpool: ignored (not on Depths path)");
+        return;
+      }
+      endDepthsWhirlpoolEncounter();
+      beginDepthsWhirlpoolEncounter();
+      runLogger.log("debug", "depths whirlpool: triggered manually");
     });
     function buildAbilityContext(dt) {
       return {
@@ -15209,6 +15833,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           if (Number.isFinite(v) && v > 0) speedMul = v;
         }
         const dt = rawDt * speedMul;
+        const whirlpoolFrameStartX = player.x;
+        const whirlpoolFrameStartY = player.y;
         const simPaused = simClockPaused();
         const paused = isWorldPaused();
         if (mobileUiEnabled && mobileUnpauseBtn) {
@@ -15441,15 +16067,21 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               hexEventRuntime?.clampPlayer(player);
             }
             if (!runDead && specialsSimUnpaused() && pathRuntime.getCurrentPathId() === "depths") {
-              const dw = getDepthsStormWaveState(simElapsed);
               const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+              const waveT = waveIdx * DEPTHS_STORM_WAVE_PERIOD_SEC;
+              const tInWave = simElapsed - waveT;
+              const { washStart } = getDepthsStormWaveWashTiming(waveIdx);
+              const isWhirlpoolWave = depthsStormWaveUsesWhirlpoolInsteadOfWash(waveIdx);
               if (waveIdx !== depthsStormLastWaveIdx) {
                 depthsStormLastWaveIdx = waveIdx;
                 depthsStormLastProgress = -1;
                 depthsTentacleBurstScheduledWaveIdx = -1;
                 depthsTentacleBurstLastSpawnK = -1;
+                resetDepthsWhirlpoolForRun();
               }
-              if (dw.active) {
+              const dw = getDepthsStormWaveState(simElapsed);
+              const wavePushActive = dw.active && !isWhirlpoolWave;
+              if (wavePushActive) {
                 const env = Math.sin(Math.PI * dw.progress);
                 const pushSpeed = PLAYER_SPEED * (DEPTHS_STORM_WAVE_PUSH_PEAK_MULT * env + DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT);
                 let wx = dw.travelX * pushSpeed * dt;
@@ -15470,6 +16102,14 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                   depthsTentacleBurstLastSpawnK = -1;
                 }
                 depthsStormLastProgress = dw.progress;
+              }
+              if (isWhirlpoolWave && depthsWhirlpoolPhase === "idle" && depthsWhirlpoolTriggeredWaveIdx !== waveIdx && Number.isFinite(depthsWhirlpoolLastTInWave) && depthsWhirlpoolLastTInWave < washStart && tInWave >= washStart) {
+                beginDepthsWhirlpoolEncounter({ markWaveIdx: waveIdx });
+              }
+              depthsWhirlpoolLastTInWave = tInWave;
+              tickDepthsWhirlpoolPhasesAfterMove(dt);
+              if (depthsWhirlpoolPhase !== "idle" && Math.hypot(player.x - whirlpoolFrameStartX, player.y - whirlpoolFrameStartY) >= DEPTHS_WHIRLPOOL_DASH_TELEPORT_MIN) {
+                depthsWhirlpoolEscaped = true;
               }
               if (huntersEnabled && hunterRuntime && depthsTentacleBurstScheduledWaveIdx === waveIdx && depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT) {
                 const burstStart = depthsTentacleBurstHitSim + DEPTHS_TENTACLE_BURST_PAUSE_SEC;
@@ -16016,6 +16656,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             glowBlur: 14
           } : void 0
         );
+        if (depthsPathActive) drawDepthsWhirlpoolWorld(ctx);
         if (hallsPathActive) drawHallsAtmosphereWorld(ctx, viewW, viewH);
         if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
         if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);

@@ -79,6 +79,18 @@ export function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - bx, py - by);
 }
 
+/** Closest point on segment (x1,y1)-(x2,y2) to (px,py); `u` is 0..1 along the segment. */
+export function closestPointOnSegment(px, py, x1, y1, x2, y2) {
+  const vx = x2 - x1;
+  const vy = y2 - y1;
+  const wx = px - x1;
+  const wy = py - y1;
+  const c2 = vx * vx + vy * vy;
+  if (c2 <= 1e-10) return { x: x1, y: y1, u: 0 };
+  const u = clamp((vx * wx + vy * wy) / c2, 0, 1);
+  return { x: x1 + u * vx, y: y1 + u * vy, u };
+}
+
 export function outOfBoundsCircle() {
   return false;
 }

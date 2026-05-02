@@ -145,6 +145,24 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const getDebugHunterTypeFilter = getDebugHunterTypeFilterDep ?? (() => null);
   const getSwampBootlegColourblind = getSwampBootlegColourblindDep ?? (() => false);
 
+  /** Half flat-to-flat span of one hex (pointy hex, `HEX_SIZE` = circumradius). */
+  const DEPTHS_BOLT_AGENCY_DIST = (HEX_SIZE * Math.sqrt(3)) / 2;
+  /** Time between single bolt-minion shots (`depthsBoltSpawner`). */
+  const DEPTHS_BOLT_SPAWN_INTERVAL_SEC = 0.9;
+  /** Depths sniper shells: ~3× default off–fire-path radius, shorter windup (non–fire-path only). */
+  const DEPTHS_SNIPER_ZONE_R_MULT = 3;
+  const DEPTHS_SNIPER_WINDUP_MULT = 0.8;
+  const DEPTHS_SHARD_SPREAD_RAD = (20 * Math.PI) / 180;
+  const DEPTHS_SHARD_DASH_MULT = 3;
+  const DEPTHS_SHARD_BASE_DASH = 124;
+
+  let nextHunterUid = 0;
+  function pushHunter(/** @type {any} */ h) {
+    nextHunterUid += 1;
+    h.hunterUid = nextHunterUid;
+    entities.hunters.push(h);
+  }
+
   /** Ghost dashes run to predicted target + this many pixels along aim (not a fixed world cap). */
   const GHOST_PRED_OVERSHOOT_PX = 40;
   const GHOST_DASH_LEN_MIN = 72;
@@ -357,7 +375,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
     const target = player;
     if (!getDecoys().length) return target;
-    if (hunter.type === "chaser" || hunter.type === "frogChaser" || hunter.type === "fast") {
+    if (
+      hunter.type === "chaser" ||
+      hunter.type === "frogChaser" ||
+      hunter.type === "fast" ||
+      hunter.type === "depthsShardChaser"
+    ) {
       return nearestDecoy(hunter) || target;
     }
     if (hunter.type === "cutter") {
@@ -373,7 +396,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     for (const h of entities.hunters) {
       if (h === excludedHunter) continue;
       if (h.type === "depthsTentacle") continue;
-      if (h.type === "spawner" || h.type === "airSpawner" || (h.type === "cryptSpawner" && h.cryptDisguised))
+      if (
+        h.type === "spawner" ||
+        h.type === "airSpawner" ||
+        h.type === "depthsBoltSpawner" ||
+        (h.type === "cryptSpawner" && h.cryptDisguised)
+      )
         continue;
       if (elapsed < (h.stunnedUntil || 0)) continue;
       if (hasLineOfSight(h, player)) return true;
@@ -408,6 +436,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function pickRegularHunterType() {
+    if (depthsPathActive()) {
+      const r = Math.random();
+      if (r < 0.25) return "depthsBoltSpawner";
+      if (r < 0.5) return "depthsShardChaser";
+      if (r < 0.75) return "depthsGrappleLaser";
+      return "sniper";
+    }
     if (relDifficultySurvivalSec() >= LATE_GAME_ELITE_SPAWN_SEC) {
       const er = Math.random();
       if (er < 0.055) return "airSpawner";
@@ -447,8 +482,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (type === "ghost") return 14;
     if (type === "depthsTentacle") return 8;
     if (type === "spawner" || type === "cryptSpawner") return 18;
-    if (type === "airSpawner") return 26;
-    if (type === "laser" || type === "laserBlue") return 13;
+    if (type === "airSpawner" || type === "depthsBoltSpawner") return 26;
+    if (type === "laser" || type === "laserBlue" || type === "depthsGrappleLaser") return 13;
+    if (type === "depthsShardChaser") return 10;
     if (type === "fast") return 9;
     if (type === "frogChaser") return 11;
     return 10;
@@ -572,6 +608,16 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       lastShotAt = elapsed + 999;
       if (opts?.boneSwarmPhasing) h.boneSwarmPhasing = true;
       if (opts?.swampMudSpawn) h.swampMudSpawn = true;
+      if (opts?.depthsBoltMinion) {
+        h.depthsBoltMinion = true;
+        h.depthsBoltUnagitated = true;
+        const bdx = opts.depthsBoltDir?.x ?? 1;
+        const bdy = opts.depthsBoltDir?.y ?? 0;
+        const bl = Math.hypot(bdx, bdy) || 1;
+        h.depthsBoltDir = { x: bdx / bl, y: bdy / bl };
+        h.depthsBoltOx = opts.depthsBoltOx != null ? opts.depthsBoltOx : h.x;
+        h.depthsBoltOy = opts.depthsBoltOy != null ? opts.depthsBoltOy : h.y;
+      }
     } else if (type === "spawner") {
       r = 18;
       life = 8;
@@ -603,6 +649,39 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.swarmInterval = 0.62;
       h.swarmN = 5;
       h.fastR = 10;
+    } else if (type === "depthsBoltSpawner") {
+      r = 26;
+      life = 9;
+      lastShotAt = elapsed + 999;
+      h.spawnDelayUntil = elapsed;
+      h.spawnActiveUntil = elapsed + 9;
+      h.nextSwarmAt = elapsed;
+      h.swarmInterval = DEPTHS_BOLT_SPAWN_INTERVAL_SEC;
+      h.swarmN = 1;
+      h.fastR = 10;
+    } else if (type === "depthsShardChaser") {
+      r = 10;
+      life = 8;
+      lastShotAt = elapsed + rand(0.3, 1.1);
+      if (opts?.shardClone) {
+        h.chaserDashPhase = "dashing";
+        h.chaserDashDir = { x: opts.shardDashDir.x, y: opts.shardDashDir.y };
+        h.chaserDashDist = opts.shardDashDist ?? DEPTHS_SHARD_BASE_DASH * DEPTHS_SHARD_DASH_MULT;
+        h.shardsSyncDashReady = opts.shardsSyncDashReady ?? elapsed + 1.65;
+      } else {
+        h.chaserDashPhase = "chase";
+        h.chaserDashNextReady = elapsed + rand(0.35, 1.0);
+      }
+    } else if (type === "depthsGrappleLaser") {
+      r = 13;
+      life = 8;
+      lastShotAt = elapsed + rand(0.6, 1.2);
+      h.laserState = "move";
+      h.aimStartedAt = 0;
+      h.nextLaserReadyAt = elapsed + rand(0.7, 1.4);
+      h.laserCooldown = 1.0;
+      h.laserWarning = 0.42;
+      h.laserAim = null;
     } else if (type === "depthsTentacle") {
       /** Total sweep during spin (not a full turn). */
       h.depthsSpinRad = (260 * Math.PI) / 180;
@@ -656,6 +735,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     h.life = life;
     h.dieAt = type === "depthsTentacle" ? h.dieAt : elapsed + life;
     h.lastShotAt = lastShotAt;
+    if (opts?.dieAtOverride != null) h.dieAt = opts.dieAtOverride;
     if (opts?.arenaNexusSpawn) {
       h.arenaNexusSpawn = true;
       h.dieAt = Math.max(h.dieAt, elapsed + ARENA_NEXUS_SIEGE_SEC + 2.5);
@@ -679,10 +759,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.y = customY;
       }
       if (type === "depthsTentacle") {
-        entities.hunters.push(h);
+        pushHunter(h);
         return;
       }
-      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
+      if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner" || type === "depthsBoltSpawner") {
         for (let attempt = 0; attempt < 56; attempt++) {
           ejectSpawnerHunterFromSpecialHexFootprint(h);
           const circ = { x: h.x, y: h.y, r: h.r };
@@ -694,11 +774,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         }
       }
       relocateIfForbidden();
-      entities.hunters.push(h);
+      pushHunter(h);
       return;
     }
 
-    if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
+    if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner" || type === "depthsBoltSpawner") {
       for (let attempt = 0; attempt < 64; attempt++) {
         const ang2 = Math.random() * Math.PI * 2;
         const d2 = rand(320, 760);
@@ -707,7 +787,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         if (isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y)) continue;
         const circ = { x: h.x, y: h.y, r: h.r };
         if (collidesAnyObstacle(circ)) continue;
-        entities.hunters.push(h);
+        pushHunter(h);
         return;
       }
     }
@@ -716,10 +796,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const d = rand(320, 760);
     h.x = player.x + Math.cos(ang) * d;
     h.y = player.y + Math.sin(ang) * d;
-    if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner")
+    if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner" || type === "depthsBoltSpawner")
       ejectSpawnerHunterFromSpecialHexFootprint(h);
     relocateIfForbidden();
-    entities.hunters.push(h);
+    pushHunter(h);
   }
 
   function scheduleWaveSpawns() {
@@ -795,7 +875,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         continue;
       }
       h.lastShotAt = elapsed;
-      const windup = SNIPER_ARTILLERY_WINDUP;
+      const firePath = getActivePathId() === "fire";
+      const depthSnipe = depthsPathActive() && !firePath;
+      const windup = depthSnipe ? SNIPER_ARTILLERY_WINDUP * DEPTHS_SNIPER_WINDUP_MULT : SNIPER_ARTILLERY_WINDUP;
       const leadT = windup * SNIPER_ARTILLERY_LEAD;
       const tvx = target === player ? (player.velX ?? 0) : 0;
       const tvy = target === player ? (player.velY ?? 0) : 0;
@@ -807,8 +889,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.lastShotAt = elapsed;
         continue;
       }
-      const firePath = getActivePathId() === "fire";
-      const zoneR = firePath ? 54 : 28;
+      const zoneRBase = firePath ? 54 : 28;
+      const zoneR = firePath ? zoneRBase : depthSnipe ? zoneRBase * DEPTHS_SNIPER_ZONE_R_MULT : zoneRBase;
       const lingerDur = firePath ? 4.6 : 1.8;
       const tickInterval = firePath ? 0.22 : 0.3;
       entities.dangerZones.push({
@@ -823,6 +905,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         windup,
         exploded: false,
         firePath,
+        depthsSniperZone: depthSnipe,
       });
       const dist = Math.hypot(aimX - h.x, aimY - h.y) || 1;
       entities.bullets.push({
@@ -832,6 +915,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         ty: aimY,
         bornAt: elapsed,
         life: clamp(0.14 + dist / 2200, 0.16, 0.32),
+        depthsShell: depthSnipe,
       });
     }
 
@@ -979,7 +1063,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle") continue;
       const spDt = dt * spades13AuraEnemyDtMult();
 
-      if (h.type === "airSpawner") {
+      if (h.type === "airSpawner" || h.type === "depthsBoltSpawner") {
         const target = pickTargetForHunter(h);
         const desired = vectorToTarget(h, target);
         const sm = runLevelEnemySpeedMult();
@@ -1283,7 +1367,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           ? 100
           : h.type === "cutter"
             ? 116
-            : h.type === "laser" || h.type === "laserBlue"
+            : h.type === "laser" || h.type === "laserBlue" || h.type === "depthsGrappleLaser"
               ? h.type === "laserBlue"
                 ? 156
                 : 138
@@ -1291,11 +1375,36 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
               ? 85
               : h.type === "fast"
                 ? 150
-                : 110;
+                : h.type === "depthsShardChaser"
+                  ? 110
+                  : 110;
       const sm = runLevelEnemySpeedMult();
       const steerW = Math.min(0.42, 0.26 * runLevelEnemyAccelMult());
       const inertiaW = 1 - steerW;
       let speed = baseSpeed * sm * speedFactor * midgameEnemySpeedMult() * boneEnemySpeedMult();
+
+      if (h.type === "fast" && h.depthsBoltUnagitated) {
+        const boltDir = h.depthsBoltDir || { x: 1, y: 0 };
+        const boltSpeed = 468 * sm * speedFactor * midgameEnemySpeedMult() * boneEnemySpeedMult();
+        const { touchedObstacle } = moveCircleWithCollisions(
+          h,
+          boltDir.x * boltSpeed,
+          boltDir.y * boltSpeed,
+          spDt,
+          { blockValiantEnemyShockFields: true, ignoreObstacles: true },
+        );
+        if (touchedObstacle) h.depthsBoltUnagitated = false;
+        else {
+          const ox = Number(h.depthsBoltOx ?? h.x);
+          const oy = Number(h.depthsBoltOy ?? h.y);
+          const dx = h.x - ox;
+          const dy = h.y - oy;
+          if (dx * dx + dy * dy >= DEPTHS_BOLT_AGENCY_DIST * DEPTHS_BOLT_AGENCY_DIST) h.depthsBoltUnagitated = false;
+        }
+        h.dir.x = boltDir.x;
+        h.dir.y = boltDir.y;
+        continue;
+      }
 
       let desired;
       if (h.type === "cutter") {
@@ -1320,8 +1429,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const away = vectorToTarget(target, h);
         const toward = vectorToTarget(h, target);
         desired = d2 < 240 * 240 ? away : toward;
-      } else if (h.type === "laser" || h.type === "laserBlue") {
+      } else if (h.type === "laser" || h.type === "laserBlue" || h.type === "depthsGrappleLaser") {
         const isBlue = h.type === "laserBlue";
+        const isDepthsPurple = h.type === "depthsGrappleLaser";
         const target = pickTargetForHunter(h);
         const los = isBlue ? hasLineOfSight(h, target, { ignoreObstacles: true }) : hasLineOfSight(h, target);
         if (suppressRangedAttacksNow) {
@@ -1351,7 +1461,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
               active: true,
               blueLaser: isBlue,
               damageId: laserDamageId,
-              ...(bone && !isBlue ? { boneGhostBeam: true } : {}),
+              ...(isDepthsPurple ? { depthsPurpleLaser: true } : {}),
+              ...(bone && !isBlue && !isDepthsPurple ? { boneGhostBeam: true } : {}),
               ...(bone && isBlue ? { boneGhostBlueBeam: true } : {}),
             });
             if (!hitDecoyAlongSegment(aim.x1, aim.y1, aim.x2, aim.y2, 5, { laserOneShotId: laserDamageId })) {
@@ -1401,7 +1512,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
             warning: true,
             active: false,
             blueLaser: isBlue,
-            ...(boneW && !isBlue ? { boneGhostBeam: true } : {}),
+            ...(isDepthsPurple ? { depthsPurpleLaser: true } : {}),
+            ...(boneW && !isBlue && !isDepthsPurple ? { boneGhostBeam: true } : {}),
             ...(boneW && isBlue ? { boneGhostBlueBeam: true } : {}),
           });
           continue;
@@ -1411,18 +1523,37 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const away = vectorToTarget(target, h);
         const toward = vectorToTarget(h, target);
         desired = d2 < 200 * 200 ? away : toward;
-      } else if (h.type === "chaser") {
+      } else if (h.type === "chaser" || h.type === "depthsShardChaser") {
         const target = pickTargetForHunter(h);
         const toT = vectorToTarget(h, target);
         const dist = Math.hypot(target.x - h.x, target.y - h.y);
+        const isShard = h.type === "depthsShardChaser";
+        const dashLenFull = isShard ? DEPTHS_SHARD_BASE_DASH * DEPTHS_SHARD_DASH_MULT : 124;
 
         if (h.chaserDashPhase === "windup") {
           h.dir.x = toT.x;
           h.dir.y = toT.y;
           if (elapsed >= h.chaserDashWindupEnd) {
+            if (isShard) {
+              const baseAng = Math.atan2(toT.y, toT.x);
+              const syncReady = elapsed + 1.92;
+              const sharedDie = h.dieAt;
+              for (const da of [-DEPTHS_SHARD_SPREAD_RAD, 0, DEPTHS_SHARD_SPREAD_RAD]) {
+                const ang = baseAng + da;
+                spawnHunter("depthsShardChaser", h.x, h.y, {
+                  shardClone: true,
+                  shardDashDir: { x: Math.cos(ang), y: Math.sin(ang) },
+                  shardDashDist: dashLenFull,
+                  shardsSyncDashReady: syncReady,
+                  dieAtOverride: sharedDie,
+                });
+              }
+              h._removeNow = true;
+              continue;
+            }
             h.chaserDashPhase = "dashing";
             h.chaserDashDir = { x: toT.x, y: toT.y };
-            h.chaserDashDist = 124;
+            h.chaserDashDist = dashLenFull;
           } else {
             continue;
           }
@@ -1430,25 +1561,27 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
         if (h.chaserDashPhase === "dashing") {
           const dashSpeed = 405 * sm * speedFactor * midgameEnemySpeedMult();
-          const stepLen = Math.min(dashSpeed * spDt, 24);
+          const stepCap = isShard ? 28 : 24;
+          const stepLen = Math.min(dashSpeed * spDt, stepCap);
           const nx = h.x + h.chaserDashDir.x * stepLen;
           const ny = h.y + h.chaserDashDir.y * stepLen;
           const test = { x: nx, y: ny, r: h.r };
+          const resumeChase = () => {
+            h.chaserDashPhase = "chase";
+            h.chaserDashNextReady =
+              h.shardsSyncDashReady != null ? h.shardsSyncDashReady : elapsed + rand(1.45, 2.05);
+          };
           if (
             outOfBoundsCircle(test) ||
             collidesAnyObstacle(test) ||
             !!collidesValiantEnemyShockFieldDep?.(test, elapsed)
           ) {
-            h.chaserDashPhase = "chase";
-            h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
+            resumeChase();
           } else {
             h.x = nx;
             h.y = ny;
             h.chaserDashDist -= stepLen;
-            if (h.chaserDashDist <= 0) {
-              h.chaserDashPhase = "chase";
-              h.chaserDashNextReady = elapsed + rand(1.45, 2.05);
-            }
+            if (h.chaserDashDist <= 0) resumeChase();
           }
           continue;
         }
@@ -1741,15 +1874,37 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function updateSpawners() {
     const elapsed = getSimElapsed();
     for (const h of entities.hunters) {
-      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner")
+      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsBoltSpawner")
         ejectSpawnerHunterFromSpecialHexFootprint(h);
     }
     for (const h of entities.hunters) {
-      if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") continue;
+      if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner" && h.type !== "depthsBoltSpawner")
+        continue;
       if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
       if (elapsed < h.spawnDelayUntil) continue;
       if (elapsed >= h.spawnActiveUntil) continue;
       if (elapsed < h.nextSwarmAt) continue;
+
+      if (h.type === "depthsBoltSpawner") {
+        const boltIv = Math.max(0.35, Number(h.swarmInterval) || DEPTHS_BOLT_SPAWN_INTERVAL_SEC);
+        let safety = 0;
+        while (elapsed >= h.nextSwarmAt && safety < 4) {
+          h.nextSwarmAt += boltIv;
+          safety++;
+          const target = pickTargetForHunter(h);
+          const to = vectorToTarget(h, target);
+          const sx = h.x + to.x * (h.r + 12);
+          const sy = h.y + to.y * (h.r + 12);
+          const open = nearestLegalPointForSmallHunter(sx, sy, 9);
+          spawnHunter("fast", open.x, open.y, {
+            depthsBoltMinion: true,
+            depthsBoltDir: { x: to.x, y: to.y },
+            depthsBoltOx: open.x,
+            depthsBoltOy: open.y,
+          });
+        }
+        continue;
+      }
 
       let safety = 0;
       while (elapsed >= h.nextSwarmAt && safety < 4) {
@@ -1780,7 +1935,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const shieldR = player.r + 30;
 
     for (const h of entities.hunters) {
-      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsBoltSpawner")
+        continue;
       const dx = h.x - player.x;
       const dy = h.y - player.y;
       const d = Math.hypot(dx, dy) || 1;
@@ -1866,7 +2022,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function tickLaserBeamExpiry() {
     const elapsed = getSimElapsed();
     for (let i = entities.laserBeams.length - 1; i >= 0; i--) {
-      if (elapsed >= entities.laserBeams[i].expiresAt) entities.laserBeams.splice(i, 1);
+      const b = entities.laserBeams[i];
+      if (b._orphanExpire || elapsed >= b.expiresAt) entities.laserBeams.splice(i, 1);
     }
   }
 
@@ -1950,7 +2107,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const h = entities.hunters[i];
       const hq = worldToHex(h.x, h.y);
       if (hq.q !== q || hq.r !== r) continue;
-      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") {
+      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsBoltSpawner") {
         ejectSpawnerHunterFromSpecialHexFootprint(h);
         continue;
       }
@@ -2014,6 +2171,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     entities.swampPools.length = 0;
     entities.swampBursts.length = 0;
     boneGhostNextSpawnAt = null;
+    nextHunterUid = 0;
     spawnState.wave = 0;
     spawnState.spawnInterval = SPAWN_INTERVAL_START;
     spawnState.spawnScheduled.length = 0;
@@ -2038,8 +2196,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
     drawSpawnerChargeClocks(ctx, entities.hunters, now);
     const colourblind = getSwampBootlegColourblind();
+    const depthsPath = depthsPathActive();
     for (const h of entities.hunters) {
-      drawHunterBody(ctx, h, { colourblind, simElapsed: now });
+      drawHunterBody(ctx, h, { colourblind, simElapsed: now, depthsPath });
     }
     drawHunterLifeBars(ctx, entities.hunters, now);
     drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);

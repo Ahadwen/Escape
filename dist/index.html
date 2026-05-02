@@ -2437,6 +2437,26 @@
         width: 100%;
       }
 
+      .dev-depths-events {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--escape-ui-border);
+      }
+
+      .dev-depths-events > span {
+        display: block;
+        margin: 0 0 8px;
+        font-weight: 600;
+        color: #94a3b8;
+        font-size: 11px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .dev-depths-events > button {
+        width: 100%;
+      }
+
       .dev-run-path {
         margin-top: 12px;
         padding-top: 10px;
@@ -2502,7 +2522,7 @@
         </div>
         <label for="debug-path-select">Path</label>
         <select id="debug-path-select" autocomplete="off">
-          <option value="__auto__">Auto (random at level 2)</option>
+          <option value="__auto__">Auto (early path L2–3, Depths/Halls L4+)</option>
         </select>
       </div>
       <div class="run-log-dev-actions" aria-label="Run log (last 30 entries)">
@@ -2537,6 +2557,10 @@
             <option value="cryptSpawner">cryptSpawner</option>
             <option value="ghost">ghost</option>
             <option value="fast">fast</option>
+            <option value="depthsTentacle">depthsTentacle</option>
+            <option value="depthsBoltSpawner">depthsBoltSpawner</option>
+            <option value="depthsShardChaser">depthsShardChaser</option>
+            <option value="depthsGrappleLaser">depthsGrappleLaser</option>
           </select>
         </div>
         <details class="run-log-collapsible">
@@ -2575,6 +2599,11 @@
         <div class="dev-item-row">
           <button id="debug-item-populate-build-button" type="button">Populate build</button>
         </div>
+      </div>
+      <div class="dev-depths-events" aria-label="Depths path debug events">
+        <span>Depths events</span>
+        <button id="debug-depths-whirlpool-trigger" type="button">Trigger whirlpool</button>
+        <p class="special-test-west-hint">Depths path only — voids your hex and starts pull / bite sequence.</p>
       </div>
     </div>
     <div class="page-with-side">
@@ -3048,6 +3077,6 @@
       </div>
     </div>
 
-      <script type="module" crossorigin src="./assets/main-BK_DxmRf.js"></script>
+      <script type="module" crossorigin src="./assets/main-DLBFeM_E.js"></script>
   </body>
 </html>

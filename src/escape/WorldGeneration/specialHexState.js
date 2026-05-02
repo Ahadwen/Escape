@@ -4,6 +4,9 @@ import {
   SPECIAL_PROCEDURAL_GRACE_SEC,
   SPECIAL_PROCEDURAL_POST_DESPAWN_LOCK_SEC,
   SPECIAL_PROCEDURAL_RAMP_STEP_SEC,
+  SAFEHOUSE_PROC_MIN_SIM_LEVEL_3_4_SEC,
+  SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_LO,
+  SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_HI,
 } from "../balance.js";
 
 /**
@@ -26,6 +29,7 @@ export function createSpecialHexRuntime({
   hexKey,
   getIsLunatic = () => false,
   getSimElapsed = () => 0,
+  getRunLevel = () => 0,
 }) {
   const west = HEX_DIRS[3];
   const westTestQ = west.q;
@@ -105,6 +109,13 @@ export function createSpecialHexRuntime({
     return null;
   }
 
+  /** Procedural safehouse only (not quartet specials). */
+  function isProceduralSafehouseEarlyCapBlocked(simNow) {
+    const lv = getRunLevel();
+    if (lv < SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_LO || lv > SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_HI) return false;
+    return simNow < SAFEHOUSE_PROC_MIN_SIM_LEVEL_3_4_SEC;
+  }
+
   function tryProceduralRareSpecialHex(q, r) {
     if (isSpawnHex(q, r)) return;
     if (isWestTestHex(q, r)) return;
@@ -145,6 +156,7 @@ export function createSpecialHexRuntime({
     if (getIsLunatic()) {
       const dSafe = proceduralSpecialDenominator(sim, safeRampBaseSim);
       if (Math.random() >= 1 / dSafe) return;
+      if (isProceduralSafehouseEarlyCapBlocked(sim)) return;
       proceduralSafehouse.add(k);
       onProceduralSafehousePlaced?.();
       safeRampBaseSim = sim;
@@ -166,6 +178,7 @@ export function createSpecialHexRuntime({
 
     const dSafe = proceduralSpecialDenominator(sim, safeRampBaseSim);
     if (Math.random() >= 1 / dSafe) return;
+    if (isProceduralSafehouseEarlyCapBlocked(sim)) return;
     proceduralSafehouse.add(k);
     onProceduralSafehousePlaced?.();
     safeRampBaseSim = sim;

@@ -54,6 +54,14 @@ export const SPECIAL_PROCEDURAL_DENOM_MIN = 12;
 /** Every this many seconds of sim time, the denominator decreases by 1 until `SPECIAL_PROCEDURAL_DENOM_MIN`. */
 export const SPECIAL_PROCEDURAL_RAMP_STEP_SEC = 10;
 
+/**
+ * Display levels 3–4 (`runLevel` 2–3): procedural safehouse cannot appear until `simElapsed` reaches this
+ * (other specials / Lunatic branch still use normal rules).
+ */
+export const SAFEHOUSE_PROC_MIN_SIM_LEVEL_3_4_SEC = 200;
+export const SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_LO = 2;
+export const SAFEHOUSE_PROC_EARLY_CAP_RUNLEVEL_HI = 3;
+
 const _SQRT3 = Math.sqrt(3);
 /** REFERENCE arena nexus — inner hex scale vs `HEX_SIZE` circumradius. */
 export const ARENA_NEXUS_INNER_HEX_SCALE = 0.62;

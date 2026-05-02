@@ -20,6 +20,9 @@ export function hunterPalette(type) {
       return { light: "#fde68a", core: "#d97706", shadow: "#78350f", rim: "#fcd34d", mark: "#fffbeb" };
     case "sniper":
       return { light: "#fbcfe8", core: "#db2777", shadow: "#831843", rim: "#f9a8d4", mark: "#fdf2f8" };
+    /** Depths path sniper — violet / abyss teal (matches bolt minion & grapple laser family). */
+    case "depthsSniper":
+      return { light: "#c4b5fd", core: "#5b21b6", shadow: "#1e1b4b", rim: "#2dd4bf", mark: "#e0e7ff" };
     case "laser":
       return { light: "#fecaca", core: "#ef4444", shadow: "#7f1d1d", rim: "#f87171", mark: "#fef2f2" };
     case "laserBlue":
@@ -28,12 +31,21 @@ export function hunterPalette(type) {
       return { light: "#fecdd3", core: "#e11d48", shadow: "#881337", rim: "#fb7185", mark: "#fff1f2" };
     case "airSpawner":
       return { light: "#ddd6fe", core: "#7c3aed", shadow: "#4c1d95", rim: "#a78bfa", mark: "#f5f3ff" };
+    case "depthsBoltSpawner":
+      return { light: "#99f6e4", core: "#0d9488", shadow: "#134e4a", rim: "#5eead4", mark: "#ccfbf1" };
+    case "depthsShardChaser":
+      return { light: "#e9d5ff", core: "#7e22ce", shadow: "#3b0764", rim: "#c084fc", mark: "#f3e8ff" };
+    case "depthsGrappleLaser":
+      return { light: "#a5f3fc", core: "#6366f1", shadow: "#312e81", rim: "#818cf8", mark: "#e0e7ff" };
     case "cryptSpawner":
       return { light: "#f8fafc", core: "#e2e8f0", shadow: "#475569", rim: "#f1f5f9", mark: "#ffffff" };
     case "ranged":
       return { light: "#bae6fd", core: "#0284c7", shadow: "#0c4a6e", rim: "#38bdf8", mark: "#f0f9ff" };
     case "fast":
       return { light: "#fed7aa", core: "#ea580c", shadow: "#7c2d12", rim: "#fb923c", mark: "#fff7ed" };
+    /** Depths bolt-spawner shot — not a spawn `type`; used from `drawHunterBody` when `h.depthsBoltMinion`. */
+    case "depthsBoltMinion":
+      return { light: "#a7f3d0", core: "#5b21b6", shadow: "#134e4a", rim: "#2dd4bf", mark: "#ede9fe" };
     case "ghost":
       return { light: "#f3f4f6", core: "#cbd5e1", shadow: "#6b7280", rim: "#e5e7eb", mark: "#ffffff" };
     default:
@@ -287,7 +299,7 @@ function drawDepthsTentacle(ctx, h, simElapsed) {
 
 /** @param {CanvasRenderingContext2D} ctx
  * @param {object} h
- * @param {{ colourblind?: boolean; simElapsed?: number }} [opts]
+ * @param {{ colourblind?: boolean; simElapsed?: number; depthsPath?: boolean }} [opts]
  */
 export function drawHunterBody(ctx, h, opts = {}) {
   if (h.type === "depthsTentacle") {
@@ -311,15 +323,21 @@ export function drawHunterBody(ctx, h, opts = {}) {
     return;
   }
   const boneSwarmGhostFast = h.type === "fast" && !!h.boneSwarmPhasing;
+  const depthsBoltFast = h.type === "fast" && !!h.depthsBoltMinion;
   const swampMudFast = h.type === "fast" && !!h.swampMudSpawn;
   const colourblind = !!opts.colourblind;
+  const depthsSniperPal = h.type === "sniper" && !!opts.depthsPath;
   const pal = colourblind
     ? { light: "#9ca89a", core: "#5a6658", shadow: "#3a4239", rim: "#6b7569", mark: "#b4c0b0" }
     : boneSwarmGhostFast
       ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" }
-      : swampMudFast
-        ? { light: "#5c4a3a", core: "#342a1f", shadow: "#120e0a", rim: "#3d3024", mark: "#2a2218" }
-        : hunterPalette(h.type);
+      : depthsBoltFast
+        ? hunterPalette("depthsBoltMinion")
+        : swampMudFast
+          ? { light: "#5c4a3a", core: "#342a1f", shadow: "#120e0a", rim: "#3d3024", mark: "#2a2218" }
+          : depthsSniperPal
+            ? hunterPalette("depthsSniper")
+            : hunterPalette(h.type);
   const { x, y, r } = h;
   const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
   const cryptRevealU = h.type === "cryptSpawner" ? clamp(Number(h.cryptRevealU ?? 1), 0, 1) : 1;
@@ -470,6 +488,38 @@ export function drawLaserBeamFancy(ctx, beam, now) {
   ctx.rotate(ang);
   ctx.lineCap = "round";
 
+  if (beam.depthsPurpleLaser) {
+    const t = beam.warning
+      ? clamp((now - beam.bornAt) / Math.max(0.001, beam.expiresAt - beam.bornAt), 0, 1)
+      : 0;
+    const fade = 0.48 + 0.5 * (1 - t * 0.3);
+    ctx.shadowBlur = 22;
+    ctx.shadowColor = "rgba(167, 139, 250, 0.5)";
+    const gWide = ctx.createLinearGradient(0, 0, len, 0);
+    gWide.addColorStop(0, `rgba(204, 251, 241, ${0.16 * fade})`);
+    gWide.addColorStop(0.38, `rgba(45, 212, 191, ${0.42 * fade + 0.12 * pulse})`);
+    gWide.addColorStop(0.72, `rgba(167, 139, 250, ${0.38 * fade})`);
+    gWide.addColorStop(1, `rgba(88, 28, 135, ${0.36 * fade})`);
+    ctx.strokeStyle = gWide;
+    ctx.lineWidth = (beam.warning ? 10 : 9) + pulse * 4;
+    if (beam.warning) ctx.setLineDash([15, 10]);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(len, 0);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(216, 180, 254, ${0.44 + 0.34 * pulse})`;
+    ctx.lineWidth = 2.8 + pulse * 1.6;
+    if (beam.warning) ctx.setLineDash([8, 12]);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(len, 0);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+    return;
+  }
+
   if (beam.warning) {
     const t = clamp((now - beam.bornAt) / Math.max(0.001, beam.expiresAt - beam.bornAt), 0, 1);
     const fade = 0.42 + 0.48 * (1 - t * 0.4);
@@ -609,20 +659,86 @@ export function drawLaserBeamFancy(ctx, beam, now) {
   ctx.restore();
 }
 
+/** Depths sniper linger: disk shrinks and fades as if the surface seals back over the strike. */
+function drawDepthsSniperZoneSinking(ctx, zone, now) {
+  const { x, y, r } = zone;
+  const t0 = zone.detonateAt;
+  const t1 = zone.lingerUntil ?? t0;
+  const raw = (now - t0) / Math.max(0.001, t1 - t0);
+  const u = clamp(raw, 0, 1);
+  const sink = u * u * (3 - 2 * u);
+  const visR = r * (1 - 0.3 * Math.pow(sink, 1.12));
+  const bodyA = (1 - sink * 0.94) * 0.52;
+
+  ctx.save();
+  const g = ctx.createRadialGradient(x, y, visR * 0.06, x, y, visR * 1.02);
+  g.addColorStop(0, `rgba(45, 212, 191, ${0.1 * (1 - sink * 0.85)})`);
+  g.addColorStop(0.32, `rgba(67, 56, 202, ${0.2 * bodyA})`);
+  g.addColorStop(0.58, `rgba(49, 46, 129, ${0.26 * bodyA})`);
+  g.addColorStop(0.88, `rgba(15, 23, 42, ${0.14 * bodyA})`);
+  g.addColorStop(1, "rgba(3, 8, 16, 0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, visR, 0, TAU);
+  ctx.fill();
+
+  const rimA = 0.62 * (1 - sink) * (1 - sink);
+  ctx.strokeStyle = `rgba(45, 212, 191, ${rimA})`;
+  ctx.lineWidth = 2.4 * (1 - sink * 0.72);
+  ctx.beginPath();
+  ctx.arc(x, y, visR * (0.9 - 0.08 * sink), 0, TAU);
+  ctx.stroke();
+
+  const lag = clamp((sink - 0.08) / 0.92, 0, 1);
+  if (lag > 0.02 && lag < 0.995) {
+    const ripR = r * (0.92 - 0.48 * lag);
+    ctx.strokeStyle = `rgba(167, 139, 250, ${0.38 * (1 - lag) * (1 - lag)})`;
+    ctx.lineWidth = 1.15 * (1 - lag);
+    ctx.beginPath();
+    ctx.arc(x, y, ripR, 0, TAU);
+    ctx.stroke();
+  }
+
+  const deep = ctx.createRadialGradient(x, y, visR * 0.02, x, y, visR * 0.88);
+  deep.addColorStop(0, `rgba(2, 6, 14, ${0.12 * sink})`);
+  deep.addColorStop(0.55, `rgba(4, 12, 24, ${0.35 * sink * sink})`);
+  deep.addColorStop(1, "rgba(2, 8, 18, 0)");
+  ctx.fillStyle = deep;
+  ctx.beginPath();
+  ctx.arc(x, y, visR * 0.96, 0, TAU);
+  ctx.fill();
+
+  ctx.restore();
+}
+
 function drawArtilleryDetonationBang(ctx, zone, u) {
   const { x, y, r } = zone;
   const fade = 1 - u * u;
   const coreR = r * (0.5 + 0.2 * (1 - u));
-  drawCircle(ctx, x, y, coreR, "#fef3c7", 0.38 * fade);
-  drawCircle(ctx, x, y, coreR * 0.42, "#fffbeb", 0.48 * fade);
-  const ringR = r * (0.4 + u * 1.25);
-  ctx.save();
-  ctx.strokeStyle = `rgba(254, 215, 170, ${0.72 * fade})`;
-  ctx.lineWidth = 2.6 * (1 - u * 0.45);
-  ctx.beginPath();
-  ctx.arc(x, y, ringR, 0, TAU);
-  ctx.stroke();
-  ctx.restore();
+  const depths = !!zone.depthsSniperZone;
+  if (depths) {
+    drawCircle(ctx, x, y, coreR, "#312e81", 0.44 * fade);
+    drawCircle(ctx, x, y, coreR * 0.42, "#5eead4", 0.36 * fade);
+    const ringR = r * (0.4 + u * 1.25);
+    ctx.save();
+    ctx.strokeStyle = `rgba(167, 139, 250, ${0.7 * fade})`;
+    ctx.lineWidth = 2.6 * (1 - u * 0.45);
+    ctx.beginPath();
+    ctx.arc(x, y, ringR, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    drawCircle(ctx, x, y, coreR, "#fef3c7", 0.38 * fade);
+    drawCircle(ctx, x, y, coreR * 0.42, "#fffbeb", 0.48 * fade);
+    const ringR = r * (0.4 + u * 1.25);
+    ctx.save();
+    ctx.strokeStyle = `rgba(254, 215, 170, ${0.72 * fade})`;
+    ctx.lineWidth = 2.6 * (1 - u * 0.45);
+    ctx.beginPath();
+    ctx.arc(x, y, ringR, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 export function drawDangerZones(ctx, dangerZones, now, sniperBangDuration) {
@@ -634,38 +750,59 @@ export function drawDangerZones(ctx, dangerZones, now, sniperBangDuration) {
     const inBang = zone.exploded && lingering && tSinceDet < sniperBangDuration;
 
     if (!zone.exploded) {
-      const pulse = 1 + Math.sin(now * 20) * 0.08;
-      const radius = zone.r * pulse;
+      const radius = zone.r * (1 - 0.045 * life);
       const firePath = !!zone.firePath;
-      drawCircle(ctx, zone.x, zone.y, radius, firePath ? "#dc2626" : "#ef4444", 0.25 + life * 0.4);
-      ctx.strokeStyle = firePath ? "#fb7185" : "#f87171";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(zone.x, zone.y, radius, 0, TAU);
-      ctx.stroke();
-      if (firePath) {
-        const inner = radius * (0.58 + 0.08 * Math.sin(now * 9));
-        drawCircle(ctx, zone.x, zone.y, inner, "#fb7185", 0.16 + 0.1 * life);
-        ctx.strokeStyle = "rgba(254, 226, 226, 0.55)";
+      const depthsSnipe = !!zone.depthsSniperZone;
+      if (depthsSnipe) {
+        drawCircle(ctx, zone.x, zone.y, radius, "#4c1d95", 0.22 + life * 0.42);
+        ctx.strokeStyle = "#2dd4bf";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(zone.x, zone.y, radius, 0, TAU);
+        ctx.stroke();
+        const inner = radius * 0.58;
+        drawCircle(ctx, zone.x, zone.y, inner, "#6d28d9", 0.14 + 0.12 * life);
+        ctx.strokeStyle = "rgba(196, 181, 253, 0.5)";
         ctx.lineWidth = 1.2;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, radius * 0.78, 0, TAU);
         ctx.stroke();
+      } else {
+        drawCircle(ctx, zone.x, zone.y, radius, firePath ? "#dc2626" : "#ef4444", 0.25 + life * 0.4);
+        ctx.strokeStyle = firePath ? "#fb7185" : "#f87171";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(zone.x, zone.y, radius, 0, TAU);
+        ctx.stroke();
+        if (firePath) {
+          const inner = radius * 0.58;
+          drawCircle(ctx, zone.x, zone.y, inner, "#fb7185", 0.16 + 0.1 * life);
+          ctx.strokeStyle = "rgba(254, 226, 226, 0.55)";
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.arc(zone.x, zone.y, radius * 0.78, 0, TAU);
+          ctx.stroke();
+        }
       }
     } else if (lingering) {
       const r = zone.r;
       const firePath = !!zone.firePath;
-      drawCircle(ctx, zone.x, zone.y, r, firePath ? "#991b1b" : "#9f1239", firePath ? 0.46 : 0.38);
-      ctx.strokeStyle = firePath ? "rgba(251, 113, 133, 0.95)" : "rgba(248, 113, 113, 0.95)";
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(zone.x, zone.y, r, 0, TAU);
-      ctx.stroke();
-      ctx.strokeStyle = "rgba(254, 202, 202, 0.55)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(zone.x, zone.y, r * 0.72, 0, TAU);
-      ctx.stroke();
+      const depthsSnipe = !!zone.depthsSniperZone;
+      if (depthsSnipe) {
+        drawDepthsSniperZoneSinking(ctx, zone, now);
+      } else {
+        drawCircle(ctx, zone.x, zone.y, r, firePath ? "#991b1b" : "#9f1239", firePath ? 0.46 : 0.38);
+        ctx.strokeStyle = firePath ? "rgba(251, 113, 133, 0.95)" : "rgba(248, 113, 113, 0.95)";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(zone.x, zone.y, r, 0, TAU);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(254, 202, 202, 0.55)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(zone.x, zone.y, r * 0.72, 0, TAU);
+        ctx.stroke();
+      }
       if (firePath) {
         const swirl = now * 2.6;
         const ringR = r * (0.5 + 0.08 * Math.sin(now * 7));
@@ -860,13 +997,15 @@ export function drawSniperBullets(ctx, bullets, now) {
     const life = clamp((now - b.bornAt) / b.life, 0, 1);
     const x = b.x + (b.tx - b.x) * life;
     const y = b.y + (b.ty - b.y) * life;
-    drawCircle(ctx, x, y, 2, "#fca5a5");
+    const col = b.depthsShell ? "#5eead4" : "#fca5a5";
+    drawCircle(ctx, x, y, 2, col);
   }
 }
 
 export function drawSpawnerChargeClocks(ctx, hunters, now) {
   for (const h of hunters) {
-    if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") continue;
+    if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner" && h.type !== "depthsBoltSpawner")
+      continue;
     if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
     if (now >= h.spawnDelayUntil) continue;
 

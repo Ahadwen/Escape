@@ -65,8 +65,25 @@ export function createGeneratedTilesManager({
     return { obstacles, activePlayerHex, activeHexes, lastPlayerHexKey };
   }
 
+  /** Replace cached obstacles for one hex with empty terrain (e.g. depths whirlpool). */
+  function voidHexTerrain(q, r) {
+    const key = hexKey(q, r);
+    const c = hexToWorld(q, r);
+    tryProceduralRareSpecialHex(q, r);
+    tileCache.set(
+      key,
+      generateHexTileObstacles(q, r, {
+        ...tileConfig,
+        centerX: c.x,
+        centerY: c.y,
+        emptyTerrain: true,
+      }),
+    );
+  }
+
   return {
     clearCache,
     ensureTilesForPlayer,
+    voidHexTerrain,
   };
 }

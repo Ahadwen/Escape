@@ -229,8 +229,44 @@ const DEPTHS_TENTACLE_SPAWN_RADIUS_PX = 320;
 const DEPTHS_TENTACLE_BURST_COUNT =
   Math.round(DEPTHS_TENTACLE_BURST_SPAN_SEC / DEPTHS_TENTACLE_BURST_INTERVAL_SEC) + 1;
 
+/** Deterministic chance each storm cycle is a whirlpool instead of the surge wash (no push / tentacle window). */
+const DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE = 1 / 5;
+/** Radial pull = `PLAYER_SPEED * mult` during whirlpool (must stay >1 so walking cannot cancel the drain). */
+const DEPTHS_WHIRLPOOL_PULL_MULT = 2.88;
+/** Tangential swirl (px/s) at the void edge; scales down toward the center. */
+const DEPTHS_WHIRLPOOL_SWIRL_EDGE = 215;
+const DEPTHS_WHIRLPOOL_CENTER_EPS = 20;
+/** No movement / abilities while gripped at the maw center (pull → target). */
+const DEPTHS_WHIRLPOOL_CENTER_STUN_SEC = 0.3;
+const DEPTHS_WHIRLPOOL_TARGET_SEC = 0.48;
+/** Bite phase duration — slightly longer so the tooth clamp reads clearly. */
+const DEPTHS_WHIRLPOOL_BITE_SEC = 0.4;
+/** Maw telegraph + strike radii (×2 vs original player-scale worm mouth). */
+const DEPTHS_WHIRLPOOL_WARN_INNER_R = PLAYER_RADIUS * 4.2 * 2;
+const DEPTHS_WHIRLPOOL_WARN_OUTER_R = PLAYER_RADIUS * 7.9 * 2;
+const DEPTHS_WHIRLPOOL_ESCAPE_DIST = DEPTHS_WHIRLPOOL_WARN_OUTER_R + PLAYER_RADIUS * 2.2;
+/** Same radius as outer tooth ring (`WARN_OUTER_R * mult`); bite damage uses this. */
+const DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_MULT = 0.96;
+const DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R = DEPTHS_WHIRLPOOL_WARN_OUTER_R * DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_MULT;
+const DEPTHS_WHIRLPOOL_BITE_HIT_R = DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R;
+const DEPTHS_WHIRLPOOL_PULL_TIMEOUT_SEC = 4.5;
+const DEPTHS_WHIRLPOOL_DASH_TELEPORT_MIN = 28;
+/** Tooth wedge span + reach only (`WARN_*` radii unchanged). ~0.75 ≈ quarter smaller teeth. */
+const DEPTHS_WHIRLPOOL_TOOTH_VISUAL_SCALE = 0.75;
+
 function depthsStormHash01(n) {
   return ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
+}
+
+/** Surge wash timing for one storm cycle index (same cadence as `getDepthsStormWaveState`). */
+function getDepthsStormWaveWashTiming(idx) {
+  const washDur = 0.58 + depthsStormHash01(idx + 501) * 0.92;
+  const washStart = depthsStormHash01(idx + 709) * Math.max(0.08, DEPTHS_STORM_WAVE_PERIOD_SEC - washDur - 0.55);
+  return { washDur, washStart };
+}
+
+function depthsStormWaveUsesWhirlpoolInsteadOfWash(idx) {
+  return depthsStormHash01(idx + 3333) < DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE;
 }
 
 /**
@@ -240,8 +276,7 @@ function depthsStormHash01(n) {
 function getDepthsStormWaveState(simElapsed) {
   const idx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
   const cycle = simElapsed % DEPTHS_STORM_WAVE_PERIOD_SEC;
-  const washDur = 0.58 + depthsStormHash01(idx + 501) * 0.92;
-  const washStart = depthsStormHash01(idx + 709) * Math.max(0.08, DEPTHS_STORM_WAVE_PERIOD_SEC - washDur - 0.55);
+  const { washDur, washStart } = getDepthsStormWaveWashTiming(idx);
   const active = cycle >= washStart && cycle < washStart + washDur;
   const progress = active ? (cycle - washStart) / washDur : 0;
   const bandAngle = depthsStormHash01(idx + 923) * Math.PI * 2;
@@ -360,6 +395,7 @@ function boot() {
     hexKey,
     getIsLunatic: () => activeCharacterId === "lunatic",
     getSimElapsed: () => simElapsed,
+    getRunLevel: () => runLevel,
   }), "specials", runLogger);
   const safehouseHexFlow = instrumentObjectMethods(createSafehouseHexFlow(), "safehouse", runLogger);
   specials.setOnProceduralSafehousePlaced(() => safehouseHexFlow.onProceduralSafehousePlaced());
@@ -672,6 +708,17 @@ function boot() {
   let depthsTentacleBurstHitSim = 0;
   /** Last burst spawn index spawned for this burst (`-1` before first). */
   let depthsTentacleBurstLastSpawnK = -1;
+  /** @type {"idle"|"pull"|"target"|"bite"} */
+  let depthsWhirlpoolPhase = "idle";
+  let depthsWhirlpoolTriggeredWaveIdx = -1;
+  let depthsWhirlpoolQ = 0;
+  let depthsWhirlpoolR = 0;
+  let depthsWhirlpoolCx = 0;
+  let depthsWhirlpoolCy = 0;
+  let depthsWhirlpoolPhaseStartSim = 0;
+  let depthsWhirlpoolEscaped = false;
+  /** Previous `simElapsed - waveT` within the current wave; `NaN` until first tick after a reset (avoids bogus wash-start cross). */
+  let depthsWhirlpoolLastTInWave = Number.NaN;
   const SWAMP_MUD_TRAIL_MAX = 58;
   const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
   const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
@@ -934,6 +981,319 @@ function boot() {
     }
   }
 
+  function endDepthsWhirlpoolEncounter() {
+    depthsWhirlpoolPhase = "idle";
+    depthsWhirlpoolEscaped = false;
+  }
+
+  function resetDepthsWhirlpoolForRun() {
+    endDepthsWhirlpoolEncounter();
+    depthsWhirlpoolTriggeredWaveIdx = -1;
+    depthsWhirlpoolPhaseStartSim = 0;
+    depthsWhirlpoolLastTInWave = Number.NaN;
+  }
+
+  /** @param {{ markWaveIdx?: number }} [opts] — `markWaveIdx` ties to storm wave so the natural spawn does not double-fire. */
+  function beginDepthsWhirlpoolEncounter(opts = {}) {
+    const markWaveIdx =
+      opts.markWaveIdx !== undefined && opts.markWaveIdx !== null
+        ? opts.markWaveIdx
+        : Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+    depthsWhirlpoolTriggeredWaveIdx = markWaveIdx;
+    const hx = worldToHex(player.x, player.y);
+    depthsWhirlpoolQ = hx.q;
+    depthsWhirlpoolR = hx.r;
+    tiles.voidHexTerrain(hx.q, hx.r);
+    lastPlayerHexKey = "";
+    ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+      player,
+      obstacles,
+      activePlayerHex,
+      activeHexes,
+      lastPlayerHexKey,
+    }));
+    const wc = hexToWorld(depthsWhirlpoolQ, depthsWhirlpoolR);
+    depthsWhirlpoolCx = wc.x;
+    depthsWhirlpoolCy = wc.y;
+    depthsWhirlpoolPhase = "pull";
+    depthsWhirlpoolPhaseStartSim = simElapsed;
+    depthsWhirlpoolEscaped = false;
+  }
+
+  function tickDepthsWhirlpoolPhasesAfterMove(dt) {
+    if (pathRuntime.getCurrentPathId() !== "depths") {
+      if (depthsWhirlpoolPhase !== "idle") resetDepthsWhirlpoolForRun();
+      return;
+    }
+    const wc = Math.hypot(player.x - depthsWhirlpoolCx, player.y - depthsWhirlpoolCy);
+    if ((depthsWhirlpoolPhase === "target" || depthsWhirlpoolPhase === "bite") && wc > DEPTHS_WHIRLPOOL_ESCAPE_DIST) {
+      depthsWhirlpoolEscaped = true;
+    }
+    if (depthsWhirlpoolPhase === "pull") {
+      const cx = depthsWhirlpoolCx;
+      const cy = depthsWhirlpoolCy;
+      const radialSpeed = PLAYER_SPEED * DEPTHS_WHIRLPOOL_PULL_MULT;
+      const substeps = Math.min(12, Math.max(1, Math.ceil((radialSpeed * dt) / 14)));
+      const subDt = dt / substeps;
+      const edgeR = HEX_SIZE * 1.08;
+      for (let k = 0; k < substeps; k++) {
+        const d = Math.max(0.5, Math.hypot(player.x - cx, player.y - cy));
+        const step = Math.min(radialSpeed * subDt, Math.max(0, d - DEPTHS_WHIRLPOOL_CENTER_EPS * 0.45));
+        if (d > 9) {
+          const swirl = DEPTHS_WHIRLPOOL_SWIRL_EDGE * subDt * clamp(d / edgeR, 0.12, 1);
+          const tx = -(player.y - cy) / d;
+          const ty = (player.x - cx) / d;
+          player.x += tx * swirl;
+          player.y += ty * swirl;
+        }
+        if (step > 0.002) {
+          player.x += ((cx - player.x) / d) * step;
+          player.y += ((cy - player.y) / d) * step;
+        }
+        const wr = resolvePlayerAgainstRects(player.x, player.y, player.r, obstaclesForPlayerCollision());
+        player.x = wr.x;
+        player.y = wr.y;
+      }
+      if (Math.hypot(player.x - depthsWhirlpoolCx, player.y - depthsWhirlpoolCy) < DEPTHS_WHIRLPOOL_CENTER_EPS) {
+        depthsWhirlpoolPhase = "target";
+        depthsWhirlpoolPhaseStartSim = simElapsed;
+        playerTimelockUntil = Math.max(playerTimelockUntil, simElapsed + DEPTHS_WHIRLPOOL_CENTER_STUN_SEC);
+      } else if (simElapsed - depthsWhirlpoolPhaseStartSim > DEPTHS_WHIRLPOOL_PULL_TIMEOUT_SEC) {
+        endDepthsWhirlpoolEncounter();
+      }
+    } else if (depthsWhirlpoolPhase === "target") {
+      if (simElapsed - depthsWhirlpoolPhaseStartSim >= DEPTHS_WHIRLPOOL_TARGET_SEC) {
+        depthsWhirlpoolPhase = "bite";
+        depthsWhirlpoolPhaseStartSim = simElapsed;
+      }
+    } else if (depthsWhirlpoolPhase === "bite") {
+      if (simElapsed - depthsWhirlpoolPhaseStartSim >= DEPTHS_WHIRLPOOL_BITE_SEC) {
+        const wc2 = Math.hypot(player.x - depthsWhirlpoolCx, player.y - depthsWhirlpoolCy);
+        if (!depthsWhirlpoolEscaped && wc2 <= DEPTHS_WHIRLPOOL_BITE_HIT_R + player.r * 0.65) {
+          damagePlayerThroughPath(1, { sourceX: depthsWhirlpoolCx, sourceY: depthsWhirlpoolCy });
+          playerDamage.bumpScreenShake(16, 0.24);
+        }
+        endDepthsWhirlpoolEncounter();
+      }
+    }
+  }
+
+  /** Dune-style maw rings: inward teeth, not tentacles. `biteT` 0 = open, 1 = clamped. `emerge01` 0 = shadow silhouette → 1 full bone. */
+  function drawWhirlpoolMawToothRing(ctx, cx, cy, ringR, toothN, rotRad, biteT, ringIndex, emergeFromShadow01) {
+    if (ringR < 6) return;
+    const close = Math.min(1, Math.max(0, biteT));
+    const ts = DEPTHS_WHIRLPOOL_TOOTH_VISUAL_SCALE;
+    const spread = (Math.PI / toothN) * 0.72 * ts;
+    /** Inward bite travel — higher `close` = tips reach much further toward the maw center. */
+    const tipReach = ringR * (0.1 + close * (0.84 + ringIndex * 0.2)) * ts;
+    const eRing = clamp(emergeFromShadow01 * 1.08 - ringIndex * 0.11, 0, 1);
+    const sr = 14;
+    const sg = 10;
+    const sb = 20;
+    for (let i = 0; i < toothN; i++) {
+      const a = (i / toothN) * Math.PI * 2 + rotRad;
+      const wob = 0.88 + 0.12 * Math.sin(i * 2.07 + ringIndex * 1.4 + simElapsed * 3.5);
+      const hw = spread * wob;
+      const xL = cx + Math.cos(a - hw) * ringR;
+      const yL = cy + Math.sin(a - hw) * ringR;
+      const xR = cx + Math.cos(a + hw) * ringR;
+      const yR = cy + Math.sin(a + hw) * ringR;
+      const xT = cx + Math.cos(a) * (ringR - tipReach);
+      const yT = cy + Math.sin(a) * (ringR - tipReach);
+      ctx.beginPath();
+      ctx.moveTo(xL, yL);
+      ctx.lineTo(xT, yT);
+      ctx.lineTo(xR, yR);
+      ctx.closePath();
+      const bone = 92 + ((i + ringIndex * 7) % 7) * 4;
+      const gBone = 86 - ringIndex * 9;
+      const rBone = 78 - ringIndex * 7;
+      const br = Math.round(sr + (bone - sr) * eRing);
+      const bg = Math.round(sg + (gBone - sg) * eRing);
+      const bb = Math.round(sb + (rBone - sb) * eRing);
+      const baseA = 0.38 + 0.035 * Math.sin(simElapsed * 8 + i * 0.7);
+      const fillA = baseA * (0.28 + 0.72 * eRing) * 0.92;
+      ctx.fillStyle = `rgba(${br}, ${bg}, ${bb}, ${fillA})`;
+      ctx.fill();
+      const strokeBase = 0.38 + close * 0.22;
+      ctx.strokeStyle = `rgba(6, 8, 14, ${strokeBase * (0.1 + 0.55 * eRing)})`;
+      ctx.lineWidth = Math.max(0.85, 1.05 * ts);
+      ctx.stroke();
+    }
+  }
+
+  function drawWhirlpoolAbyssalMawTarget(ctx, cx, cy, ro, ri) {
+    const t = simElapsed;
+    ctx.fillStyle = "rgba(6, 0, 14, 0.44)";
+    ctx.beginPath();
+    if (typeof ctx.ellipse === "function") {
+      ctx.ellipse(cx, cy + ro * 0.52, ro * 1.44, ro * 0.53, 0, 0, Math.PI * 2);
+    } else {
+      ctx.arc(cx, cy + ro * 0.52, ro * 1.22, 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    const gThroat = ctx.createRadialGradient(cx, cy, 2, cx, cy, ri * 1.42);
+    gThroat.addColorStop(0, "rgba(0, 0, 4, 0.92)");
+    gThroat.addColorStop(0.5, "rgba(12, 18, 34, 0.48)");
+    gThroat.addColorStop(1, "rgba(16, 26, 42, 0)");
+    ctx.fillStyle = gThroat;
+    ctx.beginPath();
+    ctx.arc(cx, cy, ri * 1.15, 0, Math.PI * 2);
+    ctx.fill();
+
+    const rawEmerge = clamp((t - depthsWhirlpoolPhaseStartSim) / DEPTHS_WHIRLPOOL_TARGET_SEC, 0, 1);
+    const emerge = 1 - (1 - rawEmerge) ** 1.35;
+    const breathe = 0.05 * Math.sin(t * 5.5);
+    drawWhirlpoolMawToothRing(ctx, cx, cy, DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R, 30, t * 0.3, breathe, 0, emerge);
+    drawWhirlpoolMawToothRing(ctx, cx, cy, ro * 0.75, 24, -t * 0.24 + 0.42, breathe * 0.88, 1, emerge);
+    drawWhirlpoolMawToothRing(ctx, cx, cy, ro * 0.55, 18, t * 0.44 + 0.78, breathe * 0.72, 2, emerge);
+
+    for (let k = 0; k < 26; k++) {
+      const a = (k / 26) * Math.PI * 2 + t * 1.05;
+      const rr = ro * (0.82 + 0.035 * Math.sin(t * 2.6 + k));
+      const speckA = (k % 5 === 0 ? 0.14 : 0.09) * (0.25 + 0.75 * emerge);
+      ctx.fillStyle = k % 5 === 0 ? `rgba(72, 48, 98, ${speckA})` : `rgba(28, 72, 78, ${speckA})`;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 1.7 + (k % 3) * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawWhirlpoolAbyssalMawBite(ctx, cx, cy, ro, ri, u) {
+    const bite01 = u * u * (3 - 2 * u);
+    /** Late snap: teeth clamp harder in the second half of the bite window. */
+    const chomp = 1 - (1 - bite01) ** 2.2;
+    ctx.fillStyle = `rgba(10, 0, 16, ${0.4 + bite01 * 0.45})`;
+    ctx.beginPath();
+    if (typeof ctx.ellipse === "function") {
+      ctx.ellipse(cx, cy + ro * 0.4, ro * (1.34 - bite01 * 0.52), ro * (0.5 - bite01 * 0.2), 0, 0, Math.PI * 2);
+    } else {
+      ctx.arc(cx, cy, ro * (1.05 - bite01 * 0.28), 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    const gGulp = ctx.createRadialGradient(cx, cy, 0, cx, cy, ri * (1.5 - bite01 * 0.52));
+    gGulp.addColorStop(0, `rgba(0, 0, 2, ${0.68 + bite01 * 0.25})`);
+    gGulp.addColorStop(1, "rgba(8, 14, 26, 0)");
+    ctx.fillStyle = gGulp;
+    ctx.beginPath();
+    ctx.arc(cx, cy, ri * 1.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    drawWhirlpoolMawToothRing(ctx, cx, cy, DEPTHS_WHIRLPOOL_OUTER_TOOTH_RING_R, 30, simElapsed * 0.3 + chomp * 0.62, chomp, 0, 1);
+    drawWhirlpoolMawToothRing(ctx, cx, cy, ro * 0.75, 24, -simElapsed * 0.24 + 0.5 + chomp * 1.02, Math.min(1, chomp * 1.28), 1, 1);
+    drawWhirlpoolMawToothRing(
+      ctx,
+      cx,
+      cy,
+      ro * 0.55 * (1 - chomp * 0.14),
+      18,
+      simElapsed * 0.46,
+      Math.min(1, chomp * 1.38 + 0.06),
+      2,
+      1,
+    );
+
+    if (u > 0.72) {
+      const f = (u - 0.72) / 0.28;
+      const h = (1 - f) * (1 - f);
+      ctx.fillStyle = `rgba(40, 36, 52, ${0.14 * h})`;
+      ctx.beginPath();
+      ctx.arc(cx, cy, ri * (0.48 - f * 0.22), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawDepthsWhirlpoolWorld(ctx) {
+    if (depthsWhirlpoolPhase === "idle") return;
+    const cx = depthsWhirlpoolCx;
+    const cy = depthsWhirlpoolCy;
+    const ro = DEPTHS_WHIRLPOOL_WARN_OUTER_R;
+    const ri = DEPTHS_WHIRLPOOL_WARN_INNER_R;
+    ctx.save();
+    ctx.lineJoin = "round";
+
+    if (depthsWhirlpoolPhase === "pull") {
+      const maxR = HEX_SIZE * 0.94;
+      const t = simElapsed;
+      ctx.lineCap = "round";
+
+      const bowlPulse = 0.5 + 0.5 * Math.sin(t * 1.25);
+      const gBowl = ctx.createRadialGradient(cx, cy, maxR * 0.06, cx, cy, maxR);
+      gBowl.addColorStop(0, `rgba(4, 16, 30, ${0.36 + bowlPulse * 0.06})`);
+      gBowl.addColorStop(0.42, "rgba(6, 36, 56, 0.2)");
+      gBowl.addColorStop(0.78, "rgba(10, 58, 82, 0.09)");
+      gBowl.addColorStop(1, "rgba(14, 76, 102, 0)");
+      ctx.fillStyle = gBowl;
+      ctx.beginPath();
+      ctx.arc(cx, cy, maxR, 0, Math.PI * 2);
+      ctx.fill();
+
+      const ringN = 5;
+      for (let r = 0; r < ringN; r++) {
+        const bandR = maxR * (0.26 + r * 0.145);
+        const sweep = Math.PI * 1.42;
+        const spin = t * (0.72 + r * 0.11);
+        const start = spin + r * 1.55;
+        ctx.strokeStyle = `rgba(72, 158, 186, ${0.055 + (ringN - r) * 0.022})`;
+        ctx.lineWidth = 4.2 - r * 0.65;
+        ctx.beginPath();
+        ctx.arc(cx, cy, bandR, start, start + sweep);
+        ctx.stroke();
+      }
+
+      const spin = t * 2.15;
+      const arms = 6;
+      const turns = 2.28;
+      const segs = 50;
+      for (let s = 0; s < arms; s++) {
+        ctx.beginPath();
+        for (let i = 0; i <= segs; i++) {
+          const u = i / segs;
+          const rad = 22 + u * (maxR - 26);
+          const ang = spin + u * turns * Math.PI * 2 + (s / arms) * Math.PI * 2;
+          const x = cx + Math.cos(ang) * rad;
+          const y = cy + Math.sin(ang) * rad;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        const a = 0.12 + (s % 3) * 0.028;
+        ctx.strokeStyle = `rgba(148, 210, 228, ${a})`;
+        ctx.lineWidth = 1.65;
+        ctx.stroke();
+      }
+
+      const foamR = maxR * 0.81;
+      const tickN = 36;
+      for (let i = 0; i < tickN; i++) {
+        const a = (i / tickN) * Math.PI * 2 + t * 0.38;
+        const tickLen = 5 + (i % 4) * 2.2;
+        const wobble = Math.sin(t * 2.1 + i * 0.61) * 1.5;
+        ctx.strokeStyle = `rgba(200, 232, 242, ${0.08 + (i % 5) * 0.018})`;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * (foamR - tickLen + wobble), cy + Math.sin(a) * (foamR - tickLen + wobble));
+        ctx.lineTo(cx + Math.cos(a) * (foamR + 3), cy + Math.sin(a) * (foamR + 3));
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = "rgba(52, 148, 176, 0.16)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, maxR * 0.97, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (depthsWhirlpoolPhase === "target") {
+      drawWhirlpoolAbyssalMawTarget(ctx, cx, cy, ro, ri);
+    }
+    if (depthsWhirlpoolPhase === "bite") {
+      const u = clamp((simElapsed - depthsWhirlpoolPhaseStartSim) / DEPTHS_WHIRLPOOL_BITE_SEC, 0, 1);
+      drawWhirlpoolAbyssalMawBite(ctx, cx, cy, ro, ri, u);
+    }
+    ctx.restore();
+  }
+
   /** Depths path: abyssal water wash, slow waves, rare lightning (world-anchored to camera). */
   function drawDepthsAtmosphereWorld(ctx, viewW, viewH) {
     const pad = 48;
@@ -982,14 +1342,15 @@ function boot() {
     }
     ctx.restore();
 
+    const depthsStormWaveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
     const dw = getDepthsStormWaveState(simElapsed);
-    if (dw.active) {
+    if (dw.active && !depthsStormWaveUsesWhirlpoolInsteadOfWash(depthsStormWaveIdx)) {
       const xMid = x0 + w * 0.5;
       const yMid = y0 + h * 0.5;
       const diag = Math.hypot(w, h) * 0.52 + dw.bandThickness;
       const xPosBase = -diag + dw.progress * (2 * diag);
       const shell = Math.sin(Math.PI * dw.progress);
-      const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+      const waveIdx = depthsStormWaveIdx;
       const ripplePhase = simElapsed * 1.65 + waveIdx * 2.71;
       const kRipple = 0.0108;
       const ampCrest = dw.bandThickness * 0.44;
@@ -2076,6 +2437,7 @@ function boot() {
     depthsStormLastProgress = -1;
     depthsTentacleBurstScheduledWaveIdx = -1;
     depthsTentacleBurstLastSpawnK = -1;
+    resetDepthsWhirlpoolForRun();
     hexEventRuntime?.reset();
     if (typeof character.resetRunState === "function") {
       character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
@@ -2437,6 +2799,7 @@ function boot() {
     depthsStormLastProgress = -1;
     depthsTentacleBurstScheduledWaveIdx = -1;
     depthsTentacleBurstLastSpawnK = -1;
+    resetDepthsWhirlpoolForRun();
     character = instrumentObjectMethods(createCharacterController(activeCharacterId, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
       skip: ["getAbilityHud"],
     });
@@ -2656,7 +3019,10 @@ function boot() {
       v === "cryptSpawner" ||
       v === "ghost" ||
       v === "fast" ||
-      v === "depthsTentacle"
+      v === "depthsTentacle" ||
+      v === "depthsBoltSpawner" ||
+      v === "depthsShardChaser" ||
+      v === "depthsGrappleLaser"
     ) {
       return v;
     }
@@ -2674,6 +3040,7 @@ function boot() {
       depthsStormLastProgress = -1;
       depthsTentacleBurstScheduledWaveIdx = -1;
       depthsTentacleBurstLastSpawnK = -1;
+      resetDepthsWhirlpoolForRun();
     });
   }
   if (devHunterTypeFilterEl && "value" in devHunterTypeFilterEl) {
@@ -2690,6 +3057,7 @@ function boot() {
       depthsStormLastProgress = -1;
       depthsTentacleBurstScheduledWaveIdx = -1;
       depthsTentacleBurstLastSpawnK = -1;
+      resetDepthsWhirlpoolForRun();
     });
   }
 
@@ -2919,6 +3287,17 @@ function boot() {
     }
     syncDeckHud();
     runLogger.log("debug", "populate build", { deckFilled: 13, backpackSlots: inventory.backpackSlots.length });
+  });
+
+  document.getElementById("debug-depths-whirlpool-trigger")?.addEventListener("click", () => {
+    if (runDead) return;
+    if (pathRuntime.getCurrentPathId() !== "depths") {
+      runLogger.log("debug", "depths whirlpool: ignored (not on Depths path)");
+      return;
+    }
+    endDepthsWhirlpoolEncounter();
+    beginDepthsWhirlpoolEncounter();
+    runLogger.log("debug", "depths whirlpool: triggered manually");
   });
 
   function buildAbilityContext(dt) {
@@ -3187,6 +3566,8 @@ function boot() {
       if (Number.isFinite(v) && v > 0) speedMul = v;
     }
     const dt = rawDt * speedMul;
+    const whirlpoolFrameStartX = player.x;
+    const whirlpoolFrameStartY = player.y;
 
     const simPaused = simClockPaused();
     const paused = isWorldPaused();
@@ -3447,15 +3828,21 @@ function boot() {
       }
 
       if (!runDead && specialsSimUnpaused() && pathRuntime.getCurrentPathId() === "depths") {
-        const dw = getDepthsStormWaveState(simElapsed);
         const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+        const waveT = waveIdx * DEPTHS_STORM_WAVE_PERIOD_SEC;
+        const tInWave = simElapsed - waveT;
+        const { washStart } = getDepthsStormWaveWashTiming(waveIdx);
+        const isWhirlpoolWave = depthsStormWaveUsesWhirlpoolInsteadOfWash(waveIdx);
         if (waveIdx !== depthsStormLastWaveIdx) {
           depthsStormLastWaveIdx = waveIdx;
           depthsStormLastProgress = -1;
           depthsTentacleBurstScheduledWaveIdx = -1;
           depthsTentacleBurstLastSpawnK = -1;
+          resetDepthsWhirlpoolForRun();
         }
-        if (dw.active) {
+        const dw = getDepthsStormWaveState(simElapsed);
+        const wavePushActive = dw.active && !isWhirlpoolWave;
+        if (wavePushActive) {
           const env = Math.sin(Math.PI * dw.progress);
           const pushSpeed =
             PLAYER_SPEED *
@@ -3484,6 +3871,24 @@ function boot() {
             depthsTentacleBurstLastSpawnK = -1;
           }
           depthsStormLastProgress = dw.progress;
+        }
+        if (
+          isWhirlpoolWave &&
+          depthsWhirlpoolPhase === "idle" &&
+          depthsWhirlpoolTriggeredWaveIdx !== waveIdx &&
+          Number.isFinite(depthsWhirlpoolLastTInWave) &&
+          depthsWhirlpoolLastTInWave < washStart &&
+          tInWave >= washStart
+        ) {
+          beginDepthsWhirlpoolEncounter({ markWaveIdx: waveIdx });
+        }
+        depthsWhirlpoolLastTInWave = tInWave;
+        tickDepthsWhirlpoolPhasesAfterMove(dt);
+        if (
+          depthsWhirlpoolPhase !== "idle" &&
+          Math.hypot(player.x - whirlpoolFrameStartX, player.y - whirlpoolFrameStartY) >= DEPTHS_WHIRLPOOL_DASH_TELEPORT_MIN
+        ) {
+          depthsWhirlpoolEscaped = true;
         }
         if (
           huntersEnabled &&
@@ -4091,6 +4496,7 @@ function boot() {
                   }
                 : undefined,
     );
+    if (depthsPathActive) drawDepthsWhirlpoolWorld(ctx);
     if (hallsPathActive) drawHallsAtmosphereWorld(ctx, viewW, viewH);
     if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
     if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);
