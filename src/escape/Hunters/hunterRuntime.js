@@ -21,6 +21,7 @@ import {
   LASER_BLUE_WARN_SEC,
   HUNTER_SPEED_AGE_COEFF,
   ENEMY_HIT_COOLDOWN_SEC,
+  BULWARK_POST_HIT_INVULN_SEC,
   BULWARK_CHARGE_WALL_STUN_SEC,
   BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN,
   BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC,
@@ -35,6 +36,8 @@ import {
   intersectsRectCircle,
   lineIntersectsRect,
   pointToSegmentDistance,
+  normalizeAngle,
+  annularSectorContainsCircle,
   outOfBoundsCircle,
 } from "./hunterGeometry.js";
 import {
@@ -220,6 +223,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function bonePathActive() {
     return getActivePathId() === "bone";
   }
+  function depthsPathActive() {
+    return getActivePathId() === "depths";
+  }
   function boneEnemySpeedMult() {
     return bonePathActive() ? 1.2 : 1;
   }
@@ -366,6 +372,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const player = getPlayer();
     for (const h of entities.hunters) {
       if (h === excludedHunter) continue;
+      if (h.type === "depthsTentacle") continue;
       if (h.type === "spawner" || h.type === "airSpawner" || (h.type === "cryptSpawner" && h.cryptDisguised))
         continue;
       if (elapsed < (h.stunnedUntil || 0)) continue;
@@ -438,6 +445,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function hunterRadiusForType(type) {
     if (type === "sniper") return 12;
     if (type === "ghost") return 14;
+    if (type === "depthsTentacle") return 8;
     if (type === "spawner" || type === "cryptSpawner") return 18;
     if (type === "airSpawner") return 26;
     if (type === "laser" || type === "laserBlue") return 13;
@@ -595,6 +603,39 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.swarmInterval = 0.62;
       h.swarmN = 5;
       h.fastR = 10;
+    } else if (type === "depthsTentacle") {
+      /** Total sweep during spin (not a full turn). */
+      h.depthsSpinRad = (260 * Math.PI) / 180;
+      r = 8;
+      lastShotAt = elapsed + 999;
+      const leg = nearestLegalPointForSmallHunter(customX ?? player.x, customY ?? player.y, 8);
+      h.depthsAnchorX = leg.x;
+      h.depthsAnchorY = leg.y;
+      h.depthsSpawnAt = elapsed;
+      const EMERGE = 0.38;
+      const COIL = 0.38;
+      const SPIN = 0.46 / 2.5;
+      const SPLASH = 0;
+      h.depthsEmergeEnd = elapsed + EMERGE;
+      h.depthsTelegraphEnd = h.depthsEmergeEnd;
+      h.depthsCoilEnd = h.depthsTelegraphEnd + COIL;
+      h.depthsStrikeEnd = h.depthsCoilEnd + SPIN;
+      h.depthsMotionEnd = h.depthsStrikeEnd;
+      h.depthsSplashEnd = h.depthsMotionEnd + SPLASH;
+      h.dieAt = h.depthsStrikeEnd;
+      life = Math.max(0.5, h.dieAt - elapsed);
+      h.depthsReach = 0;
+      h.depthsSlamDirX = 1;
+      h.depthsSlamDirY = 0;
+      h.depthsDamaged = false;
+      h.depthsCoilInit = false;
+      h.depthsCoilSign = (Math.floor(Math.abs((customX ?? 0) * 13 + (customY ?? 0) * 7)) & 1) === 0 ? -1 : 1;
+      h.depthsSlamPrevAngle = null;
+      h.depthsGrazedDecoys = [];
+      h.depthsSplashU = 0;
+      h.opacity = 1;
+      h.x = h.depthsAnchorX;
+      h.y = h.depthsAnchorY;
     } else if (type === "ghost") {
       r = 14;
       life = 20;
@@ -613,7 +654,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
     h.r = r;
     h.life = life;
-    h.dieAt = elapsed + life;
+    h.dieAt = type === "depthsTentacle" ? h.dieAt : elapsed + life;
     h.lastShotAt = lastShotAt;
     if (opts?.arenaNexusSpawn) {
       h.arenaNexusSpawn = true;
@@ -633,8 +674,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     };
 
     if (customX != null && customY != null) {
-      h.x = customX;
-      h.y = customY;
+      if (type !== "depthsTentacle") {
+        h.x = customX;
+        h.y = customY;
+      }
+      if (type === "depthsTentacle") {
+        entities.hunters.push(h);
+        return;
+      }
       if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
         for (let attempt = 0; attempt < 56; attempt++) {
           ejectSpawnerHunterFromSpecialHexFootprint(h);
@@ -929,7 +976,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         else h.cryptRevealU = 1;
       }
       if (h.type === "spawner" || h.type === "cryptSpawner") continue;
-      if (elapsed < (h.stunnedUntil || 0)) continue;
+      if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle") continue;
       const spDt = dt * spades13AuraEnemyDtMult();
 
       if (h.type === "airSpawner") {
@@ -1071,6 +1118,161 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           }
           continue;
         }
+      }
+
+      if (h.type === "depthsTentacle") {
+        const ax = h.depthsAnchorX;
+        const ay = h.depthsAnchorY;
+        const emergeEnd = h.depthsEmergeEnd;
+        const telegraphEnd = h.depthsTelegraphEnd;
+        const coilEnd = h.depthsCoilEnd;
+        const strikeEnd = h.depthsStrikeEnd;
+        const motionEnd = h.depthsMotionEnd;
+        const splashEnd = h.depthsSplashEnd;
+
+        const aimToPlayer = () => {
+          const ddx = player.x - ax;
+          const ddy = player.y - ay;
+          const dlen = Math.hypot(ddx, ddy) || 1;
+          return { ux: ddx / dlen, uy: ddy / dlen, dst: dlen };
+        };
+
+        const placeTip = (reach, ux, uy) => {
+          h.depthsReach = reach;
+          h.depthsSlamDirX = ux;
+          h.depthsSlamDirY = uy;
+          h.dir = { x: ux, y: uy };
+          h.x = ax + ux * reach;
+          h.y = ay + uy * reach;
+        };
+
+        const placeTipOnArc = (theta) => {
+          const px = h.depthsPivotX;
+          const py = h.depthsPivotY;
+          const R = h.depthsArcR;
+          h.depthsReach = R;
+          h.depthsSlamDirX = Math.cos(theta);
+          h.depthsSlamDirY = Math.sin(theta);
+          h.dir = { x: h.depthsSlamDirX, y: h.depthsSlamDirY };
+          h.x = px + R * Math.cos(theta);
+          h.y = py + R * Math.sin(theta);
+        };
+
+        if (elapsed < emergeEnd) {
+          const span = Math.max(1e-4, emergeEnd - h.depthsSpawnAt);
+          const u = clamp((elapsed - h.depthsSpawnAt) / span, 0, 1);
+          const ease = 1 - Math.pow(1 - u, 2.05);
+          const aim = aimToPlayer();
+          const reach = Math.min(aim.dst * 0.76, 188) * ease;
+          placeTip(reach, aim.ux, aim.uy);
+          h.opacity = 0.35 + 0.6 * ease;
+          continue;
+        }
+        if (elapsed < coilEnd) {
+          if (!h.depthsCoilInit) {
+            h.depthsCoilInit = true;
+            const aim = aimToPlayer();
+            h.depthsLockedUx = aim.ux;
+            h.depthsLockedUy = aim.uy;
+            h.depthsR0 = Math.max(8, h.depthsReach);
+            const ux = h.depthsLockedUx;
+            const uy = h.depthsLockedUy;
+            const perpX = -uy * h.depthsCoilSign;
+            const perpY = ux * h.depthsCoilSign;
+            const d0 = h.depthsR0;
+            h.depthsPivotX = ax + ux * (d0 * 0.18) + perpX * (d0 * 0.38);
+            h.depthsPivotY = ay + uy * (d0 * 0.18) + perpY * (d0 * 0.38);
+            const t0x = ax + ux * d0;
+            const t0y = ay + uy * d0;
+            const dx0 = t0x - h.depthsPivotX;
+            const dy0 = t0y - h.depthsPivotY;
+            h.depthsArcR = Math.hypot(dx0, dy0) || 1;
+            h.depthsAngleTele = Math.atan2(dy0, dx0);
+            const COIL_RAD = (74 * Math.PI) / 180;
+            h.depthsAngleCoiled = h.depthsAngleTele - h.depthsCoilSign * COIL_RAD;
+          }
+          const span = Math.max(1e-4, coilEnd - telegraphEnd);
+          const cu = clamp((elapsed - telegraphEnd) / span, 0, 1);
+          const smooth = cu * cu * (3 - 2 * cu);
+          const th = h.depthsAngleTele + (h.depthsAngleCoiled - h.depthsAngleTele) * smooth;
+          placeTipOnArc(th);
+          h.opacity = 0.82 + 0.12 * Math.sin(elapsed * 18);
+          continue;
+        }
+        if (elapsed < strikeEnd) {
+          const span = Math.max(1e-4, strikeEnd - coilEnd);
+          const su = clamp((elapsed - coilEnd) / span, 0, 1);
+          /** ~constant angular speed full turn; ends with non-zero slope into splash fade. */
+          const spinEase = su * (1.16 - 0.16 * su);
+          const spinRad = Number(h.depthsSpinRad ?? (260 * Math.PI) / 180);
+          const th = h.depthsAngleCoiled + h.depthsCoilSign * spinRad * spinEase;
+          const prevTh = h.depthsSlamPrevAngle == null ? th : h.depthsSlamPrevAngle;
+          placeTipOnArc(th);
+          h.opacity = 1;
+
+          const ox = h.depthsPivotX;
+          const oy = h.depthsPivotY;
+          const rMin = 0;
+          const rMax = h.depthsArcR + 88;
+          const dAng = Math.abs(normalizeAngle(th - prevTh));
+
+          if (dAng > 0.006 && su >= 0.03 && elapsed >= (h.hitLockUntil ?? 0)) {
+            const pdx = player.x - ox;
+            const pdy = player.y - oy;
+            const pDist = Math.hypot(pdx, pdy);
+            const pivotNear =
+              pDist <= player.r + 26 &&
+              pDist <= rMax + player.r + 12 &&
+              su >= 0.04;
+            const sectorHit = annularSectorContainsCircle(
+              ox,
+              oy,
+              rMin,
+              rMax,
+              prevTh,
+              th,
+              player.x,
+              player.y,
+              player.r + 12,
+            );
+            if (!h.depthsDamaged && (sectorHit || pivotNear)) {
+              damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+              h.depthsDamaged = true;
+            }
+
+            const grazed = h.depthsGrazedDecoys;
+            const decoys = getDecoys();
+            const nowHit = getSimElapsed();
+            for (let di = decoys.length - 1; di >= 0; di--) {
+              const d = decoys[di];
+              if (grazed.includes(d)) continue;
+              const dr = d.r ?? 10;
+              const ddx = d.x - ox;
+              const ddy = d.y - oy;
+              const dDist = Math.hypot(ddx, ddy);
+              const decoyPivotNear = dDist <= dr + 22 && dDist <= rMax + dr + 6;
+              if (
+                !annularSectorContainsCircle(ox, oy, rMin, rMax, prevTh, th, d.x, d.y, dr + 6) &&
+                !decoyPivotNear
+              )
+                continue;
+              grazed.push(d);
+              if (nowHit < (d.invulnerableUntil ?? 0)) continue;
+              d.hp = Math.max(0, (d.hp ?? 1) - 1);
+              if (d.kind === "bulwarkFlag") d.invulnerableUntil = nowHit + BULWARK_POST_HIT_INVULN_SEC;
+              if (d.hp <= 0 && d.kind !== "bulwarkFlag") decoys.splice(di, 1);
+            }
+          }
+
+          h.depthsSlamPrevAngle = th;
+          continue;
+        }
+        if (elapsed < splashEnd) {
+          h.depthsSplashU = clamp((elapsed - motionEnd) / Math.max(1e-4, splashEnd - motionEnd), 0, 1);
+          h.opacity = (1 - h.depthsSplashU) * 0.95;
+          continue;
+        }
+        continue;
       }
 
       const lifeSpan = h.life || Math.max(0.0001, h.dieAt - h.bornAt);
@@ -1647,6 +1849,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const elapsed = getSimElapsed();
     const player = getPlayer();
     for (const h of entities.hunters) {
+      if (h.type === "depthsTentacle") continue;
       if (elapsed < h.hitLockUntil) continue;
       if (hitDecoyIfAny(h, h.r + 2)) {
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
@@ -1669,6 +1872,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
   function tickSpawnWavesAndLifetime() {
     const elapsed = getSimElapsed();
+    if (!depthsPathActive()) {
+      for (let i = entities.hunters.length - 1; i >= 0; i--) {
+        if (entities.hunters[i].type === "depthsTentacle") entities.hunters.splice(i, 1);
+      }
+    }
     while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {
       spawnState.spawnScheduled.shift()?.fn();
     }
@@ -1831,7 +2039,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     drawSpawnerChargeClocks(ctx, entities.hunters, now);
     const colourblind = getSwampBootlegColourblind();
     for (const h of entities.hunters) {
-      drawHunterBody(ctx, h, { colourblind });
+      drawHunterBody(ctx, h, { colourblind, simElapsed: now });
     }
     drawHunterLifeBars(ctx, entities.hunters, now);
     drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);
@@ -1851,7 +2059,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   /** Bulwark W: radial knockback (Earthquake-style displacement on hunters in radius). */
   function bulwarkParryPushHunters(px, py, radius, pushDist) {
     for (const h of entities.hunters) {
-      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsTentacle")
+        continue;
       const dx = h.x - px;
       const dy = h.y - py;
       const d = Math.hypot(dx, dy) || 1;
@@ -1878,7 +2087,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const dy = nextY - prevY;
     if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) return;
     for (const h of entities.hunters) {
-      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+      if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsTentacle")
+        continue;
       const dist = pointToSegmentDistance(h.x, h.y, prevX, prevY, nextX, nextY);
       if (dist > playerR + h.r + BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN) continue;
       h.x += dx;
@@ -1898,7 +2108,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (!pushedSet || pushedSet.size === 0) return;
     const until = elapsed + BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC;
     for (const h of pushedSet) {
-      if (!h || h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+      if (!h || h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsTentacle")
+        continue;
       h.stunnedUntil = Math.max(h.stunnedUntil || 0, until);
     }
   }

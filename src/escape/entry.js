@@ -214,6 +214,43 @@ function circleOverlapsAnyRect(cx, cy, r, rects) {
   return false;
 }
 
+/** Depths storm-surge: fixed cadence so draw + movement stay in sync (deterministic). */
+const DEPTHS_STORM_WAVE_PERIOD_SEC = 11;
+/** Carry speed vs walk, scaled by sin(π·progress); direction is wave travel, not facing. */
+const DEPTHS_STORM_WAVE_PUSH_PEAK_MULT = 2.62;
+const DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT = 0.34;
+/** Storm progress at which we treat the wash as having “hit” the player (burst scheduling). */
+const DEPTHS_TENTACLE_HIT_PROGRESS = 0.5;
+const DEPTHS_TENTACLE_BURST_PAUSE_SEC = 0.3;
+const DEPTHS_TENTACLE_BURST_INTERVAL_SEC = 0.2;
+const DEPTHS_TENTACLE_BURST_SPAN_SEC = 1.2;
+const DEPTHS_TENTACLE_SPAWN_RADIUS_PX = 320;
+/** Inclusive: pause, then t=0, interval, …, span (float-safe). */
+const DEPTHS_TENTACLE_BURST_COUNT =
+  Math.round(DEPTHS_TENTACLE_BURST_SPAN_SEC / DEPTHS_TENTACLE_BURST_INTERVAL_SEC) + 1;
+
+function depthsStormHash01(n) {
+  return ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
+}
+
+/**
+ * Big storm wash across the viewport + player carried along wave travel (depths path only).
+ * @returns {{ active: boolean; progress: number; bandAngle: number; bandThickness: number; travelX: number; travelY: number }}
+ */
+function getDepthsStormWaveState(simElapsed) {
+  const idx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+  const cycle = simElapsed % DEPTHS_STORM_WAVE_PERIOD_SEC;
+  const washDur = 0.58 + depthsStormHash01(idx + 501) * 0.92;
+  const washStart = depthsStormHash01(idx + 709) * Math.max(0.08, DEPTHS_STORM_WAVE_PERIOD_SEC - washDur - 0.55);
+  const active = cycle >= washStart && cycle < washStart + washDur;
+  const progress = active ? (cycle - washStart) / washDur : 0;
+  const bandAngle = depthsStormHash01(idx + 923) * Math.PI * 2;
+  const bandThickness = 88 + depthsStormHash01(idx + 614) * 125;
+  const travelX = Math.cos(bandAngle);
+  const travelY = Math.sin(bandAngle);
+  return { active, progress, bandAngle, bandThickness, travelX, travelY };
+}
+
 function shouldUseMobileUi(win = window) {
   const coarse = win.matchMedia?.("(pointer: coarse)")?.matches ?? false;
   const narrow = win.matchMedia?.("(max-width: 920px)")?.matches ?? false;
@@ -626,6 +663,15 @@ function boot() {
   const swampMudTrail = /** @type {{ x: number; y: number; t: number }[]} */ ([]);
   let swampMudTrailLastX = NaN;
   let swampMudTrailLastY = NaN;
+  /** Depths storm wave: progress edge + tentacle burst after hit. */
+  let depthsStormLastWaveIdx = -1;
+  let depthsStormLastProgress = -1;
+  /** Wave index for which a tentacle burst was scheduled (`-1` = none). */
+  let depthsTentacleBurstScheduledWaveIdx = -1;
+  /** `simElapsed` when `DEPTHS_TENTACLE_HIT_PROGRESS` was crossed for that wave. */
+  let depthsTentacleBurstHitSim = 0;
+  /** Last burst spawn index spawned for this burst (`-1` before first). */
+  let depthsTentacleBurstLastSpawnK = -1;
   const SWAMP_MUD_TRAIL_MAX = 58;
   const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
   const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
@@ -935,6 +981,82 @@ function boot() {
       ctx.stroke();
     }
     ctx.restore();
+
+    const dw = getDepthsStormWaveState(simElapsed);
+    if (dw.active) {
+      const xMid = x0 + w * 0.5;
+      const yMid = y0 + h * 0.5;
+      const diag = Math.hypot(w, h) * 0.52 + dw.bandThickness;
+      const xPosBase = -diag + dw.progress * (2 * diag);
+      const shell = Math.sin(Math.PI * dw.progress);
+      const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+      const ripplePhase = simElapsed * 1.65 + waveIdx * 2.71;
+      const kRipple = 0.0108;
+      const ampCrest = dw.bandThickness * 0.44;
+      const ampChop = dw.bandThickness * 0.14;
+
+      ctx.save();
+      ctx.translate(xMid, yMid);
+      ctx.rotate(dw.bandAngle);
+      ctx.globalCompositeOperation = "screen";
+      const g = ctx.createLinearGradient(xPosBase - dw.bandThickness * 2.25, 0, xPosBase + dw.bandThickness * 2.25, 0);
+      const a0 = 0.08 + shell * 0.28;
+      g.addColorStop(0, "rgba(255, 255, 255, 0)");
+      g.addColorStop(0.25, `rgba(220, 238, 252, ${a0 * 0.5})`);
+      g.addColorStop(0.5, `rgba(248, 252, 255, ${a0 * 0.72})`);
+      g.addColorStop(0.72, `rgba(230, 244, 255, ${a0 * 0.55})`);
+      g.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(xPosBase - dw.bandThickness * 2.5, -diag * 1.2, dw.bandThickness * 5, diag * 2.4);
+
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      for (let layer = 0; layer < 3; layer++) {
+        ctx.globalAlpha = (0.2 + shell * 0.36) * (1 - layer * 0.24);
+        ctx.strokeStyle = layer === 0 ? "rgba(255, 255, 255, 0.9)" : "rgba(210, 236, 255, 0.78)";
+        ctx.lineWidth = dw.bandThickness * (0.48 - layer * 0.11);
+        if (layer === 0) {
+          ctx.shadowColor = "rgba(186, 230, 253, 0.55)";
+          ctx.shadowBlur = 14;
+        } else {
+          ctx.shadowBlur = 0;
+        }
+        ctx.beginPath();
+        let first = true;
+        for (let y = -diag * 1.18; y <= diag * 1.18; y += 5) {
+          const xc =
+            xPosBase +
+            ampCrest * Math.sin(y * kRipple + ripplePhase + layer * 1.05) +
+            ampChop * Math.sin(y * kRipple * 2.65 + ripplePhase * 1.3 + layer);
+          if (first) {
+            ctx.moveTo(xc, y);
+            first = false;
+          } else ctx.lineTo(xc, y);
+        }
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 0.1 + shell * 0.16;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+      ctx.lineWidth = 1.35;
+      for (let r = 0; r < 4; r++) {
+        const xOff = (r - 1.5) * dw.bandThickness * 0.38;
+        ctx.beginPath();
+        let first2 = true;
+        for (let y = -diag * 1.12; y <= diag * 1.12; y += 9) {
+          const xc =
+            xPosBase +
+            xOff +
+            ampCrest * 0.55 * Math.sin(y * kRipple * 1.15 + ripplePhase + r * 0.7);
+          if (first2) {
+            ctx.moveTo(xc, y);
+            first2 = false;
+          } else ctx.lineTo(xc, y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     const strike01 = (n) => ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
     const period = 3.6 + strike01(Math.floor(simElapsed * 0.12)) * 4.4;
@@ -1950,6 +2072,10 @@ function boot() {
     rouletteModal?.closeUi();
     forgeWorldModal?.closeUi();
     hunterRuntime.reset();
+    depthsStormLastWaveIdx = -1;
+    depthsStormLastProgress = -1;
+    depthsTentacleBurstScheduledWaveIdx = -1;
+    depthsTentacleBurstLastSpawnK = -1;
     hexEventRuntime?.reset();
     if (typeof character.resetRunState === "function") {
       character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
@@ -2307,6 +2433,10 @@ function boot() {
     manualPause = false;
     handsResetPause = false;
     simElapsed = 0;
+    depthsStormLastWaveIdx = -1;
+    depthsStormLastProgress = -1;
+    depthsTentacleBurstScheduledWaveIdx = -1;
+    depthsTentacleBurstLastSpawnK = -1;
     character = instrumentObjectMethods(createCharacterController(activeCharacterId, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
       skip: ["getAbilityHud"],
     });
@@ -2525,7 +2655,8 @@ function boot() {
       v === "airSpawner" ||
       v === "cryptSpawner" ||
       v === "ghost" ||
-      v === "fast"
+      v === "fast" ||
+      v === "depthsTentacle"
     ) {
       return v;
     }
@@ -2539,6 +2670,10 @@ function boot() {
       huntersEnabled = devHuntersEl.checked;
       localStorage.setItem(HUNTERS_LS_KEY, huntersEnabled ? "1" : "0");
       hunterRuntime.reset();
+      depthsStormLastWaveIdx = -1;
+      depthsStormLastProgress = -1;
+      depthsTentacleBurstScheduledWaveIdx = -1;
+      depthsTentacleBurstLastSpawnK = -1;
     });
   }
   if (devHunterTypeFilterEl && "value" in devHunterTypeFilterEl) {
@@ -2551,6 +2686,10 @@ function boot() {
       debugHunterTypeFilter = normalizedNext;
       localStorage.setItem(HUNTER_TYPE_FILTER_LS_KEY, normalizedNext ?? "__all__");
       if (huntersEnabled) hunterRuntime.reset();
+      depthsStormLastWaveIdx = -1;
+      depthsStormLastProgress = -1;
+      depthsTentacleBurstScheduledWaveIdx = -1;
+      depthsTentacleBurstLastSpawnK = -1;
     });
   }
 
@@ -3305,6 +3444,72 @@ function boot() {
 
       if (!runDead && specialsSimUnpaused()) {
         hexEventRuntime?.clampPlayer(player);
+      }
+
+      if (!runDead && specialsSimUnpaused() && pathRuntime.getCurrentPathId() === "depths") {
+        const dw = getDepthsStormWaveState(simElapsed);
+        const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+        if (waveIdx !== depthsStormLastWaveIdx) {
+          depthsStormLastWaveIdx = waveIdx;
+          depthsStormLastProgress = -1;
+          depthsTentacleBurstScheduledWaveIdx = -1;
+          depthsTentacleBurstLastSpawnK = -1;
+        }
+        if (dw.active) {
+          const env = Math.sin(Math.PI * dw.progress);
+          const pushSpeed =
+            PLAYER_SPEED *
+            (DEPTHS_STORM_WAVE_PUSH_PEAK_MULT * env + DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT);
+          let wx = dw.travelX * pushSpeed * dt;
+          let wy = dw.travelY * pushSpeed * dt;
+          const obsForWave = obstaclesForPlayerCollision();
+          const waveDist = Math.hypot(wx, wy);
+          const waveSteps = Math.max(1, Math.ceil(waveDist / Math.max(3, player.r * 0.35)));
+          for (let wi = 0; wi < waveSteps; wi++) {
+            player.x += wx / waveSteps;
+            player.y += wy / waveSteps;
+            const wr = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForWave);
+            player.x = wr.x;
+            player.y = wr.y;
+          }
+          if (
+            huntersEnabled &&
+            hunterRuntime &&
+            depthsTentacleBurstScheduledWaveIdx !== waveIdx &&
+            depthsStormLastProgress < DEPTHS_TENTACLE_HIT_PROGRESS &&
+            dw.progress >= DEPTHS_TENTACLE_HIT_PROGRESS
+          ) {
+            depthsTentacleBurstScheduledWaveIdx = waveIdx;
+            depthsTentacleBurstHitSim = simElapsed;
+            depthsTentacleBurstLastSpawnK = -1;
+          }
+          depthsStormLastProgress = dw.progress;
+        }
+        if (
+          huntersEnabled &&
+          hunterRuntime &&
+          depthsTentacleBurstScheduledWaveIdx === waveIdx &&
+          depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT
+        ) {
+          const burstStart = depthsTentacleBurstHitSim + DEPTHS_TENTACLE_BURST_PAUSE_SEC;
+          if (simElapsed >= burstStart) {
+            while (depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT) {
+              const nextK = depthsTentacleBurstLastSpawnK + 1;
+              if (simElapsed < burstStart + nextK * DEPTHS_TENTACLE_BURST_INTERVAL_SEC) break;
+              const ang = Math.random() * Math.PI * 2;
+              const rOff =
+                DEPTHS_TENTACLE_SPAWN_RADIUS_PX *
+                (0.92 + depthsStormHash01(waveIdx * 31 + nextK * 17 + 401) * 0.16);
+              hunterRuntime.spawnHunter(
+                "depthsTentacle",
+                player.x + Math.cos(ang) * rOff,
+                player.y + Math.sin(ang) * rOff,
+                {},
+              );
+              depthsTentacleBurstLastSpawnK = nextK;
+            }
+          }
+        }
       }
 
       const pdt = Math.max(dt, 1e-5);

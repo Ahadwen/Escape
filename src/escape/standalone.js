@@ -3027,6 +3027,26 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     return false;
   }
+  function normalizeAngle(a) {
+    let x = a;
+    while (x <= -Math.PI) x += TAU;
+    while (x > Math.PI) x -= TAU;
+    return x;
+  }
+  function annularSectorContainsCircle(ox, oy, rMin, rMax, a0, a1, px, py, pr) {
+    const dx = px - ox;
+    const dy = py - oy;
+    const d = Math.hypot(dx, dy);
+    const rIn = Math.max(0, rMin - pr);
+    const rOut = rMax + pr;
+    if (d < rIn || d > rOut) return false;
+    const ap = Math.atan2(dy, dx);
+    const sweep = normalizeAngle(a1 - a0);
+    const rel = normalizeAngle(ap - a0);
+    const margin = 0.04;
+    if (sweep >= 0) return rel >= -margin && rel <= sweep + margin;
+    return rel <= margin && rel >= sweep - margin;
+  }
   function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
     const vx = x2 - x1;
     const vy = y2 - y1;
@@ -8698,7 +8718,206 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         return { light: "#ddd6fe", core: "#7c3aed", shadow: "#3b0764", rim: "#c4b5fd", mark: "#f5f3ff" };
     }
   }
+  function cubicBezierPoint(p0, p1, p2, p3, u) {
+    const om = 1 - u;
+    const om2 = om * om;
+    const om3 = om2 * om;
+    const u2 = u * u;
+    const u3 = u2 * u;
+    return {
+      x: om3 * p0.x + 3 * om2 * u * p1.x + 3 * om * u2 * p2.x + u3 * p3.x,
+      y: om3 * p0.y + 3 * om2 * u * p1.y + 3 * om * u2 * p2.y + u3 * p3.y
+    };
+  }
+  function cubicBezierTangent(p0, p1, p2, p3, u) {
+    const om = 1 - u;
+    const om2 = om * om;
+    const u2 = u * u;
+    return {
+      x: 3 * om2 * (p1.x - p0.x) + 6 * om * u * (p2.x - p1.x) + 3 * u2 * (p3.x - p2.x),
+      y: 3 * om2 * (p1.y - p0.y) + 6 * om * u * (p2.y - p1.y) + 3 * u2 * (p3.y - p2.y)
+    };
+  }
+  var DEPTHS_TENTACLE_VIEW_MIN_CHORD = 248;
+  function depthsTentacleCoilSpineU(h, simElapsed) {
+    const coilStart = Number(h.depthsTelegraphEnd ?? 0);
+    const coilEnd = Number(h.depthsCoilEnd ?? 0);
+    const strikeEnd = Number(h.depthsStrikeEnd ?? 0);
+    if (!Number.isFinite(coilStart) || simElapsed < coilStart) return 0;
+    if (simElapsed < coilEnd) {
+      const t = clamp7((simElapsed - coilStart) / Math.max(1e-4, coilEnd - coilStart), 0, 1);
+      return t * t * (3 - 2 * t);
+    }
+    if (simElapsed < strikeEnd) {
+      const t = clamp7((simElapsed - coilEnd) / Math.max(1e-4, strikeEnd - coilEnd), 0, 1);
+      const releaseU = t * t * (3 - 2 * t);
+      return 1 - releaseU;
+    }
+    return 0;
+  }
+  function depthsTentacleFollowMomentumOpposite(h, simElapsed) {
+    const strike = Number(h.depthsStrikeEnd ?? 0);
+    const motion = Number(h.depthsMotionEnd ?? 0);
+    if (simElapsed < strike || simElapsed >= motion) return 0;
+    const t = (simElapsed - strike) / Math.max(1e-4, motion - strike);
+    const v = clamp7((t - 0.1) / 0.9, 0, 1);
+    return v * v * (3 - 2 * v);
+  }
+  function drawDepthsTentacle(ctx, h, simElapsed) {
+    const ax = h.depthsAnchorX;
+    const ay = h.depthsAnchorY;
+    const tx = h.x;
+    const ty = h.y;
+    const op = clamp7(Number(h.opacity ?? 1), 0, 1);
+    const rawDx = tx - ax;
+    const rawDy = ty - ay;
+    const rawLen = Math.hypot(rawDx, rawDy) || 1;
+    const visScale = rawLen < DEPTHS_TENTACLE_VIEW_MIN_CHORD ? DEPTHS_TENTACLE_VIEW_MIN_CHORD / rawLen : 1;
+    const p0 = { x: ax, y: ay };
+    const p2 = { x: ax + rawDx * visScale, y: ay + rawDy * visScale };
+    const tdx = p2.x - ax;
+    const tdy = p2.y - ay;
+    const chord = Math.hypot(tdx, tdy) || 1;
+    const nx0 = -tdy / chord;
+    const ny0 = tdx / chord;
+    const bend = Math.min(52, chord * 0.26);
+    const coilSp = depthsTentacleCoilSpineU(h, simElapsed);
+    const momentumOpp = depthsTentacleFollowMomentumOpposite(h, simElapsed);
+    const cSign = Number(h.depthsCoilSign ?? 1) || 1;
+    const baseSide = bend * (0.92 - coilSp * 0.22);
+    const coilArc = coilSp * Math.min(122, chord * 0.5);
+    const oppositeArc = momentumOpp * Math.min(118, chord * 0.5);
+    const totalSide = baseSide + cSign * (coilArc - oppositeArc);
+    const chordUx = tdx / chord;
+    const chordUy = tdy / chord;
+    const curlBack = coilSp * chord * 0.1 + momentumOpp * chord * 0.08;
+    const cp1 = {
+      x: ax + tdx * (1 / 3) + nx0 * totalSide * 0.5 - chordUx * curlBack,
+      y: ay + tdy * (1 / 3) + ny0 * totalSide * 0.5 - chordUy * curlBack
+    };
+    const cp2 = {
+      x: ax + tdx * (2 / 3) + nx0 * totalSide * 0.92 - chordUx * curlBack * 0.55,
+      y: ay + tdy * (2 / 3) + ny0 * totalSide * 0.92 - chordUy * curlBack * 0.55
+    };
+    const p3 = p2;
+    const N = 32;
+    const spine = [];
+    for (let i = 0; i <= N; i++) {
+      const u = i / N;
+      const p = cubicBezierPoint(p0, cp1, cp2, p3, u);
+      const tang = cubicBezierTangent(p0, cp1, cp2, p3, u);
+      const tlen = Math.hypot(tang.x, tang.y) || 1;
+      let px = -tang.y / tlen;
+      let py = tang.x / tlen;
+      const wobble = Math.sin(u * TAU * 2.4 + simElapsed * 4.2) * 3.8 * (1 - u) * (1 - u) * (1 - coilSp * 0.88);
+      p.x += px * wobble;
+      p.y += py * wobble;
+      const baseHalf = (Math.min(22, 10 + chord * 0.068) * Math.pow(1 - u, 0.5) + 2.5 * (1 - u)) * 1.12;
+      spine.push({ x: p.x, y: p.y, u, nx: px, ny: py, half: baseHalf });
+    }
+    const midC = cubicBezierPoint(p0, cp1, cp2, p3, 0.5);
+    const ventralSign = Math.sign((p2.x - ax) * (midC.y - ay) - (p2.y - ay) * (midC.x - ax)) || 1;
+    ctx.save();
+    ctx.globalAlpha = op;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const left = spine.map((s) => ({
+      x: s.x + s.nx * s.half * ventralSign,
+      y: s.y + s.ny * s.half * ventralSign
+    }));
+    const right = spine.map((s) => ({
+      x: s.x - s.nx * s.half * ventralSign,
+      y: s.y - s.ny * s.half * ventralSign
+    }));
+    ctx.beginPath();
+    ctx.moveTo(left[0].x, left[0].y);
+    for (let i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
+    for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
+    ctx.closePath();
+    const gx0 = ax - chord * 0.08;
+    const gy0 = ay - chord * 0.12;
+    const gx1 = p2.x + chord * 0.1;
+    const gy1 = p2.y + chord * 0.08;
+    const bodyGrad = ctx.createLinearGradient(gx0, gy0, gx1, gy1);
+    bodyGrad.addColorStop(0, "rgba(12, 18, 42, 0.98)");
+    bodyGrad.addColorStop(0.35, "rgba(36, 28, 72, 0.95)");
+    bodyGrad.addColorStop(0.65, "rgba(52, 42, 88, 0.92)");
+    bodyGrad.addColorStop(1, "rgba(28, 38, 62, 0.9)");
+    ctx.fillStyle = bodyGrad;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(4, 12, 28, 0.88)";
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+    ctx.beginPath();
+    for (let i = 0; i < spine.length; i++) {
+      const s = spine[i];
+      const dorsalX = s.x - s.nx * s.half * 0.55 * ventralSign;
+      const dorsalY = s.y - s.ny * s.half * 0.55 * ventralSign;
+      if (i === 0) ctx.moveTo(dorsalX, dorsalY);
+      else ctx.lineTo(dorsalX, dorsalY);
+    }
+    ctx.strokeStyle = "rgba(120, 160, 210, 0.38)";
+    ctx.lineWidth = 3.2;
+    ctx.stroke();
+    const suckerU = [0.14, 0.26, 0.38, 0.5, 0.62, 0.74, 0.86];
+    for (const su of suckerU) {
+      const idx = Math.round(su * N);
+      const s = spine[clamp7(idx, 0, spine.length - 1)];
+      const inset = 0.42;
+      const sx = s.x + s.nx * s.half * ventralSign * inset;
+      const sy = s.y + s.ny * s.half * ventralSign * inset;
+      const tang = cubicBezierTangent(p0, cp1, cp2, p3, su);
+      const ang = Math.atan2(tang.y, tang.x);
+      const rad = 4 + (1 - su) * 5.5;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(ang);
+      ctx.scale(1, 0.78);
+      ctx.beginPath();
+      ctx.arc(0, 0, rad, 0, TAU);
+      ctx.fillStyle = "rgba(18, 14, 38, 0.92)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, 0, rad * 0.72, 0, TAU);
+      ctx.fillStyle = "rgba(140, 120, 188, 0.55)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, 0, rad * 0.38, 0, TAU);
+      ctx.fillStyle = "rgba(32, 26, 58, 0.85)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(200, 210, 235, 0.22)";
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.arc(0, 0, rad * 0.72, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.strokeStyle = "rgba(220, 238, 255, 0.55)";
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(spine[0].x, spine[0].y);
+    for (let i = 1; i < spine.length; i++) ctx.lineTo(spine[i].x, spine[i].y);
+    ctx.stroke();
+    const splashU = Number(h.depthsSplashU ?? 0);
+    if (splashU > 0 && splashU < 1) {
+      const rad = 20 + splashU * 78;
+      const a = (1 - splashU) * 0.62;
+      ctx.fillStyle = `rgba(186, 230, 253, ${a * 0.5})`;
+      ctx.beginPath();
+      ctx.arc(p2.x, p2.y, rad, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255, 255, 255, ${a * 0.85})`;
+      ctx.lineWidth = 2.8;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   function drawHunterBody(ctx, h, opts = {}) {
+    if (h.type === "depthsTentacle") {
+      const t = Number(opts.simElapsed);
+      drawDepthsTentacle(ctx, h, Number.isFinite(t) ? t : 0);
+      return;
+    }
     if (h.type === "cryptSpawner" && h.cryptDisguised) {
       const s = 35;
       const pulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + h.x * 0.01 + h.y * 0.01) * 4.2);
@@ -9281,6 +9500,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   }
   function drawHunterLifeBars(ctx, hunters, now) {
     for (const h of hunters) {
+      if (h.type === "depthsTentacle") continue;
       if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
       const total = h.life || Math.max(1e-4, h.dieAt - h.bornAt);
       const lifeLeft = clamp7((h.dieAt - now) / total, 0, 1);
@@ -9424,6 +9644,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function bonePathActive() {
       return getActivePathId() === "bone";
     }
+    function depthsPathActive() {
+      return getActivePathId() === "depths";
+    }
     function boneEnemySpeedMult() {
       return bonePathActive() ? 1.2 : 1;
     }
@@ -9550,6 +9773,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const player = getPlayer();
       for (const h of entities.hunters) {
         if (h === excludedHunter) continue;
+        if (h.type === "depthsTentacle") continue;
         if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" && h.cryptDisguised)
           continue;
         if (elapsed < (h.stunnedUntil || 0)) continue;
@@ -9617,6 +9841,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     function hunterRadiusForType(type) {
       if (type === "sniper") return 12;
       if (type === "ghost") return 14;
+      if (type === "depthsTentacle") return 8;
       if (type === "spawner" || type === "cryptSpawner") return 18;
       if (type === "airSpawner") return 26;
       if (type === "laser" || type === "laserBlue") return 13;
@@ -9764,6 +9989,38 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         h.swarmInterval = 0.62;
         h.swarmN = 5;
         h.fastR = 10;
+      } else if (type === "depthsTentacle") {
+        h.depthsSpinRad = 260 * Math.PI / 180;
+        r = 8;
+        lastShotAt = elapsed + 999;
+        const leg = nearestLegalPointForSmallHunter(customX ?? player.x, customY ?? player.y, 8);
+        h.depthsAnchorX = leg.x;
+        h.depthsAnchorY = leg.y;
+        h.depthsSpawnAt = elapsed;
+        const EMERGE = 0.38;
+        const COIL = 0.38;
+        const SPIN = 0.46 / 2.5;
+        const SPLASH = 0;
+        h.depthsEmergeEnd = elapsed + EMERGE;
+        h.depthsTelegraphEnd = h.depthsEmergeEnd;
+        h.depthsCoilEnd = h.depthsTelegraphEnd + COIL;
+        h.depthsStrikeEnd = h.depthsCoilEnd + SPIN;
+        h.depthsMotionEnd = h.depthsStrikeEnd;
+        h.depthsSplashEnd = h.depthsMotionEnd + SPLASH;
+        h.dieAt = h.depthsStrikeEnd;
+        life = Math.max(0.5, h.dieAt - elapsed);
+        h.depthsReach = 0;
+        h.depthsSlamDirX = 1;
+        h.depthsSlamDirY = 0;
+        h.depthsDamaged = false;
+        h.depthsCoilInit = false;
+        h.depthsCoilSign = (Math.floor(Math.abs((customX ?? 0) * 13 + (customY ?? 0) * 7)) & 1) === 0 ? -1 : 1;
+        h.depthsSlamPrevAngle = null;
+        h.depthsGrazedDecoys = [];
+        h.depthsSplashU = 0;
+        h.opacity = 1;
+        h.x = h.depthsAnchorX;
+        h.y = h.depthsAnchorY;
       } else if (type === "ghost") {
         r = 14;
         life = 20;
@@ -9782,7 +10039,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       }
       h.r = r;
       h.life = life;
-      h.dieAt = elapsed + life;
+      h.dieAt = type === "depthsTentacle" ? h.dieAt : elapsed + life;
       h.lastShotAt = lastShotAt;
       if (opts?.arenaNexusSpawn) {
         h.arenaNexusSpawn = true;
@@ -9800,8 +10057,14 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         }
       };
       if (customX != null && customY != null) {
-        h.x = customX;
-        h.y = customY;
+        if (type !== "depthsTentacle") {
+          h.x = customX;
+          h.y = customY;
+        }
+        if (type === "depthsTentacle") {
+          entities.hunters.push(h);
+          return;
+        }
         if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner") {
           for (let attempt = 0; attempt < 56; attempt++) {
             ejectSpawnerHunterFromSpecialHexFootprint(h);
@@ -10070,7 +10333,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           else h.cryptRevealU = 1;
         }
         if (h.type === "spawner" || h.type === "cryptSpawner") continue;
-        if (elapsed < (h.stunnedUntil || 0)) continue;
+        if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle") continue;
         const spDt = dt * spades13AuraEnemyDtMult();
         if (h.type === "airSpawner") {
           const target = pickTargetForHunter(h);
@@ -10210,6 +10473,145 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             }
             continue;
           }
+        }
+        if (h.type === "depthsTentacle") {
+          const ax = h.depthsAnchorX;
+          const ay = h.depthsAnchorY;
+          const emergeEnd = h.depthsEmergeEnd;
+          const telegraphEnd = h.depthsTelegraphEnd;
+          const coilEnd = h.depthsCoilEnd;
+          const strikeEnd = h.depthsStrikeEnd;
+          const motionEnd = h.depthsMotionEnd;
+          const splashEnd = h.depthsSplashEnd;
+          const aimToPlayer = () => {
+            const ddx = player.x - ax;
+            const ddy = player.y - ay;
+            const dlen2 = Math.hypot(ddx, ddy) || 1;
+            return { ux: ddx / dlen2, uy: ddy / dlen2, dst: dlen2 };
+          };
+          const placeTip = (reach, ux, uy) => {
+            h.depthsReach = reach;
+            h.depthsSlamDirX = ux;
+            h.depthsSlamDirY = uy;
+            h.dir = { x: ux, y: uy };
+            h.x = ax + ux * reach;
+            h.y = ay + uy * reach;
+          };
+          const placeTipOnArc = (theta) => {
+            const px = h.depthsPivotX;
+            const py = h.depthsPivotY;
+            const R = h.depthsArcR;
+            h.depthsReach = R;
+            h.depthsSlamDirX = Math.cos(theta);
+            h.depthsSlamDirY = Math.sin(theta);
+            h.dir = { x: h.depthsSlamDirX, y: h.depthsSlamDirY };
+            h.x = px + R * Math.cos(theta);
+            h.y = py + R * Math.sin(theta);
+          };
+          if (elapsed < emergeEnd) {
+            const span = Math.max(1e-4, emergeEnd - h.depthsSpawnAt);
+            const u = clamp7((elapsed - h.depthsSpawnAt) / span, 0, 1);
+            const ease = 1 - Math.pow(1 - u, 2.05);
+            const aim = aimToPlayer();
+            const reach = Math.min(aim.dst * 0.76, 188) * ease;
+            placeTip(reach, aim.ux, aim.uy);
+            h.opacity = 0.35 + 0.6 * ease;
+            continue;
+          }
+          if (elapsed < coilEnd) {
+            if (!h.depthsCoilInit) {
+              h.depthsCoilInit = true;
+              const aim = aimToPlayer();
+              h.depthsLockedUx = aim.ux;
+              h.depthsLockedUy = aim.uy;
+              h.depthsR0 = Math.max(8, h.depthsReach);
+              const ux = h.depthsLockedUx;
+              const uy = h.depthsLockedUy;
+              const perpX = -uy * h.depthsCoilSign;
+              const perpY = ux * h.depthsCoilSign;
+              const d0 = h.depthsR0;
+              h.depthsPivotX = ax + ux * (d0 * 0.18) + perpX * (d0 * 0.38);
+              h.depthsPivotY = ay + uy * (d0 * 0.18) + perpY * (d0 * 0.38);
+              const t0x = ax + ux * d0;
+              const t0y = ay + uy * d0;
+              const dx0 = t0x - h.depthsPivotX;
+              const dy0 = t0y - h.depthsPivotY;
+              h.depthsArcR = Math.hypot(dx0, dy0) || 1;
+              h.depthsAngleTele = Math.atan2(dy0, dx0);
+              const COIL_RAD = 74 * Math.PI / 180;
+              h.depthsAngleCoiled = h.depthsAngleTele - h.depthsCoilSign * COIL_RAD;
+            }
+            const span = Math.max(1e-4, coilEnd - telegraphEnd);
+            const cu = clamp7((elapsed - telegraphEnd) / span, 0, 1);
+            const smooth = cu * cu * (3 - 2 * cu);
+            const th = h.depthsAngleTele + (h.depthsAngleCoiled - h.depthsAngleTele) * smooth;
+            placeTipOnArc(th);
+            h.opacity = 0.82 + 0.12 * Math.sin(elapsed * 18);
+            continue;
+          }
+          if (elapsed < strikeEnd) {
+            const span = Math.max(1e-4, strikeEnd - coilEnd);
+            const su = clamp7((elapsed - coilEnd) / span, 0, 1);
+            const spinEase = su * (1.16 - 0.16 * su);
+            const spinRad = Number(h.depthsSpinRad ?? 260 * Math.PI / 180);
+            const th = h.depthsAngleCoiled + h.depthsCoilSign * spinRad * spinEase;
+            const prevTh = h.depthsSlamPrevAngle == null ? th : h.depthsSlamPrevAngle;
+            placeTipOnArc(th);
+            h.opacity = 1;
+            const ox = h.depthsPivotX;
+            const oy = h.depthsPivotY;
+            const rMin = 0;
+            const rMax = h.depthsArcR + 88;
+            const dAng = Math.abs(normalizeAngle(th - prevTh));
+            if (dAng > 6e-3 && su >= 0.03 && elapsed >= (h.hitLockUntil ?? 0)) {
+              const pdx = player.x - ox;
+              const pdy = player.y - oy;
+              const pDist = Math.hypot(pdx, pdy);
+              const pivotNear = pDist <= player.r + 26 && pDist <= rMax + player.r + 12 && su >= 0.04;
+              const sectorHit = annularSectorContainsCircle(
+                ox,
+                oy,
+                rMin,
+                rMax,
+                prevTh,
+                th,
+                player.x,
+                player.y,
+                player.r + 12
+              );
+              if (!h.depthsDamaged && (sectorHit || pivotNear)) {
+                damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+                h.depthsDamaged = true;
+              }
+              const grazed = h.depthsGrazedDecoys;
+              const decoys = getDecoys();
+              const nowHit = getSimElapsed();
+              for (let di = decoys.length - 1; di >= 0; di--) {
+                const d = decoys[di];
+                if (grazed.includes(d)) continue;
+                const dr = d.r ?? 10;
+                const ddx = d.x - ox;
+                const ddy = d.y - oy;
+                const dDist = Math.hypot(ddx, ddy);
+                const decoyPivotNear = dDist <= dr + 22 && dDist <= rMax + dr + 6;
+                if (!annularSectorContainsCircle(ox, oy, rMin, rMax, prevTh, th, d.x, d.y, dr + 6) && !decoyPivotNear)
+                  continue;
+                grazed.push(d);
+                if (nowHit < (d.invulnerableUntil ?? 0)) continue;
+                d.hp = Math.max(0, (d.hp ?? 1) - 1);
+                if (d.kind === "bulwarkFlag") d.invulnerableUntil = nowHit + BULWARK_POST_HIT_INVULN_SEC;
+                if (d.hp <= 0 && d.kind !== "bulwarkFlag") decoys.splice(di, 1);
+              }
+            }
+            h.depthsSlamPrevAngle = th;
+            continue;
+          }
+          if (elapsed < splashEnd) {
+            h.depthsSplashU = clamp7((elapsed - motionEnd) / Math.max(1e-4, splashEnd - motionEnd), 0, 1);
+            h.opacity = (1 - h.depthsSplashU) * 0.95;
+            continue;
+          }
+          continue;
         }
         const lifeSpan = h.life || Math.max(1e-4, h.dieAt - h.bornAt);
         const age = clamp7((elapsed - h.bornAt) / lifeSpan, 0, 1);
@@ -10722,6 +11124,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const elapsed = getSimElapsed();
       const player = getPlayer();
       for (const h of entities.hunters) {
+        if (h.type === "depthsTentacle") continue;
         if (elapsed < h.hitLockUntil) continue;
         if (hitDecoyIfAny(h, h.r + 2)) {
           h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
@@ -10742,6 +11145,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     function tickSpawnWavesAndLifetime() {
       const elapsed = getSimElapsed();
+      if (!depthsPathActive()) {
+        for (let i = entities.hunters.length - 1; i >= 0; i--) {
+          if (entities.hunters[i].type === "depthsTentacle") entities.hunters.splice(i, 1);
+        }
+      }
       while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {
         spawnState.spawnScheduled.shift()?.fn();
       }
@@ -10893,7 +11301,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       drawSpawnerChargeClocks(ctx, entities.hunters, now);
       const colourblind = getSwampBootlegColourblind2();
       for (const h of entities.hunters) {
-        drawHunterBody(ctx, h, { colourblind });
+        drawHunterBody(ctx, h, { colourblind, simElapsed: now });
       }
       drawHunterLifeBars(ctx, entities.hunters, now);
       drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);
@@ -10910,7 +11318,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     function bulwarkParryPushHunters(px, py, radius, pushDist) {
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsTentacle")
+          continue;
         const dx = h.x - px;
         const dy = h.y - py;
         const d = Math.hypot(dx, dy) || 1;
@@ -10932,7 +11341,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const dy = nextY - prevY;
       if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) return;
       for (const h of entities.hunters) {
-        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+        if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsTentacle")
+          continue;
         const dist = pointToSegmentDistance(h.x, h.y, prevX, prevY, nextX, nextY);
         if (dist > playerR + h.r + BULWARK_CHARGE_PUSH_CORRIDOR_MARGIN) continue;
         h.x += dx;
@@ -10950,7 +11360,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (!pushedSet || pushedSet.size === 0) return;
       const until = elapsed + BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC;
       for (const h of pushedSet) {
-        if (!h || h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
+        if (!h || h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsTentacle")
+          continue;
         h.stunnedUntil = Math.max(h.stunnedUntil || 0, until);
       }
     }
@@ -12190,6 +12601,31 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     }
     return false;
   }
+  var DEPTHS_STORM_WAVE_PERIOD_SEC = 11;
+  var DEPTHS_STORM_WAVE_PUSH_PEAK_MULT = 2.62;
+  var DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT = 0.34;
+  var DEPTHS_TENTACLE_HIT_PROGRESS = 0.5;
+  var DEPTHS_TENTACLE_BURST_PAUSE_SEC = 0.3;
+  var DEPTHS_TENTACLE_BURST_INTERVAL_SEC = 0.2;
+  var DEPTHS_TENTACLE_BURST_SPAN_SEC = 0.6;
+  var DEPTHS_TENTACLE_SPAWN_RADIUS_PX = 120;
+  var DEPTHS_TENTACLE_BURST_COUNT = Math.round(DEPTHS_TENTACLE_BURST_SPAN_SEC / DEPTHS_TENTACLE_BURST_INTERVAL_SEC) + 1;
+  function depthsStormHash01(n) {
+    return (n * 134775813 + 1 & 2147483647) / 2147483647;
+  }
+  function getDepthsStormWaveState(simElapsed) {
+    const idx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+    const cycle = simElapsed % DEPTHS_STORM_WAVE_PERIOD_SEC;
+    const washDur = 0.58 + depthsStormHash01(idx + 501) * 0.92;
+    const washStart = depthsStormHash01(idx + 709) * Math.max(0.08, DEPTHS_STORM_WAVE_PERIOD_SEC - washDur - 0.55);
+    const active = cycle >= washStart && cycle < washStart + washDur;
+    const progress = active ? (cycle - washStart) / washDur : 0;
+    const bandAngle = depthsStormHash01(idx + 923) * Math.PI * 2;
+    const bandThickness = 88 + depthsStormHash01(idx + 614) * 125;
+    const travelX = Math.cos(bandAngle);
+    const travelY = Math.sin(bandAngle);
+    return { active, progress, bandAngle, bandThickness, travelX, travelY };
+  }
   function shouldUseMobileUi(win = window) {
     const coarse = win.matchMedia?.("(pointer: coarse)")?.matches ?? false;
     const narrow = win.matchMedia?.("(max-width: 920px)")?.matches ?? false;
@@ -12550,6 +12986,11 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     );
     let swampMudTrailLastX = NaN;
     let swampMudTrailLastY = NaN;
+    let depthsStormLastWaveIdx = -1;
+    let depthsStormLastProgress = -1;
+    let depthsTentacleBurstScheduledWaveIdx = -1;
+    let depthsTentacleBurstHitSim = 0;
+    let depthsTentacleBurstLastSpawnK = -1;
     const SWAMP_MUD_TRAIL_MAX = 58;
     const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
     const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
@@ -12823,6 +13264,73 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         ctx2.stroke();
       }
       ctx2.restore();
+      const dw = getDepthsStormWaveState(simElapsed);
+      if (dw.active) {
+        const xMid = x0 + w * 0.5;
+        const yMid = y0 + h * 0.5;
+        const diag = Math.hypot(w, h) * 0.52 + dw.bandThickness;
+        const xPosBase = -diag + dw.progress * (2 * diag);
+        const shell = Math.sin(Math.PI * dw.progress);
+        const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+        const ripplePhase = simElapsed * 1.65 + waveIdx * 2.71;
+        const kRipple = 0.0108;
+        const ampCrest = dw.bandThickness * 0.44;
+        const ampChop = dw.bandThickness * 0.14;
+        ctx2.save();
+        ctx2.translate(xMid, yMid);
+        ctx2.rotate(dw.bandAngle);
+        ctx2.globalCompositeOperation = "screen";
+        const g = ctx2.createLinearGradient(xPosBase - dw.bandThickness * 2.25, 0, xPosBase + dw.bandThickness * 2.25, 0);
+        const a0 = 0.08 + shell * 0.28;
+        g.addColorStop(0, "rgba(255, 255, 255, 0)");
+        g.addColorStop(0.25, `rgba(220, 238, 252, ${a0 * 0.5})`);
+        g.addColorStop(0.5, `rgba(248, 252, 255, ${a0 * 0.72})`);
+        g.addColorStop(0.72, `rgba(230, 244, 255, ${a0 * 0.55})`);
+        g.addColorStop(1, "rgba(255, 255, 255, 0)");
+        ctx2.fillStyle = g;
+        ctx2.fillRect(xPosBase - dw.bandThickness * 2.5, -diag * 1.2, dw.bandThickness * 5, diag * 2.4);
+        ctx2.lineJoin = "round";
+        ctx2.lineCap = "round";
+        for (let layer = 0; layer < 3; layer++) {
+          ctx2.globalAlpha = (0.2 + shell * 0.36) * (1 - layer * 0.24);
+          ctx2.strokeStyle = layer === 0 ? "rgba(255, 255, 255, 0.9)" : "rgba(210, 236, 255, 0.78)";
+          ctx2.lineWidth = dw.bandThickness * (0.48 - layer * 0.11);
+          if (layer === 0) {
+            ctx2.shadowColor = "rgba(186, 230, 253, 0.55)";
+            ctx2.shadowBlur = 14;
+          } else {
+            ctx2.shadowBlur = 0;
+          }
+          ctx2.beginPath();
+          let first = true;
+          for (let y = -diag * 1.18; y <= diag * 1.18; y += 5) {
+            const xc = xPosBase + ampCrest * Math.sin(y * kRipple + ripplePhase + layer * 1.05) + ampChop * Math.sin(y * kRipple * 2.65 + ripplePhase * 1.3 + layer);
+            if (first) {
+              ctx2.moveTo(xc, y);
+              first = false;
+            } else ctx2.lineTo(xc, y);
+          }
+          ctx2.stroke();
+        }
+        ctx2.shadowBlur = 0;
+        ctx2.globalAlpha = 0.1 + shell * 0.16;
+        ctx2.strokeStyle = "rgba(255, 255, 255, 0.55)";
+        ctx2.lineWidth = 1.35;
+        for (let r = 0; r < 4; r++) {
+          const xOff = (r - 1.5) * dw.bandThickness * 0.38;
+          ctx2.beginPath();
+          let first2 = true;
+          for (let y = -diag * 1.12; y <= diag * 1.12; y += 9) {
+            const xc = xPosBase + xOff + ampCrest * 0.55 * Math.sin(y * kRipple * 1.15 + ripplePhase + r * 0.7);
+            if (first2) {
+              ctx2.moveTo(xc, y);
+              first2 = false;
+            } else ctx2.lineTo(xc, y);
+          }
+          ctx2.stroke();
+        }
+        ctx2.restore();
+      }
       const strike01 = (n) => (n * 134775813 + 1 & 2147483647) / 2147483647;
       const period = 3.6 + strike01(Math.floor(simElapsed * 0.12)) * 4.4;
       const cycle = simElapsed % period;
@@ -13706,6 +14214,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       rouletteModal?.closeUi();
       forgeWorldModal?.closeUi();
       hunterRuntime.reset();
+      depthsStormLastWaveIdx = -1;
+      depthsStormLastProgress = -1;
+      depthsTentacleBurstScheduledWaveIdx = -1;
+      depthsTentacleBurstLastSpawnK = -1;
       hexEventRuntime?.reset();
       if (typeof character.resetRunState === "function") {
         character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
@@ -14022,6 +14534,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       manualPause = false;
       handsResetPause = false;
       simElapsed = 0;
+      depthsStormLastWaveIdx = -1;
+      depthsStormLastProgress = -1;
+      depthsTentacleBurstScheduledWaveIdx = -1;
+      depthsTentacleBurstLastSpawnK = -1;
       character = instrumentObjectMethods(createCharacterController(activeCharacterId, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
         skip: ["getAbilityHud"]
       });
@@ -14210,7 +14726,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       if (typeof value !== "string") return null;
       const v = value.trim();
       if (!v || v === "__all__") return null;
-      if (v === "chaser" || v === "frogChaser" || v === "cutter" || v === "sniper" || v === "ranged" || v === "laser" || v === "laserBlue" || v === "spawner" || v === "airSpawner" || v === "cryptSpawner" || v === "ghost" || v === "fast") {
+      if (v === "chaser" || v === "frogChaser" || v === "cutter" || v === "sniper" || v === "ranged" || v === "laser" || v === "laserBlue" || v === "spawner" || v === "airSpawner" || v === "cryptSpawner" || v === "ghost" || v === "fast" || v === "depthsTentacle") {
         return v;
       }
       return null;
@@ -14223,6 +14739,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         huntersEnabled = devHuntersEl.checked;
         localStorage.setItem(HUNTERS_LS_KEY, huntersEnabled ? "1" : "0");
         hunterRuntime.reset();
+        depthsStormLastWaveIdx = -1;
+        depthsStormLastProgress = -1;
+        depthsTentacleBurstScheduledWaveIdx = -1;
+        depthsTentacleBurstLastSpawnK = -1;
       });
     }
     if (devHunterTypeFilterEl && "value" in devHunterTypeFilterEl) {
@@ -14235,6 +14755,10 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         debugHunterTypeFilter = normalizedNext;
         localStorage.setItem(HUNTER_TYPE_FILTER_LS_KEY, normalizedNext ?? "__all__");
         if (huntersEnabled) hunterRuntime.reset();
+        depthsStormLastWaveIdx = -1;
+        depthsStormLastProgress = -1;
+        depthsTentacleBurstScheduledWaveIdx = -1;
+        depthsTentacleBurstLastSpawnK = -1;
       });
     }
     const debugRunLevelDecEl = document.getElementById("debug-run-level-dec");
@@ -14915,6 +15439,56 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             }
             if (!runDead && specialsSimUnpaused()) {
               hexEventRuntime?.clampPlayer(player);
+            }
+            if (!runDead && specialsSimUnpaused() && pathRuntime.getCurrentPathId() === "depths") {
+              const dw = getDepthsStormWaveState(simElapsed);
+              const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
+              if (waveIdx !== depthsStormLastWaveIdx) {
+                depthsStormLastWaveIdx = waveIdx;
+                depthsStormLastProgress = -1;
+                depthsTentacleBurstScheduledWaveIdx = -1;
+                depthsTentacleBurstLastSpawnK = -1;
+              }
+              if (dw.active) {
+                const env = Math.sin(Math.PI * dw.progress);
+                const pushSpeed = PLAYER_SPEED * (DEPTHS_STORM_WAVE_PUSH_PEAK_MULT * env + DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT);
+                let wx = dw.travelX * pushSpeed * dt;
+                let wy = dw.travelY * pushSpeed * dt;
+                const obsForWave = obstaclesForPlayerCollision();
+                const waveDist = Math.hypot(wx, wy);
+                const waveSteps = Math.max(1, Math.ceil(waveDist / Math.max(3, player.r * 0.35)));
+                for (let wi = 0; wi < waveSteps; wi++) {
+                  player.x += wx / waveSteps;
+                  player.y += wy / waveSteps;
+                  const wr = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForWave);
+                  player.x = wr.x;
+                  player.y = wr.y;
+                }
+                if (huntersEnabled && hunterRuntime && depthsTentacleBurstScheduledWaveIdx !== waveIdx && depthsStormLastProgress < DEPTHS_TENTACLE_HIT_PROGRESS && dw.progress >= DEPTHS_TENTACLE_HIT_PROGRESS) {
+                  depthsTentacleBurstScheduledWaveIdx = waveIdx;
+                  depthsTentacleBurstHitSim = simElapsed;
+                  depthsTentacleBurstLastSpawnK = -1;
+                }
+                depthsStormLastProgress = dw.progress;
+              }
+              if (huntersEnabled && hunterRuntime && depthsTentacleBurstScheduledWaveIdx === waveIdx && depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT) {
+                const burstStart = depthsTentacleBurstHitSim + DEPTHS_TENTACLE_BURST_PAUSE_SEC;
+                if (simElapsed >= burstStart) {
+                  while (depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT) {
+                    const nextK = depthsTentacleBurstLastSpawnK + 1;
+                    if (simElapsed < burstStart + nextK * DEPTHS_TENTACLE_BURST_INTERVAL_SEC) break;
+                    const ang = Math.random() * Math.PI * 2;
+                    const rOff = DEPTHS_TENTACLE_SPAWN_RADIUS_PX * (0.92 + depthsStormHash01(waveIdx * 31 + nextK * 17 + 401) * 0.16);
+                    hunterRuntime.spawnHunter(
+                      "depthsTentacle",
+                      player.x + Math.cos(ang) * rOff,
+                      player.y + Math.sin(ang) * rOff,
+                      {}
+                    );
+                    depthsTentacleBurstLastSpawnK = nextK;
+                  }
+                }
+              }
             }
             const pdt = Math.max(dt, 1e-5);
             player.velX = (player.x - player._px) / pdt;

@@ -41,11 +41,260 @@ export function hunterPalette(type) {
   }
 }
 
+/** @param {{ x: number; y: number }} p0 @param {{ x: number; y: number }} p1 @param {{ x: number; y: number }} p2 */
+function quadBezierPoint(p0, p1, p2, u) {
+  const om = 1 - u;
+  return {
+    x: om * om * p0.x + 2 * om * u * p1.x + u * u * p2.x,
+    y: om * om * p0.y + 2 * om * u * p1.y + u * u * p2.y,
+  };
+}
+
+/** @param {{ x: number; y: number }} p0 @param {{ x: number; y: number }} p1 @param {{ x: number; y: number }} p2 */
+function quadBezierTangent(p0, p1, p2, u) {
+  return {
+    x: 2 * (1 - u) * (p1.x - p0.x) + 2 * u * (p2.x - p1.x),
+    y: 2 * (1 - u) * (p1.y - p0.y) + 2 * u * (p2.y - p1.y),
+  };
+}
+
+/** @param {{ x: number; y: number }} p0 p1 p2 p3 */
+function cubicBezierPoint(p0, p1, p2, p3, u) {
+  const om = 1 - u;
+  const om2 = om * om;
+  const om3 = om2 * om;
+  const u2 = u * u;
+  const u3 = u2 * u;
+  return {
+    x: om3 * p0.x + 3 * om2 * u * p1.x + 3 * om * u2 * p2.x + u3 * p3.x,
+    y: om3 * p0.y + 3 * om2 * u * p1.y + 3 * om * u2 * p2.y + u3 * p3.y,
+  };
+}
+
+/** @param {{ x: number; y: number }} p0 p1 p2 p3 */
+function cubicBezierTangent(p0, p1, p2, p3, u) {
+  const om = 1 - u;
+  const om2 = om * om;
+  const u2 = u * u;
+  return {
+    x: 3 * om2 * (p1.x - p0.x) + 6 * om * u * (p2.x - p1.x) + 3 * u2 * (p3.x - p2.x),
+    y: 3 * om2 * (p1.y - p0.y) + 6 * om * u * (p2.y - p1.y) + 3 * u2 * (p3.y - p2.y),
+  };
+}
+
+/** World-space chord below this is drawn as if this long (reads big at close range). */
+const DEPTHS_TENTACLE_VIEW_MIN_CHORD = 248;
+
+/** 0..1: body “wound up” during coil, eases off through damaging strike (draw-only). */
+function depthsTentacleCoilSpineU(h, simElapsed) {
+  const coilStart = Number(h.depthsTelegraphEnd ?? 0);
+  const coilEnd = Number(h.depthsCoilEnd ?? 0);
+  const strikeEnd = Number(h.depthsStrikeEnd ?? 0);
+  if (!Number.isFinite(coilStart) || simElapsed < coilStart) return 0;
+  if (simElapsed < coilEnd) {
+    const t = clamp((simElapsed - coilStart) / Math.max(1e-4, coilEnd - coilStart), 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+  if (simElapsed < strikeEnd) {
+    const t = clamp((simElapsed - coilEnd) / Math.max(1e-4, strikeEnd - coilEnd), 0, 1);
+    const releaseU = t * t * (3 - 2 * t);
+    return 1 - releaseU;
+  }
+  return 0;
+}
+
+/**
+ * 0..1 draw-only: opposite-side flex ramps with follow time (no hard cut = no paired “second
+ * move” pop).
+ */
+function depthsTentacleFollowMomentumOpposite(h, simElapsed) {
+  const strike = Number(h.depthsStrikeEnd ?? 0);
+  const motion = Number(h.depthsMotionEnd ?? 0);
+  if (simElapsed < strike || simElapsed >= motion) return 0;
+  const t = (simElapsed - strike) / Math.max(1e-4, motion - strike);
+  const v = clamp((t - 0.1) / 0.9, 0, 1);
+  return v * v * (3 - 2 * v);
+}
+
+/** @param {CanvasRenderingContext2D} ctx */
+function drawDepthsTentacle(ctx, h, simElapsed) {
+  const ax = h.depthsAnchorX;
+  const ay = h.depthsAnchorY;
+  const tx = h.x;
+  const ty = h.y;
+  const op = clamp(Number(h.opacity ?? 1), 0, 1);
+  const rawDx = tx - ax;
+  const rawDy = ty - ay;
+  const rawLen = Math.hypot(rawDx, rawDy) || 1;
+  const visScale = rawLen < DEPTHS_TENTACLE_VIEW_MIN_CHORD ? DEPTHS_TENTACLE_VIEW_MIN_CHORD / rawLen : 1;
+  const p0 = { x: ax, y: ay };
+  const p2 = { x: ax + rawDx * visScale, y: ay + rawDy * visScale };
+  const tdx = p2.x - ax;
+  const tdy = p2.y - ay;
+  const chord = Math.hypot(tdx, tdy) || 1;
+  const nx0 = -tdy / chord;
+  const ny0 = tdx / chord;
+  const bend = Math.min(52, chord * 0.26);
+  const coilSp = depthsTentacleCoilSpineU(h, simElapsed);
+  const momentumOpp = depthsTentacleFollowMomentumOpposite(h, simElapsed);
+  const cSign = Number(h.depthsCoilSign ?? 1) || 1;
+  /** Coil-side bulge; carried follow bends the opposite way as tip keeps same-turn sweep. */
+  const baseSide = bend * (0.92 - coilSp * 0.22);
+  const coilArc = coilSp * Math.min(122, chord * 0.5);
+  const oppositeArc = momentumOpp * Math.min(118, chord * 0.5);
+  const totalSide = baseSide + cSign * (coilArc - oppositeArc);
+  const chordUx = tdx / chord;
+  const chordUy = tdy / chord;
+  const curlBack = coilSp * chord * 0.1 + momentumOpp * chord * 0.08;
+  const cp1 = {
+    x: ax + tdx * (1 / 3) + nx0 * totalSide * 0.5 - chordUx * curlBack,
+    y: ay + tdy * (1 / 3) + ny0 * totalSide * 0.5 - chordUy * curlBack,
+  };
+  const cp2 = {
+    x: ax + tdx * (2 / 3) + nx0 * totalSide * 0.92 - chordUx * curlBack * 0.55,
+    y: ay + tdy * (2 / 3) + ny0 * totalSide * 0.92 - chordUy * curlBack * 0.55,
+  };
+  const p3 = p2;
+
+  const N = 32;
+  /** @type {{ x: number; y: number; u: number; nx: number; ny: number; half: number }[]} */
+  const spine = [];
+  for (let i = 0; i <= N; i++) {
+    const u = i / N;
+    const p = cubicBezierPoint(p0, cp1, cp2, p3, u);
+    const tang = cubicBezierTangent(p0, cp1, cp2, p3, u);
+    const tlen = Math.hypot(tang.x, tang.y) || 1;
+    let px = -tang.y / tlen;
+    let py = tang.x / tlen;
+    const wobble =
+      Math.sin(u * TAU * 2.4 + simElapsed * 4.2) *
+      3.8 *
+      (1 - u) *
+      (1 - u) *
+      (1 - coilSp * 0.88);
+    p.x += px * wobble;
+    p.y += py * wobble;
+    const baseHalf =
+      (Math.min(22, 10 + chord * 0.068) * Math.pow(1 - u, 0.5) + 2.5 * (1 - u)) * 1.12;
+    spine.push({ x: p.x, y: p.y, u, nx: px, ny: py, half: baseHalf });
+  }
+
+  const midC = cubicBezierPoint(p0, cp1, cp2, p3, 0.5);
+  const ventralSign =
+    Math.sign((p2.x - ax) * (midC.y - ay) - (p2.y - ay) * (midC.x - ax)) || 1;
+
+  ctx.save();
+  ctx.globalAlpha = op;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  const left = spine.map((s) => ({
+    x: s.x + s.nx * s.half * ventralSign,
+    y: s.y + s.ny * s.half * ventralSign,
+  }));
+  const right = spine.map((s) => ({
+    x: s.x - s.nx * s.half * ventralSign,
+    y: s.y - s.ny * s.half * ventralSign,
+  }));
+
+  ctx.beginPath();
+  ctx.moveTo(left[0].x, left[0].y);
+  for (let i = 1; i < left.length; i++) ctx.lineTo(left[i].x, left[i].y);
+  for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i].x, right[i].y);
+  ctx.closePath();
+  const gx0 = ax - chord * 0.08;
+  const gy0 = ay - chord * 0.12;
+  const gx1 = p2.x + chord * 0.1;
+  const gy1 = p2.y + chord * 0.08;
+  const bodyGrad = ctx.createLinearGradient(gx0, gy0, gx1, gy1);
+  bodyGrad.addColorStop(0, "rgba(12, 18, 42, 0.98)");
+  bodyGrad.addColorStop(0.35, "rgba(36, 28, 72, 0.95)");
+  bodyGrad.addColorStop(0.65, "rgba(52, 42, 88, 0.92)");
+  bodyGrad.addColorStop(1, "rgba(28, 38, 62, 0.9)");
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(4, 12, 28, 0.88)";
+  ctx.lineWidth = 2.4;
+  ctx.stroke();
+
+  ctx.beginPath();
+  for (let i = 0; i < spine.length; i++) {
+    const s = spine[i];
+    const dorsalX = s.x - s.nx * s.half * 0.55 * ventralSign;
+    const dorsalY = s.y - s.ny * s.half * 0.55 * ventralSign;
+    if (i === 0) ctx.moveTo(dorsalX, dorsalY);
+    else ctx.lineTo(dorsalX, dorsalY);
+  }
+  ctx.strokeStyle = "rgba(120, 160, 210, 0.38)";
+  ctx.lineWidth = 3.2;
+  ctx.stroke();
+
+  const suckerU = [0.14, 0.26, 0.38, 0.5, 0.62, 0.74, 0.86];
+  for (const su of suckerU) {
+    const idx = Math.round(su * N);
+    const s = spine[clamp(idx, 0, spine.length - 1)];
+    const inset = 0.42;
+    const sx = s.x + s.nx * s.half * ventralSign * inset;
+    const sy = s.y + s.ny * s.half * ventralSign * inset;
+    const tang = cubicBezierTangent(p0, cp1, cp2, p3, su);
+    const ang = Math.atan2(tang.y, tang.x);
+    const rad = 4 + (1 - su) * 5.5;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(ang);
+    ctx.scale(1, 0.78);
+    ctx.beginPath();
+    ctx.arc(0, 0, rad, 0, TAU);
+    ctx.fillStyle = "rgba(18, 14, 38, 0.92)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 0, rad * 0.72, 0, TAU);
+    ctx.fillStyle = "rgba(140, 120, 188, 0.55)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 0, rad * 0.38, 0, TAU);
+    ctx.fillStyle = "rgba(32, 26, 58, 0.85)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(200, 210, 235, 0.22)";
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.arc(0, 0, rad * 0.72, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.strokeStyle = "rgba(220, 238, 255, 0.55)";
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(spine[0].x, spine[0].y);
+  for (let i = 1; i < spine.length; i++) ctx.lineTo(spine[i].x, spine[i].y);
+  ctx.stroke();
+
+  const splashU = Number(h.depthsSplashU ?? 0);
+  if (splashU > 0 && splashU < 1) {
+    const rad = 20 + splashU * 78;
+    const a = (1 - splashU) * 0.62;
+    ctx.fillStyle = `rgba(186, 230, 253, ${a * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(p2.x, p2.y, rad, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255, 255, 255, ${a * 0.85})`;
+    ctx.lineWidth = 2.8;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 /** @param {CanvasRenderingContext2D} ctx
  * @param {object} h
- * @param {{ colourblind?: boolean }} [opts]
+ * @param {{ colourblind?: boolean; simElapsed?: number }} [opts]
  */
 export function drawHunterBody(ctx, h, opts = {}) {
+  if (h.type === "depthsTentacle") {
+    const t = Number(opts.simElapsed);
+    drawDepthsTentacle(ctx, h, Number.isFinite(t) ? t : 0);
+    return;
+  }
   if (h.type === "cryptSpawner" && h.cryptDisguised) {
     const s = 35;
     const pulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + h.x * 0.01 + h.y * 0.01) * 4.2);
@@ -659,6 +908,7 @@ export function drawSpawnerChargeClocks(ctx, hunters, now) {
 
 export function drawHunterLifeBars(ctx, hunters, now) {
   for (const h of hunters) {
+    if (h.type === "depthsTentacle") continue;
     if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
     const total = h.life || Math.max(0.0001, h.dieAt - h.bornAt);
     const lifeLeft = clamp((h.dieAt - now) / total, 0, 1);

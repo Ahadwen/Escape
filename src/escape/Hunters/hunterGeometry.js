@@ -1,3 +1,5 @@
+import { TAU } from "../constants.js";
+
 export function distSq(a, b) {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
@@ -33,6 +35,33 @@ export function lineIntersectsRect(x1, y1, x2, y2, rect) {
     if (x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h) return true;
   }
   return false;
+}
+
+/** Wrap angle to (-π, π]. */
+export function normalizeAngle(a) {
+  let x = a;
+  while (x <= -Math.PI) x += TAU;
+  while (x > Math.PI) x -= TAU;
+  return x;
+}
+
+/**
+ * Whether a circle at (px,py) with radius `pr` can overlap an annular sector
+ * from pivot (ox,oy): radii [rMin,rMax], angles a0→a1 (a1 may be CCW or CW from a0).
+ */
+export function annularSectorContainsCircle(ox, oy, rMin, rMax, a0, a1, px, py, pr) {
+  const dx = px - ox;
+  const dy = py - oy;
+  const d = Math.hypot(dx, dy);
+  const rIn = Math.max(0, rMin - pr);
+  const rOut = rMax + pr;
+  if (d < rIn || d > rOut) return false;
+  const ap = Math.atan2(dy, dx);
+  const sweep = normalizeAngle(a1 - a0);
+  const rel = normalizeAngle(ap - a0);
+  const margin = 0.04;
+  if (sweep >= 0) return rel >= -margin && rel <= sweep + margin;
+  return rel <= margin && rel >= sweep - margin;
 }
 
 export function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
