@@ -396,7 +396,8 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
       dw = (iw / ih) * dh;
     }
     const pulse = 0.5 + 0.5 * Math.sin(t * 1.95 + phase * 1.15);
-    const brightMul = 0.56 + pulse * 0.52;
+    /** Deeper troughs than before; peaks ~unchanged — reds stay on `eldritchProtectedRed` path. */
+    const brightMul = 0.32 + pulse * 0.78;
     const shaded = eldritchBossShadedCanvas(img, (dw + 0.5) | 0, (dh + 0.5) | 0, brightMul);
     if (shaded) {
       ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);

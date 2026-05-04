@@ -1301,17 +1301,102 @@ function boot() {
 
     const drawRing = (cx, cy, radius) => {
       ctx.save();
+      ctx.lineCap = "butt";
+      ctx.lineJoin = "miter";
+      const breath = 0.5 + 0.5 * Math.sin(t * 2.4 + cx * 0.015 + cy * 0.012);
+      const u = windUpU;
+      const aStart = -Math.PI / 2;
+      const tickRot = phase * 0.05 + t * 0.11;
+
+      ctx.setLineDash([5, 10]);
+      ctx.lineDashOffset = (t * 26 + phase * 55) % 120;
+      ctx.strokeStyle = `rgba(28, 8, 18, ${0.38 + 0.12 * breath})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+
+      const majorN = 12;
+      for (let i = 0; i < majorN; i++) {
+        const ang = tickRot + (i / majorN) * Math.PI * 2;
+        const r0 = radius - 14;
+        const r1 = radius + 12;
+        ctx.strokeStyle = `rgba(24, 10, 22, ${0.28 + 0.22 * u + 0.08 * breath})`;
+        ctx.lineWidth = 1.15;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+        ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+        ctx.stroke();
+      }
+      for (let i = 0; i < majorN; i++) {
+        const ang = tickRot + ((i + 0.5) / majorN) * Math.PI * 2;
+        const r0 = radius - 8;
+        const r1 = radius + 6;
+        ctx.strokeStyle = `rgba(48, 18, 52, ${0.18 + 0.16 * u})`;
+        ctx.lineWidth = 0.85;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+        ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+        ctx.stroke();
+      }
+
+      const dashLen = 11 + u * 14;
+      const dashGap = 5 + u * 2.5;
       ctx.lineCap = "round";
-      ctx.strokeStyle = `rgba(220, 38, 38, ${0.38 + 0.48 * windUpU})`;
-      ctx.lineWidth = 5;
+
+      ctx.shadowBlur = 14 + u * 26;
+      ctx.shadowColor = `rgba(76, 29, 120, ${0.22 + 0.38 * u})`;
+      ctx.setLineDash([dashLen, dashGap]);
+      ctx.lineDashOffset = t * 38 + cx * 0.02;
+      ctx.strokeStyle = `rgba(52, 10, 22, ${0.82 + 0.14 * u})`;
+      ctx.lineWidth = 5.5;
       ctx.beginPath();
-      ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + sweep, false);
+      ctx.arc(cx, cy, radius, aStart, aStart + sweep, false);
       ctx.stroke();
-      ctx.strokeStyle = `rgba(254, 202, 202, ${0.24 + 0.42 * windUpU})`;
-      ctx.lineWidth = 2.2;
+
+      ctx.shadowBlur = 8 + u * 14;
+      ctx.shadowColor = `rgba(100, 20, 40, ${0.35 + 0.35 * u})`;
+      ctx.strokeStyle = `rgba(110, 22, 42, ${0.72 + 0.22 * u})`;
+      ctx.lineWidth = 3.2;
       ctx.beginPath();
-      ctx.arc(cx, cy, radius + 5, -Math.PI / 2, -Math.PI / 2 + sweep * 0.98, false);
+      ctx.arc(cx, cy, radius, aStart, aStart + sweep, false);
       ctx.stroke();
+
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "rgba(0,0,0,0)";
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+
+      const notchN = Math.max(3, Math.min(28, Math.ceil((sweep / (Math.PI * 2)) * 36)));
+      for (let j = 0; j <= notchN; j++) {
+        const ang = aStart + (j / notchN) * sweep;
+        const ri = radius - 9;
+        const ro = radius + 9;
+        ctx.strokeStyle = `rgba(62, 16, 36, ${0.5 + 0.35 * u})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(ang) * ri, cy + Math.sin(ang) * ri);
+        ctx.lineTo(cx + Math.cos(ang) * ro, cy + Math.sin(ang) * ro);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = `rgba(140, 70, 98, ${0.42 + 0.38 * u + 0.08 * breath})`;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([7, 4]);
+      ctx.lineDashOffset = -t * 24;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 4.5, aStart, aStart + sweep * 0.985, false);
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+      ctx.strokeStyle = `rgba(72, 36, 108, ${0.28 + 0.32 * u})`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 8, aStart, aStart + sweep * 0.97, false);
+      ctx.stroke();
+
       ctx.restore();
     };
 

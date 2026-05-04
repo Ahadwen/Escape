@@ -9036,7 +9036,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
         dw = iw / ih * dh;
       }
       const pulse = 0.5 + 0.5 * Math.sin(t * 1.95 + phase * 1.15);
-      const brightMul = 0.56 + pulse * 0.52;
+      const brightMul = 0.32 + pulse * 0.78;
       const shaded = eldritchBossShadedCanvas(img, dw + 0.5 | 0, dh + 0.5 | 0, brightMul);
       if (shaded) {
         ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);
@@ -10979,20 +10979,24 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             yMinClamp = player.y - 380;
             yMaxClamp = player.y + 520;
           }
-          const tx = player.x - h.x;
+          const wanderT = elapsed * 0.29 + Number(h.bornAt ?? 0) * 62e-5;
+          const spin = Number(h.depthsOrbitSign) || 1;
+          const wanderAmp = 290;
+          const lateral = Math.sin(wanderT) * wanderAmp * 0.62 + Math.sin(wanderT * 1.57 + spin * 1.1) * wanderAmp * 0.38;
+          const aimX = player.x + lateral;
+          const tx = aimX - h.x;
           const ty = targetY - h.y;
           const tlen = Math.hypot(tx, ty) || 1;
           let mx = tx / tlen;
           let my = ty / tlen;
-          const spin = Number(h.depthsOrbitSign) || 1;
-          const tangX = -my * spin * 0.42;
-          const tangY = mx * spin * 0.42;
-          mx = mx * 0.68 + tangX;
-          my = my * 0.68 + tangY;
+          const tangX = -my * spin * 0.54;
+          const tangY = mx * spin * 0.54;
+          mx = mx * 0.58 + tangX;
+          my = my * 0.58 + tangY;
           const mlen0 = Math.hypot(mx, my) || 1;
           mx /= mlen0;
           my /= mlen0;
-          const steer2 = 0.4;
+          const steer2 = 0.34;
           const inertia = 1 - steer2;
           h._eldritchMvX = (h._eldritchMvX ?? mx) * inertia + mx * steer2;
           h._eldritchMvY = (h._eldritchMvY ?? my) * inertia + my * steer2;
@@ -11006,7 +11010,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             blockValiantEnemyShockFields: true,
             ignoreObstacles: true
           });
-          const leashX = 400;
+          const leashX = 380;
           h.x = clamp7(h.x, player.x - leashX, player.x + leashX);
           h.y = clamp7(h.y, yMinClamp, yMaxClamp);
           continue;
@@ -14044,16 +14048,91 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       const bossCy = boss.y + bob;
       const drawRing = (cx, cy, radius) => {
         ctx2.save();
-        ctx2.lineCap = "round";
-        ctx2.strokeStyle = `rgba(220, 38, 38, ${0.38 + 0.48 * windUpU})`;
-        ctx2.lineWidth = 5;
+        ctx2.lineCap = "butt";
+        ctx2.lineJoin = "miter";
+        const breath = 0.5 + 0.5 * Math.sin(t * 2.4 + cx * 0.015 + cy * 0.012);
+        const u = windUpU;
+        const aStart = -Math.PI / 2;
+        const tickRot = phase * 0.05 + t * 0.11;
+        ctx2.setLineDash([5, 10]);
+        ctx2.lineDashOffset = (t * 26 + phase * 55) % 120;
+        ctx2.strokeStyle = `rgba(28, 8, 18, ${0.38 + 0.12 * breath})`;
+        ctx2.lineWidth = 2.5;
         ctx2.beginPath();
-        ctx2.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + sweep, false);
+        ctx2.arc(cx, cy, radius, 0, Math.PI * 2);
         ctx2.stroke();
-        ctx2.strokeStyle = `rgba(254, 202, 202, ${0.24 + 0.42 * windUpU})`;
-        ctx2.lineWidth = 2.2;
+        ctx2.setLineDash([]);
+        ctx2.lineDashOffset = 0;
+        const majorN = 12;
+        for (let i = 0; i < majorN; i++) {
+          const ang = tickRot + i / majorN * Math.PI * 2;
+          const r0 = radius - 14;
+          const r1 = radius + 12;
+          ctx2.strokeStyle = `rgba(24, 10, 22, ${0.28 + 0.22 * u + 0.08 * breath})`;
+          ctx2.lineWidth = 1.15;
+          ctx2.beginPath();
+          ctx2.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+          ctx2.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+          ctx2.stroke();
+        }
+        for (let i = 0; i < majorN; i++) {
+          const ang = tickRot + (i + 0.5) / majorN * Math.PI * 2;
+          const r0 = radius - 8;
+          const r1 = radius + 6;
+          ctx2.strokeStyle = `rgba(48, 18, 52, ${0.18 + 0.16 * u})`;
+          ctx2.lineWidth = 0.85;
+          ctx2.beginPath();
+          ctx2.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0);
+          ctx2.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
+          ctx2.stroke();
+        }
+        const dashLen = 11 + u * 14;
+        const dashGap = 5 + u * 2.5;
+        ctx2.lineCap = "round";
+        ctx2.shadowBlur = 14 + u * 26;
+        ctx2.shadowColor = `rgba(76, 29, 120, ${0.22 + 0.38 * u})`;
+        ctx2.setLineDash([dashLen, dashGap]);
+        ctx2.lineDashOffset = t * 38 + cx * 0.02;
+        ctx2.strokeStyle = `rgba(52, 10, 22, ${0.82 + 0.14 * u})`;
+        ctx2.lineWidth = 5.5;
         ctx2.beginPath();
-        ctx2.arc(cx, cy, radius + 5, -Math.PI / 2, -Math.PI / 2 + sweep * 0.98, false);
+        ctx2.arc(cx, cy, radius, aStart, aStart + sweep, false);
+        ctx2.stroke();
+        ctx2.shadowBlur = 8 + u * 14;
+        ctx2.shadowColor = `rgba(100, 20, 40, ${0.35 + 0.35 * u})`;
+        ctx2.strokeStyle = `rgba(110, 22, 42, ${0.72 + 0.22 * u})`;
+        ctx2.lineWidth = 3.2;
+        ctx2.beginPath();
+        ctx2.arc(cx, cy, radius, aStart, aStart + sweep, false);
+        ctx2.stroke();
+        ctx2.shadowBlur = 0;
+        ctx2.shadowColor = "rgba(0,0,0,0)";
+        ctx2.setLineDash([]);
+        ctx2.lineDashOffset = 0;
+        const notchN = Math.max(3, Math.min(28, Math.ceil(sweep / (Math.PI * 2) * 36)));
+        for (let j = 0; j <= notchN; j++) {
+          const ang = aStart + j / notchN * sweep;
+          const ri = radius - 9;
+          const ro = radius + 9;
+          ctx2.strokeStyle = `rgba(62, 16, 36, ${0.5 + 0.35 * u})`;
+          ctx2.lineWidth = 1.2;
+          ctx2.beginPath();
+          ctx2.moveTo(cx + Math.cos(ang) * ri, cy + Math.sin(ang) * ri);
+          ctx2.lineTo(cx + Math.cos(ang) * ro, cy + Math.sin(ang) * ro);
+          ctx2.stroke();
+        }
+        ctx2.strokeStyle = `rgba(140, 70, 98, ${0.42 + 0.38 * u + 0.08 * breath})`;
+        ctx2.lineWidth = 2;
+        ctx2.setLineDash([7, 4]);
+        ctx2.lineDashOffset = -t * 24;
+        ctx2.beginPath();
+        ctx2.arc(cx, cy, radius + 4.5, aStart, aStart + sweep * 0.985, false);
+        ctx2.stroke();
+        ctx2.setLineDash([]);
+        ctx2.strokeStyle = `rgba(72, 36, 108, ${0.28 + 0.32 * u})`;
+        ctx2.lineWidth = 1.4;
+        ctx2.beginPath();
+        ctx2.arc(cx, cy, radius + 8, aStart, aStart + sweep * 0.97, false);
         ctx2.stroke();
         ctx2.restore();
       };

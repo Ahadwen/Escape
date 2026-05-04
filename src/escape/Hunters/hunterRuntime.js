@@ -1406,20 +1406,27 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           yMinClamp = player.y - 380;
           yMaxClamp = player.y + 520;
         }
-        const tx = player.x - h.x;
+        /** Slow horizontal wander so the boss drifts side-to-side instead of parking on `player.x`. */
+        const wanderT = elapsed * 0.29 + Number(h.bornAt ?? 0) * 0.00062;
+        const spin = Number(h.depthsOrbitSign) || 1;
+        const wanderAmp = 290;
+        const lateral =
+          Math.sin(wanderT) * wanderAmp * 0.62 +
+          Math.sin(wanderT * 1.57 + spin * 1.1) * wanderAmp * 0.38;
+        const aimX = player.x + lateral;
+        const tx = aimX - h.x;
         const ty = targetY - h.y;
         const tlen = Math.hypot(tx, ty) || 1;
         let mx = tx / tlen;
         let my = ty / tlen;
-        const spin = Number(h.depthsOrbitSign) || 1;
-        const tangX = -my * spin * 0.42;
-        const tangY = mx * spin * 0.42;
-        mx = mx * 0.68 + tangX;
-        my = my * 0.68 + tangY;
+        const tangX = -my * spin * 0.54;
+        const tangY = mx * spin * 0.54;
+        mx = mx * 0.58 + tangX;
+        my = my * 0.58 + tangY;
         const mlen0 = Math.hypot(mx, my) || 1;
         mx /= mlen0;
         my /= mlen0;
-        const steer = 0.4;
+        const steer = 0.34;
         const inertia = 1 - steer;
         h._eldritchMvX = (h._eldritchMvX ?? mx) * inertia + mx * steer;
         h._eldritchMvY = (h._eldritchMvY ?? my) * inertia + my * steer;
@@ -1433,7 +1440,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           blockValiantEnemyShockFields: true,
           ignoreObstacles: true,
         });
-        const leashX = 400;
+        const leashX = 380;
         h.x = clamp(h.x, player.x - leashX, player.x + leashX);
         h.y = clamp(h.y, yMinClamp, yMaxClamp);
         continue;
