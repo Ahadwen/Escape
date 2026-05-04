@@ -500,6 +500,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (type === "laser" || type === "laserBlue" || type === "depthsGrappleLaser") return 13;
     if (type === "depthsShardChaser") return 10;
     if (type === "depthsEldritchBarrageBolt") return 6.5;
+    if (type === "depthsEldritchCageLunge") return 11;
     if (type === "fast") return 9;
     if (type === "frogChaser") return 11;
     return 10;
@@ -740,6 +741,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const spd = Number(opts?.eldritchBarrageSpeed ?? 390);
       h.eldritchBarrageVx = Math.cos(ang) * spd;
       h.eldritchBarrageVy = Math.sin(ang) * spd;
+    } else if (type === "depthsEldritchCageLunge") {
+      r = 11;
+      life = 0.58;
+      lastShotAt = elapsed + 999;
+      h.opacity = 1;
+      h.depthsEldritchCageLunge = true;
+      h.eldritchCageLungeVx = Number(opts?.eldritchCageLungeVx ?? 0);
+      h.eldritchCageLungeVy = Number(opts?.eldritchCageLungeVy ?? 0);
     } else if (type === "depthsEldritchBloom") {
       r = 40;
       life = 86400 * 120;
@@ -1120,6 +1129,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         continue;
       }
 
+      if (h.type === "depthsEldritchCageLunge") {
+        moveCircleWithCollisions(h, h.eldritchCageLungeVx, h.eldritchCageLungeVy, spDt, {
+          ignoreObstacles: true,
+          blockValiantEnemyShockFields: true,
+        });
+        continue;
+      }
+
       if (h.type === "ghost") {
         const target = pickTargetForHunter(h);
         const ghostSpeed = h.ghostDashSpeed * boneEnemySpeedMult();
@@ -1400,7 +1417,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
       if (h.type === "depthsEldritchBloom") {
         const waveY = getDepthsBossRisingWaveFrontY();
-        if (h.depthsEldritchBarrageAttackActive) {
+        if (h.depthsEldritchCageStrikeActive || h.depthsEldritchBarrageAttackActive) {
           continue;
         }
         /** Lightning volleys: stay `ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX` above the wave and keep drawing glow (see `hunterDraw`). */
@@ -2241,6 +2258,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           sourceX: h.x,
           sourceY: h.y,
           ...(h.depthsEldritchBarrageBolt ? { eldritchBloodAttack: "eldritchBarrageBolt" } : {}),
+          ...(h.depthsEldritchCageLunge ? { eldritchBloodAttack: "eldritchCageLunge" } : {}),
         });
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
       }
@@ -2269,7 +2287,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (!depthsPathActive()) {
       for (let i = entities.hunters.length - 1; i >= 0; i--) {
         const ht = entities.hunters[i].type;
-        if (ht === "depthsTentacle" || ht === "depthsEldritchBloom" || ht === "depthsEldritchBarrageBolt")
+        if (
+          ht === "depthsTentacle" ||
+          ht === "depthsEldritchBloom" ||
+          ht === "depthsEldritchBarrageBolt" ||
+          ht === "depthsEldritchCageLunge"
+        )
           entities.hunters.splice(i, 1);
       }
     }

@@ -643,6 +643,9 @@ function boot() {
     ) {
       return [];
     }
+    if (isDepthsBossFightLevel() && eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.()) {
+      return [];
+    }
     return obstacles;
   }
 
@@ -788,6 +791,8 @@ function boot() {
   let depthsEldritchRewind = /** @type {{ boss: object } | null} */ (null);
   /** After rewind snap: draw a short glow on the player until this sim time. */
   let depthsEldritchRewindGlowPlayerUntil = 0;
+  /** Tracks P2 floating-cage `caged` phase for one-frame catch-up after it ends (wave surf + rewind). */
+  let wasFloatingCageCagedLastFrame = false;
   /** Boss-fight-only samples for rewind (`t` = simElapsed). */
   const depthsPlayerPosTrail = /** @type {{ t: number; x: number; y: number }[]} */ ([]);
   const SWAMP_MUD_TRAIL_MAX = 58;
@@ -1075,12 +1080,33 @@ function boot() {
     depthsEldritchRewind = null;
     depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
+    wasFloatingCageCagedLastFrame = false;
     eldritchBlood?.reset();
   }
 
   /** Depths display L5 — boss tide tier; arena/surge/roulette/forge event ticks are skipped (safehouse still runs). */
   function isDepthsBossFightLevel() {
     return pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL;
+  }
+
+  /** P2 floating cage `caged`: storm wash, boss surf / tide catch-up, rewind telegraph, and post-land bob must not move the player. */
+  function isFloatingCageBossWaveRewindPlayerSuppressed() {
+    return !!(isDepthsBossFightLevel() && eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.());
+  }
+
+  /** If the cage just released and the player is in the boss surf band, start surf the same as a fresh wave touch. */
+  function maybeDepthsBossCatchUpWaveAfterCageRelease() {
+    if (!isDepthsBossFightLevel() || depthsBossRisingWaveFrontY == null) return;
+    const ph = worldToHex(player.x, player.y);
+    if (specials.isSafehouseHexTile(ph.q, ph.r)) return;
+    if (simElapsed < depthsBossWaveTouchImmuneUntil) return;
+    const fy = depthsBossRisingWaveFrontY;
+    const inSurfZone = player.y + player.r * 0.9 >= fy - 18;
+    if (!inSurfZone) return;
+    depthsBossSurfStartSim = simElapsed;
+    depthsBossSpitTargetY = null;
+    depthsBossSurfDeferredClampSim = 0;
+    depthsBossSurfTerrainFreeUntil = simElapsed + DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC;
   }
 
   /** More MTV passes than global `resolvePlayerAgainstRects` (6) — corners / stacks need deeper separation. */
@@ -1182,6 +1208,7 @@ function boot() {
   /** Small sink-then-float after tide deposit (runs even during splash timelock). */
   function tickDepthsBossPostLandBob() {
     if (!depthsBossPostLandBob) return;
+    if (isFloatingCageBossWaveRewindPlayerSuppressed()) return;
     if (!isDepthsBossFightLevel() || !specialsSimUnpaused()) {
       depthsBossPostLandBob = null;
       return;
@@ -1239,6 +1266,10 @@ function boot() {
 
   function tickDepthsEldritchRewindAttack() {
     if (!hunterRuntime || !huntersEnabled) return;
+    if (isFloatingCageBossWaveRewindPlayerSuppressed()) {
+      if (depthsEldritchRewind) depthsEldritchRewind = null;
+      return;
+    }
 
     const resolveDepthsEldritchRewindSnap = (/** @type {object | null} */ bossForGlow) => {
       const lookT = simElapsed - DEPTHS_ELDRITCH_REWIND_LOOKBACK_SEC;
@@ -1480,7 +1511,11 @@ function boot() {
     const ph = worldToHex(player.x, player.y);
     if (specials.isSafehouseHexTile(ph.q, ph.r)) return;
 
-    if (depthsBossSurfDeferredClampSim > 0 && simElapsed >= depthsBossSurfDeferredClampSim) {
+    if (
+      depthsBossSurfDeferredClampSim > 0 &&
+      simElapsed >= depthsBossSurfDeferredClampSim &&
+      !isFloatingCageBossWaveRewindPlayerSuppressed()
+    ) {
       depthsBossSurfDeferredClampSim = 0;
       depthsBossClampPlayerToLegalGroundAfterSpit();
     }
@@ -1498,6 +1533,15 @@ function boot() {
     depthsBossRisingWaveFrontY -= waveSpeed * dt;
 
     const fy = depthsBossRisingWaveFrontY;
+    if (isFloatingCageBossWaveRewindPlayerSuppressed()) {
+      if (depthsBossSurfStartSim > 0) {
+        depthsBossSurfStartSim = 0;
+        depthsBossSpitTargetY = null;
+        depthsBossSurfDeferredClampSim = 0;
+      }
+      return;
+    }
+
     const surfTotal = DEPTHS_BOSS_SURF_DRAG_SEC + DEPTHS_BOSS_SURF_SPIT_SEC;
 
     if (depthsBossSurfStartSim > 0) {
@@ -3042,6 +3086,7 @@ function boot() {
     depthsEldritchRewind = null;
     depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
+    wasFloatingCageCagedLastFrame = false;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
     depthsSniperAbilitySpeedSuppressUntil = 0;
@@ -3457,6 +3502,15 @@ function boot() {
     tentacleSpawnRadiusPx: DEPTHS_TENTACLE_SPAWN_RADIUS_PX,
     tentacleBurstSpanSecBase: DEPTHS_TENTACLE_BURST_SPAN_SEC,
     getDepthsBossRisingWaveFrontY: () => depthsBossRisingWaveFrontY,
+    getFloatingCageInteriorFill: () => {
+      const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
+      const depthsPathActive = pathRuntime.getCurrentPathId() === "depths";
+      const hallsPathActive = pathRuntime.getCurrentPathId() === "halls";
+      if (bonePathActive) return "#1b1d24";
+      if (depthsPathActive) return "#050f18";
+      if (hallsPathActive) return "#c9c2b8";
+      return pathRuntime.getPathVisualConfig().tileTint || FLOOR_HEX_FILL;
+    },
     onLightningColumnPlayerHit: ({ playerX, playerY }) => {
       const t0 = simElapsed;
       const ELDRITCH_LIGHTNING_HIT_SCREEN_FLASH_SEC = 0.16;
@@ -3466,6 +3520,14 @@ function boot() {
       pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 4.4, "rgba(240, 248, 255, 0.62)", t0, 0.46);
       pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 8.5, "rgba(220, 235, 255, 0.38)", t0, 0.54);
     },
+  });
+
+  document.getElementById("debug-depths-boss-spell-trigger")?.addEventListener("click", () => {
+    const select = /** @type {HTMLSelectElement | null} */ (document.getElementById("debug-depths-boss-spell-select"));
+    const spellId = select?.value ?? "";
+    const res = eldritchBlood?.debugForceEldritchSpell?.(spellId);
+    if (res?.ok) runLogger.log("debug", "forced boss spell", spellId);
+    else runLogger.log("debug", "boss spell not applied", spellId, res?.reason ?? "no_flow");
   });
 
   hexEventRuntime = instrumentObjectMethods(createEventHexController({
@@ -3557,6 +3619,7 @@ function boot() {
     depthsEldritchRewind = null;
     depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
+    wasFloatingCageCagedLastFrame = false;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
     depthsSniperAbilitySpeedSuppressUntil = 0;
@@ -4411,6 +4474,15 @@ function boot() {
     }
 
     if (!paused && !runDead) {
+      if (
+        specialsSimUnpaused() &&
+        isDepthsBossFightLevel() &&
+        huntersEnabled &&
+        eldritchBlood &&
+        typeof eldritchBlood.applyFloatingCageRisingWaveCarryBeforePlayerMove === "function"
+      ) {
+        eldritchBlood.applyFloatingCageRisingWaveCarryBeforePlayerMove();
+      }
       let vx = 0;
       let vy = 0;
       let rogueMovementIntent = false;
@@ -4559,7 +4631,11 @@ function boot() {
         inventory.spadesObstacleBoostUntil = simElapsed + TERRAIN_SPEED_BOOST_LINGER;
       }
 
-      if (lunaticMove && typeof character.tickLunaticRoarTerrain === "function") {
+      if (
+        lunaticMove &&
+        typeof character.tickLunaticRoarTerrain === "function" &&
+        !(isDepthsBossFightLevel() && eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.())
+      ) {
         character.tickLunaticRoarTerrain({
           simDt: dt,
           simElapsed,
@@ -4571,7 +4647,7 @@ function boot() {
       if (lunaticMove && typeof character.ejectFromObstaclesIfStuck === "function") {
         character.ejectFromObstaclesIfStuck({
           player,
-          circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstacles),
+          circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstaclesForPlayerCollision()),
         });
       }
 
@@ -4596,6 +4672,7 @@ function boot() {
 
         const dw = getDepthsStormWaveState(simElapsed);
         const wavePushActive = dw.active && !isWhirlpoolWave;
+        const suppressStormForFloatingCage = isFloatingCageBossWaveRewindPlayerSuppressed();
 
         if (isDepthsBossFightLevel()) {
           tickDepthsBossRisingWaveChase(dt);
@@ -4603,7 +4680,7 @@ function boot() {
           resetDepthsBossRisingWaveChase();
         }
 
-        if (wavePushActive) {
+        if (wavePushActive && !suppressStormForFloatingCage) {
           const env = Math.sin(Math.PI * dw.progress);
           const pushSpeed =
             PLAYER_SPEED *
@@ -4768,6 +4845,11 @@ function boot() {
         }
         if (!paused) {
           eldritchBlood?.tick(dt);
+          const cagedNow = eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.() ?? false;
+          if (wasFloatingCageCagedLastFrame && !cagedNow) {
+            maybeDepthsBossCatchUpWaveAfterCageRelease();
+          }
+          wasFloatingCageCagedLastFrame = cagedNow;
           tickDepthsEldritchRewindAttack();
         }
       }

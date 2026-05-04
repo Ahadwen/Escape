@@ -120,6 +120,8 @@ export function hunterPalette(type) {
       return { light: "#a78bfa", core: "#4c1d95", shadow: "#1e0533", rim: "#7c3aed", mark: "#fecaca" };
     case "depthsEldritchBarrageBolt":
       return { light: "#c4b5fd", core: "#312e81", shadow: "#0f172a", rim: "#38bdf8", mark: "#e0e7ff" };
+    case "depthsEldritchCageLunge":
+      return { light: "#fca5a5", core: "#9f1239", shadow: "#450a0a", rim: "#fdba74", mark: "#fff1f2" };
     case "ghost":
       return { light: "#f3f4f6", core: "#cbd5e1", shadow: "#6b7280", rim: "#e5e7eb", mark: "#ffffff" };
     default:
@@ -404,6 +406,38 @@ function drawDepthsEldritchBarrageBolt(ctx, h, simElapsed) {
   ctx.restore();
 }
 
+/** Scripted P2 melee rush from cage beat — blunt crimson claw head, ignores obstacles. */
+function drawDepthsEldritchCageLunge(ctx, h, opts = {}) {
+  const simElapsed = Number(opts.simElapsed);
+  const t = Number(h.bornAt ?? 0) * 0.03 + (Number.isFinite(simElapsed) ? simElapsed : 0) * 19;
+  const pulse = 0.5 + 0.5 * Math.sin(t);
+  const { x, y, r } = h;
+  const vx = Number(h.eldritchCageLungeVx ?? 1);
+  const vy = Number(h.eldritchCageLungeVy ?? 0);
+  const ang = Math.atan2(vy, vx);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.globalCompositeOperation = "lighter";
+  const core = ctx.createLinearGradient(-r * 2.8, 0, r * 4, 0);
+  core.addColorStop(0, "rgba(24, 4, 10, 0)");
+  core.addColorStop(0.35, `rgba(255, 90, 120, ${0.35 + 0.25 * pulse})`);
+  core.addColorStop(0.58, `rgba(230, 50, 90, ${0.5 + 0.2 * pulse})`);
+  core.addColorStop(0.76, `rgba(80, 10, 50, ${0.75})`);
+  core.addColorStop(1, "rgba(14, 0, 16, 0)");
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r * 3.5, r * 1.1, 0, 0, TAU);
+  ctx.fill();
+  ctx.globalCompositeOperation = "screen";
+  ctx.strokeStyle = `rgba(255, 200, 220, ${0.32 + 0.28 * pulse})`;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.ellipse(r * 0.15, 0, r * 1.95, r * 0.88, 0, 0, TAU);
+  ctx.stroke();
+  ctx.restore();
+}
+
 /**
  * Depths L5 boss: raster from `src/assets/Cthulu.png`, scaled (~2.5× base fit on hit radius), yaw toward player (`h.dir`).
  */
@@ -543,6 +577,62 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
     ctx.restore();
   }
 
+  const eldritchPrepStart = Number(h.depthsSpellLiftPrepStartSim ?? 0);
+  const eldritchPrepEnd = Number(h.depthsSpellLiftPrepEndSim ?? 0);
+  const eldritchInLiftPrep =
+    eldritchPrepEnd > eldritchPrepStart &&
+    t >= eldritchPrepStart &&
+    t < eldritchPrepEnd &&
+    !h.depthsEldritchLightningCastActive &&
+    !h.depthsEldritchBarrageAttackActive &&
+    !h.depthsEldritchCageStrikeActive;
+
+  if (!inInterlude && h.depthsEldritchPhase2Tone && eldritchInLiftPrep) {
+    const u = clamp((t - eldritchPrepStart) / Math.max(1e-4, eldritchPrepEnd - eldritchPrepStart), 0, 1);
+    const pulse = 0.55 + 0.45 * Math.sin(t * 15 + phase * 0.5);
+    const R = maxSpan * 0.74;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const grd = ctx.createRadialGradient(0, 0, R * 0.06, 0, 0, R * 1.08);
+    grd.addColorStop(0, `rgba(255, 220, 240, ${0.22 + 0.34 * pulse * u})`);
+    grd.addColorStop(0.35, `rgba(220, 60, 120, ${0.28 * pulse + 0.15 * u})`);
+    grd.addColorStop(0.72, `rgba(58, 10, 60, ${0.4 * pulse * u})`);
+    grd.addColorStop(1, "rgba(8, 0, 10, 0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 1.08, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255, 150, 120, ${0.2 + 0.45 * pulse * u})`;
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 0.52 + pulse * R * 0.05 * u, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (!inInterlude && h.depthsEldritchCageStrikeActive && !h.depthsEldritchLightningCastActive) {
+    const pulse = 0.5 + 0.5 * Math.sin(t * 18 + phase * 0.6);
+    const R = maxSpan * 0.76;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const grd = ctx.createRadialGradient(0, 0, R * 0.05, 0, 0, R * 1.12);
+    grd.addColorStop(0, `rgba(255, 228, 240, ${0.4 + 0.18 * pulse})`);
+    grd.addColorStop(0.3, `rgba(200, 40, 100, ${0.32 + 0.16 * pulse})`);
+    grd.addColorStop(0.65, `rgba(72, 8, 64, ${0.32 * pulse})`);
+    grd.addColorStop(1, "rgba(10, 0, 14, 0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 1.12, 0, TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = `rgba(255, 112, 150, ${0.3 + 0.35 * pulse})`;
+    ctx.lineWidth = 2.85;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 0.5 + pulse * R * 0.07, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   if (inInterlude) {
     const pull = inhaleEase;
     ctx.save();
@@ -625,7 +715,9 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
         ? 0.62 + pulse * 0.38
         : h.depthsEldritchBarrageAttackActive
           ? 0.54 + pulse * 0.42
-          : 0.32 + pulse * 0.78;
+          : h.depthsEldritchCageStrikeActive
+            ? 0.52 + pulse * 0.4
+            : 0.32 + pulse * 0.78;
     const shaded = eldritchBossShadedCanvas(img, (dw + 0.5) | 0, (dh + 0.5) | 0, brightMul);
     if (shaded) {
       ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);
@@ -662,6 +754,10 @@ export function drawHunterBody(ctx, h, opts = {}) {
   if (h.type === "depthsEldritchBarrageBolt") {
     const t = Number(opts.simElapsed);
     drawDepthsEldritchBarrageBolt(ctx, h, Number.isFinite(t) ? t : 0);
+    return;
+  }
+  if (h.type === "depthsEldritchCageLunge") {
+    drawDepthsEldritchCageLunge(ctx, h, opts);
     return;
   }
   if (h.type === "cryptSpawner" && h.cryptDisguised) {
@@ -1404,7 +1500,12 @@ export function drawSpawnerChargeClocks(ctx, hunters, now) {
 
 export function drawHunterLifeBars(ctx, hunters, now) {
   for (const h of hunters) {
-    if (h.type === "depthsTentacle" || h.type === "depthsEldritchBloom" || h.type === "depthsEldritchBarrageBolt")
+    if (
+      h.type === "depthsTentacle" ||
+      h.type === "depthsEldritchBloom" ||
+      h.type === "depthsEldritchBarrageBolt" ||
+      h.type === "depthsEldritchCageLunge"
+    )
       continue;
     if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
     const total = h.life || Math.max(0.0001, h.dieAt - h.bornAt);

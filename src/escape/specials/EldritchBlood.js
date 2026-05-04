@@ -3,6 +3,7 @@
  * Wave + timewarp stay in `entry.js`; this module owns scripted attack timing/FX only.
  * Phase 1: for `ELDRITCH_BLOOD_PHASE1_DURATION_SEC` after the intro, random orb / lightning / radial barrage
  * spells fire every `ELDRITCH_BLOOD_ATTACK_COOLDOWN_*` seconds (same spells may repeat).
+ * Phase 2: same drift → prep → glow → cadence (`ELDRITCH_BLOOD_PHASE2_DURATION_SEC`), different attack pool; first strike is floating cage arena.
  */
 import { PLAYER_RADIUS } from "../balance.js";
 import { clamp } from "../Hunters/hunterGeometry.js";
@@ -19,6 +20,20 @@ export const ELDRITCH_BLOOD_ATTACK_COOLDOWN_LO_SEC = 4;
 export const ELDRITCH_BLOOD_ATTACK_COOLDOWN_HI_SEC = 7;
 /** Visual-only interlude after P1 ends (boss “gathers” then “releases”); no gameplay effect. */
 export const ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC = 8;
+/** Mirrors P1 scripted window until P2 resolves (later attacks can diversify). */
+export const ELDRITCH_BLOOD_PHASE2_DURATION_SEC = ELDRITCH_BLOOD_PHASE1_DURATION_SEC;
+/** Floating “mini cage” arena: diameter in px (terrain ignored for the player inside the ring). */
+export const ELDRITCH_BLOOD_FLOATING_CAGE_DIAMETER_PX = 350;
+
+const FLOATING_CAGE_RADIUS_PX = ELDRITCH_BLOOD_FLOATING_CAGE_DIAMETER_PX / 2;
+/** Boss dash to flank matches P1 radial barrage, then snaps the cage on the player. */
+const FLOATING_CAGE_DASH_ALIGN_MAX_SEC = 2.85;
+/** While the ring is active: melee lunges spawn from the bloom toward the player. */
+const FLOATING_CAGE_CAGED_DURATION_SEC = 5.1;
+const FLOATING_CAGE_MELEE_GAP_SEC = 1.08;
+const FLOATING_CAGE_MELEE_COUNT = 4;
+/** Short rush hitbox spawned from scripted bloom during the cage beat. */
+const FLOATING_CAGE_LUNGE_SPEED_PX = 740;
 
 const ORB_CHARGE_SEC = 0.92;
 const ORB_RADIUS = 26;
@@ -85,6 +100,7 @@ function stormHash01(n) {
  * @property {number} tentacleSpawnRadiusPx
  * @property {number} tentacleBurstSpanSecBase — L4 storm span (module doubles for P1 rain).
  * @property {() => number | null} [getDepthsBossRisingWaveFrontY] — rising tide Y for boss floor clamp during scripted moves.
+ * @property {() => string} [getFloatingCageInteriorFill] — flat hex floor colour (masks obstacle art inside the cage disk).
  */
 
 export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
@@ -108,7 +124,11 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     tentacleSpawnRadiusPx,
     tentacleBurstSpanSecBase,
     getDepthsBossRisingWaveFrontY,
+    getFloatingCageInteriorFill: getFloatingCageInteriorFillDep,
   } = deps;
+
+  /** Depths playable hex tint from `entry.js`; safe default if deps omit. */
+  const getFloatingCageInteriorFill = getFloatingCageInteriorFillDep ?? (() => "#050f18");
 
   const hash01 = stormHash01Dep ?? stormHash01;
 
@@ -118,8 +138,8 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
   /** `simElapsed` when rising-wave chase arms (`0` = idle). */
   let fightStartSim = 0;
-  /** `0` intro · `1` P1 · `2` P1→next phase interlude (visual) · `3` post-interlude idle (reserve for P2). */
-  let macroPhase = /** @type {0 | 1 | 2 | 3} */ (0);
+  /** `0` intro · `1` P1 · `2` interlude · `3` Phase 2 · `4` P2 idle (stub). */
+  let macroPhase = /** @type {0 | 1 | 2 | 3 | 4} */ (0);
   /** `simElapsed` when `macroPhase` became `1` (used with `ELDRITCH_BLOOD_PHASE1_DURATION_SEC`). */
   let p1PhaseEnterSim = 0;
   /** `0` homing orb+tentacles · `1` lightning · `2` radial barrage + teleports. */
@@ -158,6 +178,14 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
    */
   let eldritchBarrageStrike = null;
 
+  /** @type {{ phase: "dash" | "caged"; phaseStartSim: number; flankSign: 1 | -1; dashVx: number; dashVy: number; cageCx: number; cageYOffsetFromWave: number; meleeSpawned: number; cageWaveFY: number; lastSyncedCy: number } | null} */
+  let floatingCageStrike = null;
+  /** `macroPhase === 3` wall clock baseline. */
+  let p2PhaseEnterSim = 0;
+  /** @type {"idle" | "gap"} */
+  let p2Mode = /** @type {"idle" | "gap"} */ ("idle");
+  let p2NextAttackSim = 0;
+
   function clearBloomLiftPrepFields(h) {
     h.depthsSpellLiftPrepStartSim = 0;
     h.depthsSpellLiftPrepEndSim = 0;
@@ -179,11 +207,14 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         h.depthsEldritchTeleportGhostY = 0;
         h.depthsBetweenPhasesUntil = 0;
         h.depthsBetweenPhasesStartSim = 0;
+        h.depthsEldritchCageStrikeActive = false;
+        h.depthsEldritchPhase2Tone = false;
         clearBloomLiftPrepFields(h);
       }
     }
     lightningStrike = null;
     eldritchBarrageStrike = null;
+    floatingCageStrike = null;
   }
 
   function reset() {
@@ -199,6 +230,10 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     eldritchBarrageStrike = null;
     tentacleHitSim = 0;
     tentacleLastK = -1;
+    floatingCageStrike = null;
+    p2PhaseEnterSim = 0;
+    p2Mode = "idle";
+    p2NextAttackSim = 0;
     clearBloomScriptedTelegraph();
   }
 
@@ -363,6 +398,202 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       clearBloomLiftPrepFields(bloom);
     }
     scheduleP1GapFromSpellEnd(simElapsed);
+  }
+
+  /** World-space cage center `{ cx, cy }` from wave front + scripted offset (rising tide = fy decreases upward). */
+  function getFloatingCageCenterWorldXY() {
+    const C = floatingCageStrike;
+    if (!C || C.phase !== "caged") return null;
+    const fy = getDepthsBossRisingWaveFrontY?.() ?? null;
+    const cy =
+      fy != null && Number.isFinite(fy)
+        ? fy + C.cageYOffsetFromWave
+        : Number.isFinite(C.lastSyncedCy)
+          ? C.lastSyncedCy
+          : getPlayer().y;
+    C.lastSyncedCy = cy;
+    return { cx: C.cageCx, cy };
+  }
+
+  function endP2Wave() {
+    macroPhase = 4;
+    p2Mode = "idle";
+    floatingCageStrike = null;
+    tentacleHitSim = 0;
+    tentacleLastK = -1;
+    homingOrbStrike = null;
+    lightningStrike = null;
+    eldritchBarrageStrike = null;
+    clearBloomScriptedTelegraph();
+  }
+
+  function scheduleP2GapFromSpellEnd(simElapsed) {
+    if (simElapsed - p2PhaseEnterSim >= ELDRITCH_BLOOD_PHASE2_DURATION_SEC) {
+      endP2Wave();
+      return;
+    }
+    p2Mode = "gap";
+    p2NextAttackSim =
+      simElapsed +
+      randRange(ELDRITCH_BLOOD_ATTACK_COOLDOWN_LO_SEC, ELDRITCH_BLOOD_ATTACK_COOLDOWN_HI_SEC + 1e-6);
+  }
+
+  function finishFloatingCageStrike(simElapsed) {
+    floatingCageStrike = null;
+    const bloom = getBloomHunter();
+    if (bloom) {
+      bloom.depthsEldritchCageStrikeActive = false;
+      bloom.depthsEldritchOrbStrikeChanneling = false;
+      bloom.depthsCastLiftActive = false;
+      bloom.depthsEldritchTelegraphHoldUntil = 0;
+      clearBloomLiftPrepFields(bloom);
+    }
+    scheduleP2GapFromSpellEnd(simElapsed);
+  }
+
+  function beginFloatingCageStrike(bloom) {
+    const sim = getSimElapsed();
+    const player = getPlayer();
+    clearBloomLiftPrepFields(bloom);
+    bloom.depthsEldritchLightningCastActive = false;
+    bloom.depthsEldritchBarrageAttackActive = false;
+    bloom.depthsCastLiftActive = true;
+    bloom.depthsEldritchOrbStrikeChanneling = true;
+    bloom.depthsEldritchCageStrikeActive = true;
+    bloom.depthsEldritchTelegraphHoldUntil = sim + 18;
+    p2Mode = "gap";
+    const flankSign = /** @type {1 | -1} */ (bloom.x < player.x ? -1 : 1);
+    floatingCageStrike = {
+      phase: "dash",
+      phaseStartSim: sim,
+      flankSign,
+      dashVx: 0,
+      dashVy: 0,
+      cageCx: 0,
+      cageYOffsetFromWave: 0,
+      meleeSpawned: 0,
+      cageWaveFY: getDepthsBossRisingWaveFrontY?.() ?? player.y,
+      lastSyncedCy: player.y,
+    };
+  }
+
+  function tickFloatingCageStrike(dt) {
+    const sim = getSimElapsed();
+    const bloom = getBloomHunter();
+    const player = getPlayer();
+    const rt = getHunterRuntime();
+    const C = floatingCageStrike;
+    if (!C) return;
+    if (!bloom || !rt) {
+      floatingCageStrike = null;
+      clearBloomScriptedTelegraph();
+      return;
+    }
+
+    if (C.phase === "dash") {
+      const tx = player.x + C.flankSign * BARRAGE_FLANK_OFFSET_X;
+      const ty = clampBloomYForBarrage(bloom, player.y);
+      const ddx = tx - bloom.x;
+      const ddy = ty - bloom.y;
+      const dist = Math.hypot(ddx, ddy) || 1;
+      C.dashVx += (ddx / dist) * BARRAGE_DASH_ACCEL * dt;
+      C.dashVy += (ddy / dist) * BARRAGE_DASH_ACCEL * dt;
+      let sp = Math.hypot(C.dashVx, C.dashVy);
+      if (sp > BARRAGE_DASH_MAX_SPEED) {
+        const s = BARRAGE_DASH_MAX_SPEED / sp;
+        C.dashVx *= s;
+        C.dashVy *= s;
+      }
+      bloom.x += C.dashVx * dt;
+      bloom.y += C.dashVy * dt;
+      bloom.y = clampBloomYForBarrage(bloom, bloom.y);
+
+      const arrived = Math.hypot(tx - bloom.x, ty - bloom.y) < 30 || sim - C.phaseStartSim >= FLOATING_CAGE_DASH_ALIGN_MAX_SEC;
+      if (!arrived) return;
+
+      bloom.x = tx;
+      bloom.y = ty;
+      const fySnap = getDepthsBossRisingWaveFrontY?.() ?? player.y;
+      C.cageCx = player.x;
+      C.cageYOffsetFromWave = player.y - fySnap;
+      C.cageWaveFY = fySnap;
+      C.phase = "caged";
+      C.phaseStartSim = sim;
+      C.meleeSpawned = 0;
+      C.dashVx = 0;
+      C.dashVy = 0;
+      C.lastSyncedCy = player.y;
+      bloom.depthsEldritchTelegraphHoldUntil = sim + FLOATING_CAGE_CAGED_DURATION_SEC + 0.6;
+      return;
+    }
+
+    if (C.phase === "caged") {
+      const age = sim - C.phaseStartSim;
+      while (
+        C.meleeSpawned < FLOATING_CAGE_MELEE_COUNT &&
+        age >= C.meleeSpawned * FLOATING_CAGE_MELEE_GAP_SEC + 0.14
+      ) {
+        let dx = player.x - bloom.x;
+        let dy = player.y - bloom.y;
+        const l = Math.hypot(dx, dy) || 1;
+        dx /= l;
+        dy /= l;
+        rt.spawnHunter("depthsEldritchCageLunge", bloom.x, bloom.y, {
+          eldritchCageLungeVx: dx * FLOATING_CAGE_LUNGE_SPEED_PX,
+          eldritchCageLungeVy: dy * FLOATING_CAGE_LUNGE_SPEED_PX,
+        });
+        C.meleeSpawned += 1;
+      }
+
+      if (age >= FLOATING_CAGE_CAGED_DURATION_SEC) {
+        finishFloatingCageStrike(sim);
+      }
+    }
+  }
+
+  function applyFloatingCageRisingWaveCarryBeforePlayerMove() {
+    const C = floatingCageStrike;
+    if (!C || C.phase !== "caged") return;
+    const fy = getDepthsBossRisingWaveFrontY?.() ?? null;
+    if (fy == null || !Number.isFinite(fy)) return;
+    const prevFy = C.cageWaveFY;
+    const dfy = fy - prevFy;
+    C.cageWaveFY = fy;
+    if (Math.abs(dfy) < 1e-8) return;
+    const ctr = getFloatingCageCenterWorldXY();
+    if (!ctr) return;
+    const p = getPlayer();
+    const pr = Number(p.r) || PLAYER_RADIUS;
+    const dx = p.x - ctr.cx;
+    const dy = p.y - ctr.cy;
+    const maxRide = FLOATING_CAGE_RADIUS_PX - pr * 0.99;
+    if (maxRide > 0 && Math.hypot(dx, dy) <= maxRide) {
+      p.y += dfy;
+    }
+  }
+
+  /** While active, player collision uses no obstacle rects (see `entry.js` `obstaclesForPlayerCollision`). */
+  function isFloatingCageTerrainCollisionSuppressedNow() {
+    const C = floatingCageStrike;
+    return !!(C && C.phase === "caged");
+  }
+
+  function clampPlayerToFloatingCage() {
+    const C = floatingCageStrike;
+    if (!C || C.phase !== "caged") return;
+    const ctr = getFloatingCageCenterWorldXY();
+    if (!ctr) return;
+    const p = getPlayer();
+    const pr = Number(p.r) || PLAYER_RADIUS;
+    const maxDist = FLOATING_CAGE_RADIUS_PX - pr;
+    if (!(maxDist > 1)) return;
+    let dx = p.x - ctr.cx;
+    let dy = p.y - ctr.cy;
+    const d = Math.hypot(dx, dy) || 1;
+    if (d <= maxDist) return;
+    const s = maxDist / d;
+    p.x = ctr.cx + dx * s;
+    p.y = ctr.cy + dy * s;
   }
 
   function beginLightningStrike(bloom) {
@@ -792,60 +1023,91 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         if (bloom) {
           bloom.depthsBetweenPhasesUntil = 0;
           bloom.depthsBetweenPhasesStartSim = 0;
+          bloom.depthsEldritchPhase2Tone = true;
         }
+        p2PhaseEnterSim = simElapsed;
+        p2Mode = "gap";
+        p2NextAttackSim = simElapsed + ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
       }
       return;
     }
 
-    if (macroPhase >= 3) return;
+    if (macroPhase >= 4) return;
+
+    if (macroPhase === 3 && simElapsed - p2PhaseEnterSim >= ELDRITCH_BLOOD_PHASE2_DURATION_SEC) {
+      endP2Wave();
+      return;
+    }
 
     const fightAge = simElapsed - fightStartSim;
     const bloom = getBloomHunter();
+
+    if (floatingCageStrike) {
+      tickFloatingCageStrike(dt);
+      return;
+    }
 
     if (homingOrbStrike) {
       tickHomingOrbStrike(dt);
       return;
     }
-
     if (lightningStrike) {
       tickLightningStrike(dt);
       return;
     }
-
     if (eldritchBarrageStrike) {
       tickBarrageStrike(dt);
       return;
     }
 
-    if (p1Mode === "tentacles") {
+    if (macroPhase <= 1) {
+      if (p1Mode === "tentacles") {
+        return;
+      }
+
+      if (macroPhase === 0) {
+        if (fightAge < ELDRITCH_BLOOD_PHASE1_START_SEC || !bloom) return;
+        macroPhase = 1;
+        p1PhaseEnterSim = simElapsed;
+        p1NextSpellKind = rollP1NextSpellKind();
+        p1Mode = "gap";
+        p1NextAttackSim = simElapsed + ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
+      }
+
+      if (p1Mode === "gap") {
+        if (macroPhase === 1 && simElapsed - p1PhaseEnterSim >= ELDRITCH_BLOOD_PHASE1_DURATION_SEC) {
+          endP1Wave();
+          return;
+        }
+        if (bloom) {
+          bloom.depthsSpellLiftPrepStartSim = p1NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
+          bloom.depthsSpellLiftPrepEndSim = p1NextAttackSim;
+        }
+        if (bloom && simElapsed >= p1NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC) {
+          bloom.depthsCastLiftActive = true;
+        }
+        if (simElapsed >= p1NextAttackSim && bloom) {
+          if (p1NextSpellKind === 1) beginLightningStrike(bloom);
+          else if (p1NextSpellKind === 2) beginBarrageStrike(bloom);
+          else beginHomingOrbStrike(bloom);
+        }
+      }
       return;
     }
 
-    if (macroPhase === 0) {
-      if (fightAge < ELDRITCH_BLOOD_PHASE1_START_SEC || !bloom) return;
-      macroPhase = 1;
-      p1PhaseEnterSim = simElapsed;
-      p1NextSpellKind = rollP1NextSpellKind();
-      p1Mode = "gap";
-      p1NextAttackSim = simElapsed + ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
-    }
-
-    if (p1Mode === "gap") {
-      if (macroPhase === 1 && simElapsed - p1PhaseEnterSim >= ELDRITCH_BLOOD_PHASE1_DURATION_SEC) {
-        endP1Wave();
-        return;
-      }
-      if (bloom) {
-        bloom.depthsSpellLiftPrepStartSim = p1NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
-        bloom.depthsSpellLiftPrepEndSim = p1NextAttackSim;
-      }
-      if (bloom && simElapsed >= p1NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC) {
-        bloom.depthsCastLiftActive = true;
-      }
-      if (simElapsed >= p1NextAttackSim && bloom) {
-        if (p1NextSpellKind === 1) beginLightningStrike(bloom);
-        else if (p1NextSpellKind === 2) beginBarrageStrike(bloom);
-        else beginHomingOrbStrike(bloom);
+    if (macroPhase === 3) {
+      if (p2Mode === "gap") {
+        if (bloom) {
+          bloom.depthsSpellLiftPrepStartSim = p2NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
+          bloom.depthsSpellLiftPrepEndSim = p2NextAttackSim;
+        }
+        if (bloom && simElapsed >= p2NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC) {
+          bloom.depthsCastLiftActive = true;
+        }
+        if (simElapsed >= p2NextAttackSim && bloom) {
+          /** First P2 attack for now — later diversify `p2NextSpellKind`. */
+          beginFloatingCageStrike(bloom);
+        }
       }
       return;
     }
@@ -855,6 +1117,39 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   function drawUnderHunters(ctx) {
     if (!isDepthsBossFightLevel()) return;
     const bloom = getBloomHunter();
+    const fc = floatingCageStrike;
+    if (fc?.phase === "caged") {
+      const ctr = getFloatingCageCenterWorldXY();
+      if (ctr) {
+        const simElapsed = getSimElapsed();
+        const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 13);
+        const R = FLOATING_CAGE_RADIUS_PX;
+        const { cx, cy } = ctr;
+        const floorRad = Math.max(28, R - 14);
+        ctx.save();
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = getFloatingCageInteriorFill();
+        ctx.beginPath();
+        ctx.arc(cx, cy, floorRad, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalCompositeOperation = "screen";
+        ctx.strokeStyle = `rgba(255, 120, 180, ${0.38 + 0.22 * pulse})`;
+        ctx.lineWidth = 5;
+        ctx.shadowColor = "rgba(255, 160, 200, 0.55)";
+        ctx.shadowBlur = 22 + pulse * 12;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R - 3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(170, 220, 255, ${0.18 + 0.12 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R - 8, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+    }
     if (lightningStrike && bloom) {
       const simElapsed = getSimElapsed();
       const u = clamp((simElapsed - lightningStrike.phaseStartSim) / 1.15, 0, 1);
@@ -985,11 +1280,78 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     ctx.restore();
   }
 
+  /**
+   * Dev-only: abort any scripted beat and start one immediately (Depths L5 boss chase).
+   * @param {string} spellId `p1_orb` | `p1_lightning` | `p1_barrage` | `p2_cage`
+   * @returns {{ ok: true } | { ok: false, reason: string }}
+   */
+  function debugForceEldritchSpell(spellId) {
+    if (!isDepthsBossFightLevel()) return { ok: false, reason: "not_boss_chase" };
+    if (!getHuntersEnabled()) return { ok: false, reason: "hunters_disabled" };
+    if (getRunDead()) return { ok: false, reason: "run_dead" };
+    if (isPlayerInSafehouse()) return { ok: false, reason: "safehouse" };
+    const rt = getHunterRuntime();
+    if (!rt) return { ok: false, reason: "no_hunter_runtime" };
+    const bloom = getBloomHunter();
+    if (!bloom) return { ok: false, reason: "no_bloom" };
+
+    const sim = getSimElapsed();
+    notifyFightClockStart(sim);
+
+    homingOrbStrike = null;
+    lightningStrike = null;
+    eldritchBarrageStrike = null;
+    floatingCageStrike = null;
+    tentacleHitSim = 0;
+    tentacleLastK = -1;
+    p1Mode = "gap";
+    clearBloomScriptedTelegraph();
+
+    if (spellId === "p1_orb") {
+      macroPhase = 1;
+      p1PhaseEnterSim = sim;
+      p1NextAttackSim = sim;
+      if (bloom) bloom.depthsEldritchPhase2Tone = false;
+      beginHomingOrbStrike(bloom);
+      return { ok: true };
+    }
+    if (spellId === "p1_lightning") {
+      macroPhase = 1;
+      p1PhaseEnterSim = sim;
+      p1NextAttackSim = sim;
+      if (bloom) bloom.depthsEldritchPhase2Tone = false;
+      beginLightningStrike(bloom);
+      return { ok: true };
+    }
+    if (spellId === "p1_barrage") {
+      macroPhase = 1;
+      p1PhaseEnterSim = sim;
+      p1NextAttackSim = sim;
+      if (bloom) bloom.depthsEldritchPhase2Tone = false;
+      beginBarrageStrike(bloom);
+      return { ok: true };
+    }
+    if (spellId === "p2_cage") {
+      macroPhase = 3;
+      p2PhaseEnterSim = sim;
+      p2Mode = "gap";
+      p2NextAttackSim = sim;
+      if (bloom) bloom.depthsEldritchPhase2Tone = true;
+      beginFloatingCageStrike(bloom);
+      return { ok: true };
+    }
+    return { ok: false, reason: "unknown_spell" };
+  }
+
   return {
     reset,
     notifyFightClockStart,
     tick,
     drawUnderHunters,
     drawOverHunters,
+    applyFloatingCageRisingWaveCarryBeforePlayerMove,
+    isFloatingCageTerrainCollisionSuppressedNow,
+    clampPlayerToFloatingCage,
+    debugForceEldritchSpell,
   };
 }
