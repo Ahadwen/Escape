@@ -734,6 +734,9 @@ function boot() {
   let boneBlindDebuffFromBlueLaser = false;
   /** `simElapsed` until which a full-view white flare plays after Depths eldritch lightning tags the player. */
   let eldritchLightningHitScreenFlashUntil = 0;
+  /** P2 post-cage lightning ball: screen UI flash + label so touch damage reads clearly. */
+  let eldritchPostCageLightningUiUntil = 0;
+  const ELDRITCH_POST_CAGE_LIGHTNING_UI_SEC = 0.22;
   const BONE_BLIND_DEBUFF_PEAK_SEC = 0.92;
   const BONE_BLIND_DEBUFF_FADE_SEC = 0.55;
   /** Tracks Knight clubs invisibility window for edge detection (eject from terrain when it ends). */
@@ -778,6 +781,8 @@ function boot() {
   let depthsBossRisingWaveFrontY = /** @type {number | null} */ (null);
   /** Non-zero `simElapsed` when tide sweep started (`0` = idle). */
   let depthsBossSurfStartSim = 0;
+  /** While tide drag+spit is active: block Q/W/E/R until spit landing damage is applied (then cleared). */
+  let depthsBossSurfSpellsLocked = false;
   /** World Y target for spit phase (`null` until spit phase locks it). */
   let depthsBossSpitTargetY = /** @type {number | null} */ (null);
   let depthsBossWaveTouchImmuneUntil = 0;
@@ -894,6 +899,7 @@ function boot() {
         stunNearbyEnemies: (secs) => {
           if (!hunterRuntime) return;
           for (const h of hunterRuntime.entities.hunters) {
+            if (h.type === "depthsEldritchBarrageBolt") continue;
             const dx = h.x - player.x;
             const dy = h.y - player.y;
             if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + secs);
@@ -912,6 +918,7 @@ function boot() {
     stunNearbyEnemies: (secs) => {
       if (!hunterRuntime) return;
       for (const h of hunterRuntime.entities.hunters) {
+        if (h.type === "depthsEldritchBarrageBolt") continue;
         const dx = h.x - player.x;
         const dy = h.y - player.y;
         if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + secs);
@@ -1081,6 +1088,8 @@ function boot() {
     depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
     wasFloatingCageCagedLastFrame = false;
+    eldritchPostCageLightningUiUntil = 0;
+    depthsBossSurfSpellsLocked = false;
     eldritchBlood?.reset();
   }
 
@@ -1107,6 +1116,7 @@ function boot() {
     depthsBossSpitTargetY = null;
     depthsBossSurfDeferredClampSim = 0;
     depthsBossSurfTerrainFreeUntil = simElapsed + DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC;
+    depthsBossSurfSpellsLocked = true;
   }
 
   /** More MTV passes than global `resolvePlayerAgainstRects` (6) — corners / stacks need deeper separation. */
@@ -1538,6 +1548,7 @@ function boot() {
         depthsBossSurfStartSim = 0;
         depthsBossSpitTargetY = null;
         depthsBossSurfDeferredClampSim = 0;
+        depthsBossSurfSpellsLocked = false;
       }
       return;
     }
@@ -1585,6 +1596,7 @@ function boot() {
             depthsBossWaveSpit: true,
           });
         }
+        depthsBossSurfSpellsLocked = false;
         pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 1.85, "rgba(255, 255, 255, 0.96)", t0, 0.4, { lineWidth: 3.6 });
         pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 2.85, "rgba(240, 249, 255, 0.92)", t0, 0.5, { lineWidth: 3.2 });
         pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 4.9, "rgba(200, 235, 255, 0.82)", t0, 0.58, { lineWidth: 2.9 });
@@ -1605,6 +1617,7 @@ function boot() {
     depthsBossSpitTargetY = null;
     depthsBossSurfDeferredClampSim = 0;
     depthsBossSurfTerrainFreeUntil = simElapsed + DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC;
+    depthsBossSurfSpellsLocked = true;
   }
 
   /** @param {{ markWaveIdx?: number }} [opts] — `markWaveIdx` ties to storm wave so the natural spawn does not double-fire. */
@@ -3098,6 +3111,7 @@ function boot() {
     boneBlindDebuffFadeEnd = 0;
     boneBlindDebuffFromBlueLaser = false;
     eldritchLightningHitScreenFlashUntil = 0;
+    eldritchPostCageLightningUiUntil = 0;
     resetSwampInfection();
     resetFireGrowthZones();
     swampMudTrail.length = 0;
@@ -3520,6 +3534,16 @@ function boot() {
       pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 4.4, "rgba(240, 248, 255, 0.62)", t0, 0.46);
       pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 8.5, "rgba(220, 235, 255, 0.38)", t0, 0.54);
     },
+    onPostCageLightningBallPlayerHit: ({ playerX, playerY }) => {
+      const t0 = simElapsed;
+      eldritchPostCageLightningUiUntil = t0 + ELDRITCH_POST_CAGE_LIGHTNING_UI_SEC;
+      playerDamage.bumpScreenShake(58, 0.45);
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 1.1, "rgba(255, 255, 255, 0.96)", t0, 0.32, { lineWidth: 4.8 });
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 2.35, "rgba(200, 240, 255, 0.9)", t0, 0.4, { lineWidth: 3.6 });
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 4.6, "rgba(186, 104, 255, 0.72)", t0, 0.48, { lineWidth: 3.2 });
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 8.2, "rgba(120, 200, 255, 0.55)", t0, 0.56);
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 13, "rgba(255, 140, 220, 0.42)", t0, 0.62);
+    },
   });
 
   document.getElementById("debug-depths-boss-spell-trigger")?.addEventListener("click", () => {
@@ -3631,6 +3655,7 @@ function boot() {
     boneBlindDebuffFadeEnd = 0;
     boneBlindDebuffFromBlueLaser = false;
     eldritchLightningHitScreenFlashUntil = 0;
+    eldritchPostCageLightningUiUntil = 0;
     resetSwampInfection();
     resetFireGrowthZones();
     swampMudTrail.length = 0;
@@ -4175,6 +4200,7 @@ function boot() {
       return;
     }
     if (simElapsed < playerTimelockUntil) return;
+    if (depthsBossSurfSpellsLocked) return;
     const ctx = buildAbilityContext(0);
     if (slot === "r" && tryUseEquippedUltimate(ctx)) return;
     character.onAbilityPress(slot, ctx);
@@ -4182,6 +4208,7 @@ function boot() {
   function handleAbilityRelease(slot) {
     if (runDead || isWorldPaused()) return;
     if (simElapsed < playerTimelockUntil) return;
+    if (depthsBossSurfSpellsLocked) return;
     if (typeof character.onAbilityRelease !== "function") return;
     const ctx = buildAbilityContext(0);
     character.onAbilityRelease(slot, ctx);
@@ -4845,6 +4872,7 @@ function boot() {
         }
         if (!paused) {
           eldritchBlood?.tick(dt);
+          eldritchBlood?.clampPlayerToFloatingCage?.();
           const cagedNow = eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.() ?? false;
           if (wasFloatingCageCagedLastFrame && !cagedNow) {
             maybeDepthsBossCatchUpWaveAfterCageRelease();
@@ -5844,6 +5872,34 @@ function boot() {
       ctx.save();
       ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
       ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
+    }
+
+    if (simElapsed < eldritchPostCageLightningUiUntil) {
+      const rem = eldritchPostCageLightningUiUntil - simElapsed;
+      const u = clamp(rem / Math.max(1e-4, ELDRITCH_POST_CAGE_LIGHTNING_UI_SEC), 0, 1);
+      /** 1 = frame of impact (strongest), 0 = faded out — avoids sin(u·π) being ~0 at u≈1. */
+      const hit = 1 - u;
+      const spike = hit * hit;
+      const wash = Math.pow(hit, 0.45);
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.12 + 0.68 * spike})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.fillStyle = `rgba(186, 230, 255, ${0.1 + 0.42 * spike})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.fillStyle = `rgba(255, 240, 255, ${0.06 + 0.2 * wash})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.globalCompositeOperation = "screen";
+      ctx.fillStyle = `rgba(200, 250, 255, ${0.14 * wash})`;
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = `rgba(255, 255, 255, ${0.35 * spike})`;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, viewW - 4, viewH - 4);
+      ctx.strokeStyle = `rgba(220, 240, 255, ${0.22 * spike})`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(8, 8, viewW - 16, viewH - 16);
       ctx.restore();
     }
 

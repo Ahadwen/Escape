@@ -2457,6 +2457,50 @@
         width: 100%;
       }
 
+      .dev-depths-water-dist {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .dev-depths-water-dist span {
+        font-size: 11px;
+        color: #94a3b8;
+      }
+
+      .dev-depths-water-dist-value {
+        font-size: 11px;
+        color: #e2e8f0;
+        word-break: break-word;
+      }
+
+      .dev-depths-boss-spells {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .dev-depths-boss-spells-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .dev-depths-boss-spells-row select {
+        min-width: 0;
+        font-size: 11px;
+      }
+
+      .dev-depths-boss-spells-row button {
+        flex-shrink: 0;
+        white-space: nowrap;
+        padding: 6px 10px;
+        font-size: 11px;
+      }
+
       .dev-run-path {
         margin-top: 12px;
         padding-top: 10px;
@@ -2604,6 +2648,31 @@
         <span>Depths events</span>
         <button id="debug-depths-whirlpool-trigger" type="button">Trigger whirlpool</button>
         <p class="special-test-west-hint">Depths path only — voids your hex and starts pull / bite sequence.</p>
+        <div class="dev-depths-water-dist" aria-live="polite">
+          <span>Player ↔ wave (Y)</span>
+          <code id="debug-depths-water-dist-value" class="dev-depths-water-dist-value">—</code>
+        </div>
+        <div class="dev-depths-boss-spells" aria-label="Depths L5 boss scripted spells">
+          <span>Boss spells</span>
+          <div class="dev-depths-boss-spells-row">
+            <select
+              id="debug-depths-boss-spell-select"
+              autocomplete="off"
+              title="Pick a scripted beat to force"
+              aria-label="Boss spell to cast"
+            >
+              <option value="p1_orb">P1 · Homing orb + tentacles</option>
+              <option value="p1_lightning">P1 · Lightning columns</option>
+              <option value="p1_barrage">P1 · Radial barrage + teleports</option>
+              <option value="p2_cage">P2 · Floating cage</option>
+              <option value="p2_swarm">P2 · Swarm minions + teleport</option>
+            </select>
+            <button id="debug-depths-boss-spell-trigger" type="button">Cast</button>
+          </div>
+          <p class="special-test-west-hint">
+            Boss chase only; hunters must be on. Clears the current scripted spell then starts one beat.
+          </p>
+        </div>
       </div>
     </div>
     <div class="page-with-side">
@@ -3077,6 +3146,6 @@
       </div>
     </div>
 
-      <script type="module" crossorigin src="./assets/main-B0dbazmi.js"></script>
+      <script type="module" crossorigin src="./assets/main-D6TCqmtl.js"></script>
   </body>
 </html>

@@ -6,7 +6,7 @@
  * Phase 2: same drift → prep → glow → cadence (`ELDRITCH_BLOOD_PHASE2_DURATION_SEC`), different attack pool; first strike is floating cage arena.
  */
 import { PLAYER_RADIUS } from "../balance.js";
-import { clamp } from "../Hunters/hunterGeometry.js";
+import { clamp, pointToSegmentDistance } from "../Hunters/hunterGeometry.js";
 
 export const ELDRITCH_BLOOD_PHASE1_START_SEC = 10;
 /** Wall time from entering P1 until the scripted wave ends (no further P1 spells arm after this). */
@@ -28,12 +28,67 @@ export const ELDRITCH_BLOOD_FLOATING_CAGE_DIAMETER_PX = 350;
 const FLOATING_CAGE_RADIUS_PX = ELDRITCH_BLOOD_FLOATING_CAGE_DIAMETER_PX / 2;
 /** Boss dash to flank matches P1 radial barrage, then snaps the cage on the player. */
 const FLOATING_CAGE_DASH_ALIGN_MAX_SEC = 2.85;
-/** While the ring is active: melee lunges spawn from the bloom toward the player. */
-const FLOATING_CAGE_CAGED_DURATION_SEC = 5.1;
-const FLOATING_CAGE_MELEE_GAP_SEC = 1.08;
-const FLOATING_CAGE_MELEE_COUNT = 4;
-/** Short rush hitbox spawned from scripted bloom during the cage beat. */
-const FLOATING_CAGE_LUNGE_SPEED_PX = 740;
+/** Brief beat after the ring snaps on the player before the boss floats to the ring exterior. */
+const FLOATING_CAGE_APPEAR_HOLD_SEC = 0.18;
+
+/** Boss eases to a point outside the ring: cage radius + this pad from center (along ray from center toward boss). */
+const POST_CAGE_OUTSIDE_PAD_PX = 70;
+
+/** After float: lightning column on the boss, lightning sprite form, then three dashes aimed at the locked player position. */
+const POST_CAGE_FLOAT_SEC = 1.28;
+const POST_CAGE_LIGHTNING_FORM_SEC = 0.92;
+const POST_CAGE_DASH_TELEGRAPH_SEC = 0.62;
+const POST_CAGE_DASH_MOVE_SEC = 0.42;
+const POST_CAGE_DASH_PAUSE_SEC = 0.52;
+const POST_CAGE_DASH_HIT_HW_PX = 38;
+/** Lightning-ball boss: touch damage + shake (cooldown avoids per-frame hits). */
+const POST_CAGE_LIGHTNING_TOUCH_COOLDOWN_SEC = 0.4;
+const POST_CAGE_LIGHTNING_TOUCH_SHAKE = 46;
+const POST_CAGE_LIGHTNING_TOUCH_SHAKE_SEC = 0.38;
+
+/** Phases where the cage center tracks the wave and the player is clamped / terrain-free inside the ring. */
+const FLOATING_CAGE_INTERIOR_PHASES = new Set([
+  "caged",
+  "postBossFloat",
+  "postLightningFlash",
+  "postLightningForm",
+  "postDashTelegraph",
+  "postDashMove",
+  "postDashPause",
+]);
+
+/** World point ~`padPx` beyond the ring rim, on the ray from cage center toward `(bx, by)` (closest exterior side). */
+function outsideRingBossPoint(cx, cy, bx, by, R, padPx) {
+  let dx = bx - cx;
+  let dy = by - cy;
+  if (Math.abs(dx) + Math.abs(dy) < 1e-5) {
+    dx = 1;
+    dy = 0;
+  }
+  const dist = Math.hypot(dx, dy) || 1;
+  const ux = dx / dist;
+  const uy = dy / dist;
+  return { x: cx + ux * (R + padPx), y: cy + uy * (R + padPx) };
+}
+
+/**
+ * Largest `t > eps` with `|{rx,ry} + t*{ux,uy}|² = circleRsq` (`u` unit).
+ * Dash starts on that circle (`outsideRingBossPoint`); the second root is the opposite rim hit without overshooting.
+ */
+function largestRayCircleHitT(rx, ry, ux, uy, circleRsq, eps) {
+  const b = 2 * (rx * ux + ry * uy);
+  const c = rx * rx + ry * ry - circleRsq;
+  const disc = b * b - 4 * c;
+  if (disc < 0) return null;
+  const s = Math.sqrt(disc);
+  const t0 = (-b - s) / 2;
+  const t1 = (-b + s) / 2;
+  let best = null;
+  for (const t of [t0, t1]) {
+    if (t > eps && (best === null || t > best)) best = t;
+  }
+  return best;
+}
 
 const ORB_CHARGE_SEC = 0.92;
 const ORB_RADIUS = 26;
@@ -75,6 +130,11 @@ const BARRAGE_POST_VOLLEY_WAIT_SEC = 0.7;
 const BARRAGE_TELEPORT_SEC = 0.36;
 const BARRAGE_TELEPORT_SWAP_AT = 0.14;
 
+/** P2 “swarm”: barrage-style flank lock, depths bolt-spawner `fast` minions every `P2_SWARM_SPAWN_INTERVAL_SEC`, teleport, then repeat. */
+const P2_SWARM_SPAWN_INTERVAL_SEC = 0.1;
+const P2_SWARM_BURST1_SEC = 2;
+const P2_SWARM_BURST2_SEC = 3;
+
 function stormHash01(n) {
   return ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
 }
@@ -92,6 +152,7 @@ function stormHash01(n) {
  * @property {(amount: number, opts?: { sourceX?: number; sourceY?: number; eldritchBloodAttack?: string }) => void} damagePlayerThroughPath
  * @property {(strength: number, sec: number) => void} bumpScreenShake
  * @property {(opts: { columnX: number; playerX: number; playerY: number }) => void} [onLightningColumnPlayerHit] — extra FX when the column connects (e.g. rings + screen flare; base shake is applied in this module).
+ * @property {(opts: { playerX: number; playerY: number }) => void} [onPostCageLightningBallPlayerHit] — FX when the post-cage lightning orb touch deals damage (screen/UI read).
  * @property {() => object | null} getBloomHunter
  * @property {(a: number, b: number) => number} randRange — uniform `[a, b)` (see `rng.js`)
  * @property {() => { x0: number; y0: number; x1: number; y1: number }} getWorldDrawBounds — world-space rect for full-screen FX (camera + view).
@@ -116,6 +177,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     damagePlayerThroughPath,
     bumpScreenShake,
     onLightningColumnPlayerHit,
+    onPostCageLightningBallPlayerHit,
     getBloomHunter,
     randRange,
     getWorldDrawBounds,
@@ -178,13 +240,64 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
    */
   let eldritchBarrageStrike = null;
 
-  /** @type {{ phase: "dash" | "caged"; phaseStartSim: number; flankSign: 1 | -1; dashVx: number; dashVy: number; cageCx: number; cageYOffsetFromWave: number; meleeSpawned: number; cageWaveFY: number; lastSyncedCy: number } | null} */
+  /**
+   * @type {null | {
+   *   phase:
+   *     | "dash"
+   *     | "caged"
+   *     | "postBossFloat"
+   *     | "postLightningFlash"
+   *     | "postLightningForm"
+   *     | "postDashTelegraph"
+   *     | "postDashMove"
+   *     | "postDashPause";
+   *   phaseStartSim: number;
+   *   flankSign: 1 | -1;
+   *   dashVx: number;
+   *   dashVy: number;
+   *   cageCx: number;
+   *   cageYOffsetFromWave: number;
+   *   cageWaveFY: number;
+   *   lastSyncedCy: number;
+   *   cageBossRelX: number;
+   *   cageBossRelY: number;
+   *   postFloatOriginRelX?: number;
+   *   postFloatOriginRelY?: number;
+   *   postFloatTargetRelX?: number;
+   *   postFloatTargetRelY?: number;
+   *   postDashRound?: number;
+   *   postDashDamageDealt?: boolean;
+   *   dashSegRelX0?: number;
+   *   dashSegRelY0?: number;
+   *   dashSegRelX1?: number;
+   *   dashSegRelY1?: number;
+   *   dashLockRelX?: number;
+   *   dashLockRelY?: number;
+   * }}
+   */
   let floatingCageStrike = null;
+  /**
+   * P2 swarm beat: dash to barrage flank → depths swarm `fast` minions → teleport → more minions (`null` when inactive).
+   * @type {null | {
+   *   phase: "dash" | "burst1" | "teleport" | "burst2";
+   *   phaseStartSim: number;
+   *   initialFlankSign: 1 | -1;
+   *   dashVx: number;
+   *   dashVy: number;
+   *   burstWindowStartSim: number;
+   *   burstSpawned: number;
+   *   nextSpawnSim: number;
+   *   teleportSwapped: boolean;
+   * }}
+   */
+  let p2SwarmStrike = null;
   /** `macroPhase === 3` wall clock baseline. */
   let p2PhaseEnterSim = 0;
   /** @type {"idle" | "gap"} */
   let p2Mode = /** @type {"idle" | "gap"} */ ("idle");
   let p2NextAttackSim = 0;
+  /** Alternates P2 scripted beats: even → floating cage, odd → swarm. */
+  let p2StrikeIndex = 0;
 
   function clearBloomLiftPrepFields(h) {
     h.depthsSpellLiftPrepStartSim = 0;
@@ -209,12 +322,17 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         h.depthsBetweenPhasesStartSim = 0;
         h.depthsEldritchCageStrikeActive = false;
         h.depthsEldritchPhase2Tone = false;
+        h.depthsEldritchPostCageScripted = false;
+        h.depthsEldritchPostCageLightningSprite = false;
+        h.depthsEldritchDashTrail = null;
+        h.depthsPostCageLightningContactUntil = 0;
         clearBloomLiftPrepFields(h);
       }
     }
     lightningStrike = null;
     eldritchBarrageStrike = null;
     floatingCageStrike = null;
+    p2SwarmStrike = null;
   }
 
   function reset() {
@@ -231,9 +349,11 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     tentacleHitSim = 0;
     tentacleLastK = -1;
     floatingCageStrike = null;
+    p2SwarmStrike = null;
     p2PhaseEnterSim = 0;
     p2Mode = "idle";
     p2NextAttackSim = 0;
+    p2StrikeIndex = 0;
     clearBloomScriptedTelegraph();
   }
 
@@ -403,7 +523,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   /** World-space cage center `{ cx, cy }` from wave front + scripted offset (rising tide = fy decreases upward). */
   function getFloatingCageCenterWorldXY() {
     const C = floatingCageStrike;
-    if (!C || C.phase !== "caged") return null;
+    if (!C || !FLOATING_CAGE_INTERIOR_PHASES.has(C.phase)) return null;
     const fy = getDepthsBossRisingWaveFrontY?.() ?? null;
     const cy =
       fy != null && Number.isFinite(fy)
@@ -415,10 +535,18 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     return { cx: C.cageCx, cy };
   }
 
+  function applyBloomWorldFromCageRel(/** @type {NonNullable<typeof floatingCageStrike>} */ C, bloom) {
+    const ctr = getFloatingCageCenterWorldXY();
+    if (!ctr || !Number.isFinite(C.cageBossRelX) || !Number.isFinite(C.cageBossRelY)) return;
+    bloom.x = ctr.cx + C.cageBossRelX;
+    bloom.y = ctr.cy + C.cageBossRelY;
+  }
+
   function endP2Wave() {
     macroPhase = 4;
     p2Mode = "idle";
     floatingCageStrike = null;
+    p2SwarmStrike = null;
     tentacleHitSim = 0;
     tentacleLastK = -1;
     homingOrbStrike = null;
@@ -446,9 +574,76 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       bloom.depthsEldritchOrbStrikeChanneling = false;
       bloom.depthsCastLiftActive = false;
       bloom.depthsEldritchTelegraphHoldUntil = 0;
+      bloom.depthsEldritchLightningCastActive = false;
+      bloom.depthsEldritchPostCageScripted = false;
+      bloom.depthsEldritchPostCageLightningSprite = false;
+      bloom.depthsEldritchDashTrail = null;
+      bloom.depthsPostCageLightningContactUntil = 0;
       clearBloomLiftPrepFields(bloom);
     }
     scheduleP2GapFromSpellEnd(simElapsed);
+    p2StrikeIndex = 1;
+  }
+
+  function setupPostCageDashSegmentForRound(
+    /** @type {NonNullable<typeof floatingCageStrike>} */ C,
+    bloom,
+    player,
+  ) {
+    const ctr = getFloatingCageCenterWorldXY();
+    if (!ctr) return false;
+    const R = FLOATING_CAGE_RADIUS_PX;
+    const out = outsideRingBossPoint(ctr.cx, ctr.cy, bloom.x, bloom.y, R, POST_CAGE_OUTSIDE_PAD_PX);
+    C.dashSegRelX0 = out.x - ctr.cx;
+    C.dashSegRelY0 = out.y - ctr.cy;
+    C.dashLockRelX = player.x - ctr.cx;
+    C.dashLockRelY = player.y - ctr.cy;
+    const vx = C.dashLockRelX - C.dashSegRelX0;
+    const vy = C.dashLockRelY - C.dashSegRelY0;
+    const vlen = Math.hypot(vx, vy) || 1;
+    const ux = vx / vlen;
+    const uy = vy / vlen;
+    const pad = POST_CAGE_OUTSIDE_PAD_PX;
+    const targetR = R + pad;
+    const targetRsq = targetR * targetR;
+    const x0 = C.dashSegRelX0;
+    const y0 = C.dashSegRelY0;
+    let tEnd = largestRayCircleHitT(x0, y0, ux, uy, targetRsq, 1e-2);
+    if (tEnd == null || !Number.isFinite(tEnd)) {
+      const dot0 = x0 * ux + y0 * uy;
+      tEnd = -2 * dot0;
+      if (!(tEnd > 1e-2)) tEnd = Math.max(vlen * 0.55 + R * 0.35, targetR * 0.35);
+    }
+    C.dashSegRelX1 = x0 + ux * tEnd;
+    C.dashSegRelY1 = y0 + uy * tEnd;
+    C.postDashDamageDealt = false;
+    C.cageBossRelX = C.dashSegRelX0;
+    C.cageBossRelY = C.dashSegRelY0;
+    bloom.dir.x = ux;
+    bloom.dir.y = uy;
+    bloom.depthsEldritchDashTrail = [];
+    applyBloomWorldFromCageRel(C, bloom);
+    return true;
+  }
+
+  function tickPostCageLightningBallPlayerContact(bloom, player, simElapsed) {
+    if (!bloom?.depthsEldritchPostCageLightningSprite) return;
+    const lockUntil = Number(bloom.depthsPostCageLightningContactUntil ?? 0);
+    if (simElapsed < lockUntil) return;
+    const pr = Number(player.r) || PLAYER_RADIUS;
+    const br = Number(bloom.r) || 36;
+    const touchR = br * 1.08 + pr;
+    const dx = player.x - bloom.x;
+    const dy = player.y - bloom.y;
+    if (dx * dx + dy * dy > touchR * touchR) return;
+    bloom.depthsPostCageLightningContactUntil = simElapsed + POST_CAGE_LIGHTNING_TOUCH_COOLDOWN_SEC;
+    damagePlayerThroughPath(2, {
+      sourceX: bloom.x,
+      sourceY: bloom.y,
+      eldritchBloodAttack: "postCageLightningTouch",
+    });
+    bumpScreenShake(POST_CAGE_LIGHTNING_TOUCH_SHAKE, POST_CAGE_LIGHTNING_TOUCH_SHAKE_SEC);
+    onPostCageLightningBallPlayerHit?.({ playerX: player.x, playerY: player.y });
   }
 
   function beginFloatingCageStrike(bloom) {
@@ -471,9 +666,10 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       dashVy: 0,
       cageCx: 0,
       cageYOffsetFromWave: 0,
-      meleeSpawned: 0,
       cageWaveFY: getDepthsBossRisingWaveFrontY?.() ?? player.y,
       lastSyncedCy: player.y,
+      cageBossRelX: 0,
+      cageBossRelY: 0,
     };
   }
 
@@ -519,41 +715,169 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       C.cageWaveFY = fySnap;
       C.phase = "caged";
       C.phaseStartSim = sim;
-      C.meleeSpawned = 0;
       C.dashVx = 0;
       C.dashVy = 0;
       C.lastSyncedCy = player.y;
-      bloom.depthsEldritchTelegraphHoldUntil = sim + FLOATING_CAGE_CAGED_DURATION_SEC + 0.6;
+      const cySnap = fySnap + C.cageYOffsetFromWave;
+      C.cageBossRelX = bloom.x - C.cageCx;
+      C.cageBossRelY = bloom.y - cySnap;
+      bloom.depthsEldritchTelegraphHoldUntil = sim + 24;
       return;
+    }
+
+    if (FLOATING_CAGE_INTERIOR_PHASES.has(C.phase)) {
+      applyBloomWorldFromCageRel(C, bloom);
     }
 
     if (C.phase === "caged") {
       const age = sim - C.phaseStartSim;
-      while (
-        C.meleeSpawned < FLOATING_CAGE_MELEE_COUNT &&
-        age >= C.meleeSpawned * FLOATING_CAGE_MELEE_GAP_SEC + 0.14
-      ) {
-        let dx = player.x - bloom.x;
-        let dy = player.y - bloom.y;
-        const l = Math.hypot(dx, dy) || 1;
-        dx /= l;
-        dy /= l;
-        rt.spawnHunter("depthsEldritchCageLunge", bloom.x, bloom.y, {
-          eldritchCageLungeVx: dx * FLOATING_CAGE_LUNGE_SPEED_PX,
-          eldritchCageLungeVy: dy * FLOATING_CAGE_LUNGE_SPEED_PX,
-        });
-        C.meleeSpawned += 1;
+      if (age >= FLOATING_CAGE_APPEAR_HOLD_SEC) {
+        const ctr = getFloatingCageCenterWorldXY();
+        if (!ctr || !Number.isFinite(bloom.x)) {
+          finishFloatingCageStrike(sim);
+          return;
+        }
+        const out = outsideRingBossPoint(
+          ctr.cx,
+          ctr.cy,
+          bloom.x,
+          bloom.y,
+          FLOATING_CAGE_RADIUS_PX,
+          POST_CAGE_OUTSIDE_PAD_PX,
+        );
+        C.postFloatOriginRelX = C.cageBossRelX;
+        C.postFloatOriginRelY = C.cageBossRelY;
+        C.postFloatTargetRelX = out.x - ctr.cx;
+        C.postFloatTargetRelY = out.y - ctr.cy;
+        C.phase = "postBossFloat";
+        C.phaseStartSim = sim;
+        bloom.depthsEldritchPostCageScripted = true;
+      }
+      return;
+    }
+
+    if (C.phase === "postBossFloat") {
+      const ox = Number(C.postFloatOriginRelX);
+      const oy = Number(C.postFloatOriginRelY);
+      const tx = Number(C.postFloatTargetRelX);
+      const ty = Number(C.postFloatTargetRelY);
+      const age = sim - C.phaseStartSim;
+      const u = clamp(age / Math.max(1e-4, POST_CAGE_FLOAT_SEC), 0, 1);
+      const e = u * u * (3 - 2 * u);
+      if (Number.isFinite(ox) && Number.isFinite(oy) && Number.isFinite(tx) && Number.isFinite(ty)) {
+        C.cageBossRelX = ox + (tx - ox) * e;
+        C.cageBossRelY = oy + (ty - oy) * e;
+        applyBloomWorldFromCageRel(C, bloom);
+      }
+      if (age >= POST_CAGE_FLOAT_SEC) {
+        C.phase = "postLightningFlash";
+        C.phaseStartSim = sim;
+        bumpScreenShake(52, 0.58);
+      }
+      return;
+    }
+
+    if (C.phase === "postLightningFlash") {
+      if (sim - C.phaseStartSim >= LIGHTNING_STRIKE_FLASH_SEC) {
+        C.phase = "postLightningForm";
+        C.phaseStartSim = sim;
+        bloom.depthsEldritchCageStrikeActive = false;
+        bloom.depthsEldritchLightningCastActive = true;
+        bloom.depthsEldritchPostCageLightningSprite = true;
+      }
+      return;
+    }
+
+    if (C.phase === "postLightningForm") {
+      if (sim - C.phaseStartSim >= POST_CAGE_LIGHTNING_FORM_SEC) {
+        C.postDashRound = 0;
+        C.phase = "postDashTelegraph";
+        C.phaseStartSim = sim;
+        if (!setupPostCageDashSegmentForRound(C, bloom, player)) finishFloatingCageStrike(sim);
+      }
+      tickPostCageLightningBallPlayerContact(bloom, player, sim);
+      return;
+    }
+
+    if (C.phase === "postDashTelegraph") {
+      if (sim - C.phaseStartSim >= POST_CAGE_DASH_TELEGRAPH_SEC) {
+        C.phase = "postDashMove";
+        C.phaseStartSim = sim;
+        bumpScreenShake(12, 0.16);
+      }
+      tickPostCageLightningBallPlayerContact(bloom, player, sim);
+      return;
+    }
+
+    if (C.phase === "postDashMove") {
+      const rx0 = Number(C.dashSegRelX0);
+      const ry0 = Number(C.dashSegRelY0);
+      const rx1 = Number(C.dashSegRelX1);
+      const ry1 = Number(C.dashSegRelY1);
+      const age = sim - C.phaseStartSim;
+      const u = clamp(age / Math.max(1e-4, POST_CAGE_DASH_MOVE_SEC), 0, 1);
+      const e = u * u * (3 - 2 * u);
+      C.cageBossRelX = rx0 + (rx1 - rx0) * e;
+      C.cageBossRelY = ry0 + (ry1 - ry0) * e;
+      applyBloomWorldFromCageRel(C, bloom);
+      const ctrHit = getFloatingCageCenterWorldXY();
+      if (!Array.isArray(bloom.depthsEldritchDashTrail)) bloom.depthsEldritchDashTrail = [];
+      bloom.depthsEldritchDashTrail.push({ x: bloom.x, y: bloom.y, t: sim });
+      while (bloom.depthsEldritchDashTrail.length > 20) bloom.depthsEldritchDashTrail.shift();
+
+      if (!C.postDashDamageDealt && ctrHit) {
+        const pr = Number(player.r) || PLAYER_RADIUS;
+        const x0 = ctrHit.cx + rx0;
+        const y0 = ctrHit.cy + ry0;
+        const x1 = ctrHit.cx + rx1;
+        const y1 = ctrHit.cy + ry1;
+        const dHit = pointToSegmentDistance(player.x, player.y, x0, y0, x1, y1);
+        if (dHit <= POST_CAGE_DASH_HIT_HW_PX + pr) {
+          C.postDashDamageDealt = true;
+          damagePlayerThroughPath(3, {
+            sourceX: bloom.x,
+            sourceY: bloom.y,
+            eldritchBloodAttack: "floatingCageDash",
+          });
+        }
       }
 
-      if (age >= FLOATING_CAGE_CAGED_DURATION_SEC) {
-        finishFloatingCageStrike(sim);
+      if (age >= POST_CAGE_DASH_MOVE_SEC) {
+        C.cageBossRelX = rx1;
+        C.cageBossRelY = ry1;
+        applyBloomWorldFromCageRel(C, bloom);
+        C.phase = "postDashPause";
+        C.phaseStartSim = sim;
       }
+      tickPostCageLightningBallPlayerContact(bloom, player, sim);
+      return;
+    }
+
+    if (C.phase === "postDashPause") {
+      if (sim - C.phaseStartSim >= POST_CAGE_DASH_PAUSE_SEC) {
+        const r = (C.postDashRound ?? 0) + 1;
+        if (r >= 3) {
+          bloom.depthsEldritchPostCageLightningSprite = false;
+          bloom.depthsEldritchLightningCastActive = false;
+          bloom.depthsEldritchPostCageScripted = false;
+          bloom.depthsEldritchDashTrail = null;
+          bloom.depthsPostCageLightningContactUntil = 0;
+          finishFloatingCageStrike(sim);
+          return;
+        }
+        C.postDashRound = r;
+        C.phase = "postDashTelegraph";
+        C.phaseStartSim = sim;
+        if (!setupPostCageDashSegmentForRound(C, bloom, player)) finishFloatingCageStrike(sim);
+      }
+      tickPostCageLightningBallPlayerContact(bloom, player, sim);
+      return;
     }
   }
 
   function applyFloatingCageRisingWaveCarryBeforePlayerMove() {
     const C = floatingCageStrike;
-    if (!C || C.phase !== "caged") return;
+    if (!C || !FLOATING_CAGE_INTERIOR_PHASES.has(C.phase)) return;
     const fy = getDepthsBossRisingWaveFrontY?.() ?? null;
     if (fy == null || !Number.isFinite(fy)) return;
     const prevFy = C.cageWaveFY;
@@ -575,12 +899,12 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   /** While active, player collision uses no obstacle rects (see `entry.js` `obstaclesForPlayerCollision`). */
   function isFloatingCageTerrainCollisionSuppressedNow() {
     const C = floatingCageStrike;
-    return !!(C && C.phase === "caged");
+    return !!(C && FLOATING_CAGE_INTERIOR_PHASES.has(C.phase));
   }
 
   function clampPlayerToFloatingCage() {
     const C = floatingCageStrike;
-    if (!C || C.phase !== "caged") return;
+    if (!C || !FLOATING_CAGE_INTERIOR_PHASES.has(C.phase)) return;
     const ctr = getFloatingCageCenterWorldXY();
     if (!ctr) return;
     const p = getPlayer();
@@ -1007,6 +1331,166 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     }
   }
 
+  function spawnP2SwarmMinion(bloom, player) {
+    const rt = getHunterRuntime();
+    rt?.spawnDepthsSwarmFastFromBloom?.(bloom, player);
+  }
+
+  function p2SwarmFlankTargetPx(player, bloom, initialFlankSign, volleyIndex) {
+    const fs = initialFlankSign * (volleyIndex % 2 === 0 ? 1 : -1);
+    return {
+      tx: player.x + fs * BARRAGE_FLANK_OFFSET_X,
+      ty: clampBloomYForBarrage(bloom, player.y),
+    };
+  }
+
+  function beginP2SwarmStrike(bloom) {
+    const sim = getSimElapsed();
+    const player = getPlayer();
+    clearBloomLiftPrepFields(bloom);
+    bloom.depthsEldritchLightningCastActive = false;
+    bloom.depthsCastLiftActive = true;
+    bloom.depthsEldritchOrbStrikeChanneling = true;
+    bloom.depthsEldritchBarrageAttackActive = true;
+    bloom.depthsEldritchTelegraphHoldUntil =
+      sim + BARRAGE_DASH_MAX_SEC + P2_SWARM_BURST1_SEC + BARRAGE_TELEPORT_SEC + P2_SWARM_BURST2_SEC + 2;
+    const initialFlank = /** @type {1 | -1} */ (bloom.x < player.x ? -1 : 1);
+    p2SwarmStrike = {
+      phase: "dash",
+      phaseStartSim: sim,
+      initialFlankSign: initialFlank,
+      dashVx: 0,
+      dashVy: 0,
+      burstWindowStartSim: sim,
+      burstSpawned: 0,
+      nextSpawnSim: sim,
+      teleportSwapped: false,
+    };
+  }
+
+  function finishP2SwarmStrike(simElapsed) {
+    p2SwarmStrike = null;
+    const bloom = getBloomHunter();
+    if (bloom) {
+      bloom.depthsEldritchBarrageAttackActive = false;
+      bloom.depthsEldritchOrbStrikeChanneling = false;
+      bloom.depthsEldritchTelegraphHoldUntil = 0;
+      bloom.depthsCastLiftActive = false;
+      bloom.depthsEldritchLightningCastActive = false;
+      bloom.depthsEldritchTeleportFxUntil = 0;
+      bloom.depthsEldritchTeleportGhostX = 0;
+      bloom.depthsEldritchTeleportGhostY = 0;
+      clearBloomLiftPrepFields(bloom);
+    }
+    scheduleP2GapFromSpellEnd(simElapsed);
+    p2StrikeIndex = 0;
+  }
+
+  function tickP2SwarmStrike(dt) {
+    const sim = getSimElapsed();
+    const bloom = getBloomHunter();
+    const player = getPlayer();
+    const rt = getHunterRuntime();
+    const S = p2SwarmStrike;
+    if (!S) return;
+    if (!bloom || !rt) {
+      p2SwarmStrike = null;
+      clearBloomScriptedTelegraph();
+      return;
+    }
+
+    const maxSpawns1 = Math.round(P2_SWARM_BURST1_SEC / P2_SWARM_SPAWN_INTERVAL_SEC);
+    const maxSpawns2 = Math.round(P2_SWARM_BURST2_SEC / P2_SWARM_SPAWN_INTERVAL_SEC);
+
+    if (S.phase === "dash") {
+      const { tx, ty } = p2SwarmFlankTargetPx(player, bloom, S.initialFlankSign, 0);
+      const ddx = tx - bloom.x;
+      const ddy = ty - bloom.y;
+      const dist = Math.hypot(ddx, ddy) || 1;
+      S.dashVx += (ddx / dist) * BARRAGE_DASH_ACCEL * dt;
+      S.dashVy += (ddy / dist) * BARRAGE_DASH_ACCEL * dt;
+      const sp = Math.hypot(S.dashVx, S.dashVy);
+      if (sp > BARRAGE_DASH_MAX_SPEED) {
+        const sc = BARRAGE_DASH_MAX_SPEED / sp;
+        S.dashVx *= sc;
+        S.dashVy *= sc;
+      }
+      bloom.x += S.dashVx * dt;
+      bloom.y += S.dashVy * dt;
+      bloom.y = clampBloomYForBarrage(bloom, bloom.y);
+      if (Math.hypot(tx - bloom.x, ty - bloom.y) < 28 || sim - S.phaseStartSim >= BARRAGE_DASH_MAX_SEC) {
+        bloom.x = tx;
+        bloom.y = ty;
+        S.phase = "burst1";
+        S.burstWindowStartSim = sim;
+        S.burstSpawned = 0;
+        S.nextSpawnSim = sim;
+        S.dashVx = 0;
+        S.dashVy = 0;
+      }
+      return;
+    }
+
+    if (S.phase === "burst1") {
+      bloom.y = clampBloomYForBarrage(bloom, player.y);
+      const burst1End = S.burstWindowStartSim + P2_SWARM_BURST1_SEC;
+      while (
+        S.burstSpawned < maxSpawns1 &&
+        sim + 1e-5 >= S.nextSpawnSim &&
+        sim < burst1End
+      ) {
+        spawnP2SwarmMinion(bloom, player);
+        S.burstSpawned += 1;
+        S.nextSpawnSim += P2_SWARM_SPAWN_INTERVAL_SEC;
+      }
+      if (sim >= burst1End) {
+        S.phase = "teleport";
+        S.phaseStartSim = sim;
+        S.teleportSwapped = false;
+        bloom.depthsEldritchTeleportGhostX = bloom.x;
+        bloom.depthsEldritchTeleportGhostY = bloom.y;
+        bloom.depthsEldritchTeleportFxUntil = sim + BARRAGE_TELEPORT_SEC;
+      }
+      return;
+    }
+
+    if (S.phase === "teleport") {
+      const tRel = sim - S.phaseStartSim;
+      if (!S.teleportSwapped && tRel >= BARRAGE_TELEPORT_SWAP_AT) {
+        const { tx, ty } = p2SwarmFlankTargetPx(player, bloom, S.initialFlankSign, 1);
+        bloom.x = tx;
+        bloom.y = ty;
+        S.teleportSwapped = true;
+        bumpScreenShake(16, 0.24);
+      }
+      if (tRel >= BARRAGE_TELEPORT_SEC) {
+        S.phase = "burst2";
+        S.burstWindowStartSim = sim;
+        S.burstSpawned = 0;
+        S.nextSpawnSim = sim;
+        bloom.depthsEldritchTeleportFxUntil = 0;
+      }
+      return;
+    }
+
+    if (S.phase === "burst2") {
+      bloom.y = clampBloomYForBarrage(bloom, player.y);
+      const burst2End = S.burstWindowStartSim + P2_SWARM_BURST2_SEC;
+      while (
+        S.burstSpawned < maxSpawns2 &&
+        sim + 1e-5 >= S.nextSpawnSim &&
+        sim < burst2End
+      ) {
+        spawnP2SwarmMinion(bloom, player);
+        S.burstSpawned += 1;
+        S.nextSpawnSim += P2_SWARM_SPAWN_INTERVAL_SEC;
+      }
+      if (sim >= burst2End) {
+        finishP2SwarmStrike(sim);
+      }
+    }
+  }
+
   function tick(dt) {
     if (!isDepthsBossFightLevel() || !getHunterRuntime() || !getHuntersEnabled() || getRunDead()) return;
     if (isPlayerInSafehouse()) return;
@@ -1028,6 +1512,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         p2PhaseEnterSim = simElapsed;
         p2Mode = "gap";
         p2NextAttackSim = simElapsed + ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
+        p2StrikeIndex = 0;
       }
       return;
     }
@@ -1044,6 +1529,10 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
     if (floatingCageStrike) {
       tickFloatingCageStrike(dt);
+      return;
+    }
+    if (p2SwarmStrike) {
+      tickP2SwarmStrike(dt);
       return;
     }
 
@@ -1105,8 +1594,8 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
           bloom.depthsCastLiftActive = true;
         }
         if (simElapsed >= p2NextAttackSim && bloom) {
-          /** First P2 attack for now — later diversify `p2NextSpellKind`. */
-          beginFloatingCageStrike(bloom);
+          if (p2StrikeIndex % 2 === 0) beginFloatingCageStrike(bloom);
+          else beginP2SwarmStrike(bloom);
         }
       }
       return;
@@ -1118,37 +1607,97 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     if (!isDepthsBossFightLevel()) return;
     const bloom = getBloomHunter();
     const fc = floatingCageStrike;
-    if (fc?.phase === "caged") {
-      const ctr = getFloatingCageCenterWorldXY();
-      if (ctr) {
-        const simElapsed = getSimElapsed();
-        const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 13);
-        const R = FLOATING_CAGE_RADIUS_PX;
-        const { cx, cy } = ctr;
-        const floorRad = Math.max(28, R - 14);
-        ctx.save();
-        ctx.globalCompositeOperation = "source-over";
-        ctx.fillStyle = getFloatingCageInteriorFill();
+    const ctrCage = fc ? getFloatingCageCenterWorldXY() : null;
+    if (fc && ctrCage && FLOATING_CAGE_INTERIOR_PHASES.has(fc.phase)) {
+      const simElapsed = getSimElapsed();
+      const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 13);
+      const R = FLOATING_CAGE_RADIUS_PX;
+      const { cx, cy } = ctrCage;
+      const floorRad = Math.max(28, R - 14);
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = getFloatingCageInteriorFill();
+      ctx.beginPath();
+      ctx.arc(cx, cy, floorRad, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalCompositeOperation = "screen";
+      ctx.strokeStyle = `rgba(255, 120, 180, ${0.38 + 0.22 * pulse})`;
+      ctx.lineWidth = 5;
+      ctx.shadowColor = "rgba(255, 160, 200, 0.55)";
+      ctx.shadowBlur = 22 + pulse * 12;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R - 3, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(170, 220, 255, ${0.18 + 0.12 * pulse})`;
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R - 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    }
+    if (fc?.phase === "postLightningFlash" && bloom) {
+      const b = getWorldDrawBounds();
+      const simElapsed = getSimElapsed();
+      const u = clamp(
+        (simElapsed - fc.phaseStartSim) / Math.max(1e-4, LIGHTNING_STRIKE_FLASH_SEC),
+        0,
+        1,
+      );
+      drawLightningColumnStrikeFlash(ctx, bloom.x, b.y0, b.y1, u);
+    }
+    if (
+      fc?.phase === "postDashTelegraph" &&
+      ctrCage &&
+      Number.isFinite(fc.dashSegRelX0) &&
+      Number.isFinite(fc.dashSegRelX1)
+    ) {
+      const simElapsed = getSimElapsed();
+      const age = simElapsed - fc.phaseStartSim;
+      const u = clamp(age / Math.max(1e-4, POST_CAGE_DASH_TELEGRAPH_SEC), 0, 1);
+      const w = 5 + 26 * u;
+      const wx0 = ctrCage.cx + fc.dashSegRelX0;
+      const wy0 = ctrCage.cy + fc.dashSegRelY0;
+      const wx1 = ctrCage.cx + fc.dashSegRelX1;
+      const wy1 = ctrCage.cy + fc.dashSegRelY1;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = `rgba(255, 140, 210, ${0.22 + 0.48 * u})`;
+      ctx.lineWidth = w;
+      ctx.lineCap = "round";
+      ctx.shadowColor = "rgba(255, 200, 255, 0.55)";
+      ctx.shadowBlur = 16 + 18 * u;
+      ctx.beginPath();
+      ctx.moveTo(wx0, wy0);
+      ctx.lineTo(wx1, wy1);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(255, 255, 255, ${0.35 + 0.4 * u})`;
+      ctx.lineWidth = Math.max(1.5, w * 0.22);
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(wx0, wy0);
+      ctx.lineTo(wx1, wy1);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (bloom?.depthsEldritchDashTrail?.length) {
+      const simElapsed = getSimElapsed();
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < bloom.depthsEldritchDashTrail.length; i++) {
+        const p = bloom.depthsEldritchDashTrail[i];
+        const ageT = simElapsed - p.t;
+        const fade = clamp(1 - ageT / 0.42, 0, 1);
+        if (fade <= 0.02) continue;
+        const a = fade * 0.38;
+        ctx.globalAlpha = a;
+        ctx.fillStyle = `rgba(200, 240, 255, ${0.55 * fade})`;
         ctx.beginPath();
-        ctx.arc(cx, cy, floorRad, 0, Math.PI * 2);
+        ctx.ellipse(p.x, p.y, 32 * fade, 16 * fade, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalCompositeOperation = "screen";
-        ctx.strokeStyle = `rgba(255, 120, 180, ${0.38 + 0.22 * pulse})`;
-        ctx.lineWidth = 5;
-        ctx.shadowColor = "rgba(255, 160, 200, 0.55)";
-        ctx.shadowBlur = 22 + pulse * 12;
-        ctx.beginPath();
-        ctx.arc(cx, cy, R - 3, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.strokeStyle = `rgba(170, 220, 255, ${0.18 + 0.12 * pulse})`;
-        ctx.lineWidth = 2;
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.arc(cx, cy, R - 8, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.restore();
       }
+      ctx.restore();
     }
     if (lightningStrike && bloom) {
       const simElapsed = getSimElapsed();
@@ -1282,7 +1831,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
   /**
    * Dev-only: abort any scripted beat and start one immediately (Depths L5 boss chase).
-   * @param {string} spellId `p1_orb` | `p1_lightning` | `p1_barrage` | `p2_cage`
+   * @param {string} spellId `p1_orb` | `p1_lightning` | `p1_barrage` | `p2_cage` | `p2_swarm`
    * @returns {{ ok: true } | { ok: false, reason: string }}
    */
   function debugForceEldritchSpell(spellId) {
@@ -1302,6 +1851,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     lightningStrike = null;
     eldritchBarrageStrike = null;
     floatingCageStrike = null;
+    p2SwarmStrike = null;
     tentacleHitSim = 0;
     tentacleLastK = -1;
     p1Mode = "gap";
@@ -1336,8 +1886,19 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       p2PhaseEnterSim = sim;
       p2Mode = "gap";
       p2NextAttackSim = sim;
+      p2StrikeIndex = 0;
       if (bloom) bloom.depthsEldritchPhase2Tone = true;
       beginFloatingCageStrike(bloom);
+      return { ok: true };
+    }
+    if (spellId === "p2_swarm") {
+      macroPhase = 3;
+      p2PhaseEnterSim = sim;
+      p2Mode = "gap";
+      p2NextAttackSim = sim;
+      p2StrikeIndex = 1;
+      if (bloom) bloom.depthsEldritchPhase2Tone = true;
+      beginP2SwarmStrike(bloom);
       return { ok: true };
     }
     return { ok: false, reason: "unknown_spell" };

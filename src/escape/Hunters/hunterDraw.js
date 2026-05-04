@@ -2,10 +2,14 @@ import { TAU } from "../constants.js";
 import { clamp } from "./hunterGeometry.js";
 import { ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC } from "../specials/EldritchBlood.js";
 import depthsEldritchBossUrl from "../../assets/Cthulu.png";
+import depthsEldritchLightningUrl from "../../assets/lightning.png";
 
 /** Preloaded boss PNG (2D canvas). */
 const depthsEldritchBossImg = new Image();
 depthsEldritchBossImg.src = depthsEldritchBossUrl;
+
+const depthsEldritchLightningImg = new Image();
+depthsEldritchLightningImg.src = depthsEldritchLightningUrl;
 
 /** Extra radians applied when drawing the boss PNG; 0 = use the asset’s native orientation. */
 const DEPTHS_ELDRITCH_BOSS_SPRITE_YAW = 0;
@@ -689,48 +693,75 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
     }
   }
 
-  ctx.rotate(DEPTHS_ELDRITCH_BOSS_SPRITE_YAW);
-
-  const img = depthsEldritchBossImg;
-  if (img.complete && img.naturalWidth > 0) {
-    const iw = img.naturalWidth;
-    const ih = img.naturalHeight;
-    let dw = maxSpan;
-    let dh = (ih / iw) * dw;
-    if (dh > maxSpan) {
-      dh = maxSpan;
-      dw = (iw / ih) * dh;
-    }
-    const pulse = 0.5 + 0.5 * Math.sin(t * 1.95 + phase * 1.15);
-    /** Deeper troughs than before; peaks ~unchanged — reds stay on `eldritchProtectedRed` path. */
-    const brightMul = inInterlude
-      ? Math.max(
-          0.028,
-          0.05 +
-            inhaleEase * 0.055 +
-            (inhaleSeg ? 0.018 * Math.sin(t * 15) : -0.012 * burstEase) +
-            (burstU01 > 0.02 ? burstEase * 0.04 : 0),
-        )
-      : h.depthsEldritchLightningCastActive
-        ? 0.62 + pulse * 0.38
-        : h.depthsEldritchBarrageAttackActive
-          ? 0.54 + pulse * 0.42
-          : h.depthsEldritchCageStrikeActive
-            ? 0.52 + pulse * 0.4
-            : 0.32 + pulse * 0.78;
-    const shaded = eldritchBossShadedCanvas(img, (dw + 0.5) | 0, (dh + 0.5) | 0, brightMul);
-    if (shaded) {
-      ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);
-    } else {
-      ctx.filter = `brightness(${brightMul.toFixed(3)})`;
-      ctx.drawImage(img, -dw * 0.5, -dh * 0.5, dw, dh);
+  const lightningSprite = !!h.depthsEldritchPostCageLightningSprite;
+  if (lightningSprite) {
+    ctx.rotate(t * 16.8 + phase * 1.05);
+    const flick = 0.52 + 0.48 * Math.sin(t * 44);
+    ctx.globalAlpha *= clamp(flick, 0.26, 1);
+    const imgL = depthsEldritchLightningImg;
+    if (imgL.complete && imgL.naturalWidth > 0) {
+      const iw = imgL.naturalWidth;
+      const ih = imgL.naturalHeight;
+      let dw = maxSpan * 0.72;
+      let dh = (ih / iw) * dw;
+      if (dh > maxSpan * 0.72) {
+        dh = maxSpan * 0.72;
+        dw = (iw / ih) * dh;
+      }
+      const brightL = 0.92 + 0.28 * Math.sin(t * 31);
+      ctx.filter = `brightness(${brightL.toFixed(3)})`;
+      ctx.drawImage(imgL, -dw * 0.5, -dh * 0.5, dw, dh);
       ctx.filter = "none";
+    } else {
+      ctx.fillStyle = "rgba(200, 240, 255, 0.55)";
+      ctx.beginPath();
+      ctx.arc(0, 0, maxSpan * 0.34, 0, TAU);
+      ctx.fill();
     }
   } else {
-    ctx.fillStyle = "#1a1028";
-    ctx.beginPath();
-    ctx.arc(0, 0, maxSpan * 0.45, 0, TAU);
-    ctx.fill();
+    ctx.rotate(DEPTHS_ELDRITCH_BOSS_SPRITE_YAW);
+
+    const img = depthsEldritchBossImg;
+    if (img.complete && img.naturalWidth > 0) {
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+      let dw = maxSpan;
+      let dh = (ih / iw) * dw;
+      if (dh > maxSpan) {
+        dh = maxSpan;
+        dw = (iw / ih) * dh;
+      }
+      const pulse = 0.5 + 0.5 * Math.sin(t * 1.95 + phase * 1.15);
+      /** Deeper troughs than before; peaks ~unchanged — reds stay on `eldritchProtectedRed` path. */
+      const brightMul = inInterlude
+        ? Math.max(
+            0.028,
+            0.05 +
+              inhaleEase * 0.055 +
+              (inhaleSeg ? 0.018 * Math.sin(t * 15) : -0.012 * burstEase) +
+              (burstU01 > 0.02 ? burstEase * 0.04 : 0),
+          )
+        : h.depthsEldritchLightningCastActive
+          ? 0.62 + pulse * 0.38
+          : h.depthsEldritchBarrageAttackActive
+            ? 0.54 + pulse * 0.42
+            : h.depthsEldritchCageStrikeActive
+              ? 0.52 + pulse * 0.4
+              : 0.32 + pulse * 0.78;
+      const shaded = eldritchBossShadedCanvas(img, (dw + 0.5) | 0, (dh + 0.5) | 0, brightMul);
+      if (shaded) {
+        ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);
+      } else {
+        ctx.filter = `brightness(${brightMul.toFixed(3)})`;
+        ctx.drawImage(img, -dw * 0.5, -dh * 0.5, dw, dh);
+        ctx.filter = "none";
+      }
+    } else {
+      ctx.fillStyle = "#1a1028";
+      ctx.beginPath();
+      ctx.arc(0, 0, maxSpan * 0.45, 0, TAU);
+      ctx.fill();
+    }
   }
 
   ctx.restore();

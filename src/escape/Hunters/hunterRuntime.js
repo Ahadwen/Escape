@@ -155,6 +155,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const DEPTHS_BOLT_AGENCY_DIST = (HEX_SIZE * Math.sqrt(3)) / 2;
   /** Time between single bolt-minion shots (`depthsBoltSpawner`). */
   const DEPTHS_BOLT_SPAWN_INTERVAL_SEC = 0.9;
+  /** P2 scripted swarm from eldritch bloom only: scales initial bolt-dash (`depthsBoltSpawner` unchanged). */
+  const DEPTHS_SWARM_BLOOM_SPIT_SPEED_MULT = 0.56;
   /** Depths sniper shells: ~3× default off–fire-path radius, shorter windup (non–fire-path only). */
   const DEPTHS_SNIPER_ZONE_R_MULT = 3;
   const DEPTHS_SNIPER_WINDUP_MULT = 0.8;
@@ -633,6 +635,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.depthsBoltDir = { x: bdx / bl, y: bdy / bl };
         h.depthsBoltOx = opts.depthsBoltOx != null ? opts.depthsBoltOx : h.x;
         h.depthsBoltOy = opts.depthsBoltOy != null ? opts.depthsBoltOy : h.y;
+        if (opts.depthsBoltSpitSpeedMult != null && Number.isFinite(opts.depthsBoltSpitSpeedMult)) {
+          h.depthsBoltSpitSpeedMult = clamp(opts.depthsBoltSpitSpeedMult, 0.15, 1.5);
+        }
       }
     } else if (type === "spawner") {
       r = 18;
@@ -1100,7 +1105,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         else h.cryptRevealU = 1;
       }
       if (h.type === "spawner" || h.type === "cryptSpawner") continue;
-      if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle") continue;
+      if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle" && h.type !== "depthsEldritchBarrageBolt")
+        continue;
       const spDt = dt * spades13AuraEnemyDtMult();
 
       if (h.type === "airSpawner" || h.type === "depthsBoltSpawner") {
@@ -1417,6 +1423,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
       if (h.type === "depthsEldritchBloom") {
         const waveY = getDepthsBossRisingWaveFrontY();
+        if (h.depthsEldritchPostCageScripted) {
+          continue;
+        }
         if (h.depthsEldritchCageStrikeActive || h.depthsEldritchBarrageAttackActive) {
           continue;
         }
@@ -1626,7 +1635,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
       if (h.type === "fast" && h.depthsBoltUnagitated) {
         const boltDir = h.depthsBoltDir || { x: 1, y: 0 };
-        const boltSpeed = 468 * sm * speedFactor * midgameEnemySpeedMult() * boneEnemySpeedMult();
+        const spitMult =
+          h.depthsBoltSpitSpeedMult != null && Number.isFinite(h.depthsBoltSpitSpeedMult) && h.depthsBoltSpitSpeedMult > 0
+            ? h.depthsBoltSpitSpeedMult
+            : 1;
+        const boltSpeed =
+          468 * sm * speedFactor * midgameEnemySpeedMult() * boneEnemySpeedMult() * spitMult;
         const { touchedObstacle } = moveCircleWithCollisions(
           h,
           boltDir.x * boltSpeed,
@@ -2165,6 +2179,29 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
+  /**
+   * Same `fast` + `depthsBoltMinion` spawn as `depthsBoltSpawner` swarms (Depths L5 scripted beats).
+   * @param {{ x: number; y: number; r?: number }} bloomLike
+   * @param {{ x: number; y: number }} target
+   */
+  function spawnDepthsSwarmFastFromBloom(bloomLike, target) {
+    const dx = target.x - bloomLike.x;
+    const dy = target.y - bloomLike.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const to = { x: dx / len, y: dy / len };
+    const br = Number(bloomLike.r) || 40;
+    const sx = bloomLike.x + to.x * (br + 12);
+    const sy = bloomLike.y + to.y * (br + 12);
+    const open = nearestLegalPointForSmallHunter(sx, sy, 9);
+    spawnHunter("fast", open.x, open.y, {
+      depthsBoltMinion: true,
+      depthsBoltDir: { x: to.x, y: to.y },
+      depthsBoltOx: open.x,
+      depthsBoltOy: open.y,
+      depthsBoltSpitSpeedMult: DEPTHS_SWARM_BLOOM_SPIT_SPEED_MULT,
+    });
+  }
+
   /** REFERENCE hearts J/Q/K front arc shield: repel nearby hostiles and clear projectiles in facing cone. */
   function applyFrontShieldArc() {
     const player = getPlayer();
@@ -2584,6 +2621,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     reset,
     softResetSpawnPacingAfterSafehouseLevel,
     spawnHunter,
+    spawnDepthsSwarmFastFromBloom,
     hunterRadiusForType,
     cleanupArenaNexusSiegeCombat,
     killHuntersStandingOnSurgeHex,
