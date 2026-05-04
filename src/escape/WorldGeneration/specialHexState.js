@@ -23,6 +23,9 @@ function proceduralSpecialDenominator(sim, rampBaseSim) {
 /**
  * Tracks roulette / forge / arena / surge / safehouse anchors (procedural rare spawns + dev west test hex),
  * spent flags, and hooks for generated tile cache lifecycle.
+ *
+ * @param {() => boolean} [getShouldSuppressProceduralEventHexSpawns] — when true, `tryProceduralRareSpecialHex` is a no-op
+ * (existing anchors / west-test / spent flags unchanged — e.g. Depths boss tier keeps the run-start sanctuary only).
  */
 export function createSpecialHexRuntime({
   HEX_DIRS,
@@ -30,6 +33,7 @@ export function createSpecialHexRuntime({
   getIsLunatic = () => false,
   getSimElapsed = () => 0,
   getRunLevel = () => 0,
+  getShouldSuppressProceduralEventHexSpawns = () => false,
 }) {
   const west = HEX_DIRS[3];
   const westTestQ = west.q;
@@ -117,6 +121,7 @@ export function createSpecialHexRuntime({
   }
 
   function tryProceduralRareSpecialHex(q, r) {
+    if (getShouldSuppressProceduralEventHexSpawns()) return;
     if (isSpawnHex(q, r)) return;
     if (isWestTestHex(q, r)) return;
     const k = key(q, r);

@@ -3739,7 +3739,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     hexKey: hexKey2,
     getIsLunatic = () => false,
     getSimElapsed = () => 0,
-    getRunLevel = () => 0
+    getRunLevel = () => 0,
+    getShouldSuppressProceduralEventHexSpawns = () => false
   }) {
     const west = HEX_DIRS2[3];
     const westTestQ = west.q;
@@ -3797,6 +3798,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       return simNow < SAFEHOUSE_PROC_MIN_SIM_LEVEL_3_4_SEC;
     }
     function tryProceduralRareSpecialHex(q, r) {
+      if (getShouldSuppressProceduralEventHexSpawns()) return;
       if (isSpawnHex(q, r)) return;
       if (isWestTestHex(q, r)) return;
       const k = key(q, r);
@@ -12902,6 +12904,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   var DEPTHS_TENTACLE_BURST_COUNT = Math.round(DEPTHS_TENTACLE_BURST_SPAN_SEC / DEPTHS_TENTACLE_BURST_INTERVAL_SEC) + 1;
   var DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE = 1 / 5;
   var DEPTHS_WHIRLPOOL_RUN_LEVEL = 3;
+  var DEPTHS_BOSS_CHASE_RUN_LEVEL = 4;
   var DEPTHS_WHIRLPOOL_PULL_MULT = 2.88;
   var DEPTHS_WHIRLPOOL_SWIRL_EDGE = 215;
   var DEPTHS_WHIRLPOOL_CENTER_EPS = 20;
@@ -13036,7 +13039,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       hexKey,
       getIsLunatic: () => activeCharacterId === "lunatic",
       getSimElapsed: () => simElapsed,
-      getRunLevel: () => runLevel
+      getRunLevel: () => runLevel,
+      getShouldSuppressProceduralEventHexSpawns: () =>
+        pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL
     }), "specials", runLogger);
     const safehouseHexFlow = instrumentObjectMethods(createSafehouseHexFlow(), "safehouse", runLogger);
     specials.setOnProceduralSafehousePlaced(() => safehouseHexFlow.onProceduralSafehousePlaced());
@@ -16065,7 +16070,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                 circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstacles)
               });
             }
-            if (!runDead && specialsSimUnpaused()) {
+            if (!runDead && specialsSimUnpaused() && !(pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL)) {
               hexEventRuntime?.clampPlayer(player);
             }
             if (!runDead && specialsSimUnpaused() && pathRuntime.getCurrentPathId() === "depths") {
@@ -16310,6 +16315,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
           const hexFlowsUnpaused = !runDead && !(cardPickup?.isPaused() ?? false) && !(rouletteModal?.isPaused() ?? false) && !(forgeWorldModal?.isForgePaused() ?? false) && !(swampBootlegCrystalModal?.isPaused() ?? false) && !safehouseHexFlow.isPausedForSafehousePrompt();
           if (hexFlowsUnpaused) {
             const modalPause = () => (cardPickup?.isPaused() ?? false) || (rouletteModal?.isPaused() ?? false) || (forgeWorldModal?.isForgePaused() ?? false) || (swampBootlegCrystalModal?.isPaused() ?? false);
+            if (!(pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL)) {
             rouletteHexFlow.tick({
               isWorldPaused: modalPause,
               getPlayer: () => player,
@@ -16371,6 +16377,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               }
             });
             hexEventRuntime?.tick(dt);
+            }
           }
           while (ultimateBurstWaves.length && simElapsed >= ultimateBurstWaves[0].at) {
             const wave = ultimateBurstWaves.shift();
@@ -16487,7 +16494,9 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
             clearSwampHunterMudTrails();
           }
           if (!runDead) {
-            hexEventRuntime?.postHunterTick();
+            if (!(pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL)) {
+              hexEventRuntime?.postHunterTick();
+            }
           }
           tickAttackRings(attackRings, simElapsed);
           tickLunaticSprintTierFx(lunaticSprintTierFx, simElapsed);

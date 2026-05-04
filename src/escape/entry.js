@@ -423,6 +423,8 @@ function boot() {
     getIsLunatic: () => activeCharacterId === "lunatic",
     getSimElapsed: () => simElapsed,
     getRunLevel: () => runLevel,
+    getShouldSuppressProceduralEventHexSpawns: () =>
+      pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL,
   }), "specials", runLogger);
   const safehouseHexFlow = instrumentObjectMethods(createSafehouseHexFlow(), "safehouse", runLogger);
   specials.setOnProceduralSafehousePlaced(() => safehouseHexFlow.onProceduralSafehousePlaced());
@@ -1039,6 +1041,7 @@ function boot() {
     depthsBossPostLandBob = null;
   }
 
+  /** Depths display L5 — boss tide tier; arena/surge/roulette/forge event ticks are skipped (safehouse still runs). */
   function isDepthsBossFightLevel() {
     return pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL;
   }
@@ -4174,7 +4177,7 @@ function boot() {
         });
       }
 
-      if (!runDead && specialsSimUnpaused()) {
+      if (!runDead && specialsSimUnpaused() && !isDepthsBossFightLevel()) {
         hexEventRuntime?.clampPlayer(player);
       }
 
@@ -4483,6 +4486,7 @@ function boot() {
           (forgeWorldModal?.isForgePaused() ?? false) ||
           (swampBootlegCrystalModal?.isPaused() ?? false);
 
+        if (!isDepthsBossFightLevel()) {
         rouletteHexFlow.tick({
           isWorldPaused: modalPause,
           getPlayer: () => player,
@@ -4546,6 +4550,7 @@ function boot() {
         });
 
         hexEventRuntime?.tick(dt);
+        }
       }
 
       while (ultimateBurstWaves.length && simElapsed >= ultimateBurstWaves[0].at) {
@@ -4668,7 +4673,7 @@ function boot() {
       if (hunterRuntime && pathRuntime.getCurrentPathId() !== "swamp") {
         clearSwampHunterMudTrails();
       }
-      if (!runDead) {
+      if (!runDead && !isDepthsBossFightLevel()) {
         hexEventRuntime?.postHunterTick();
       }
 
