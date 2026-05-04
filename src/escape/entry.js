@@ -264,6 +264,8 @@ const DEPTHS_BOSS_CHASE_RUN_LEVEL = DISPLAY_LEVEL_FIVE_RUN_LEVEL;
 const DEPTHS_WHIRLPOOL_RUN_LEVEL = 3;
 /** Rising flood: slightly faster than base walk so walking alone cannot outrun it. */
 const DEPTHS_BOSS_RISING_WAVE_SPEED_MULT = 1.06;
+/** At full danger ramp, wave rise is this fraction faster than `DEPTHS_BOSS_RISING_WAVE_SPEED_MULT` alone (×1.15). */
+const DEPTHS_BOSS_WAVE_RISE_DANGER_SPEED_EXTRA = 0.15;
 /** Tide sweep: drag into the breaker, then spit ahead of the front (no hard stun / teleport). */
 const DEPTHS_BOSS_SURF_DRAG_SEC = 0.54;
 const DEPTHS_BOSS_SURF_SPIT_SEC = 0.38;
@@ -286,7 +288,9 @@ const DEPTHS_ELDRITCH_REWIND_WARN_ABOVE_WAVE_PX = 330;
 const DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX = 540;
 /** If player drops this many px below `WARN` while winding, cancel (wave motion / jitter). */
 const DEPTHS_ELDRITCH_REWIND_CANCEL_BELOW_WARN_PX = 28;
-const DEPTHS_ELDRITCH_REWIND_LOOKBACK_SEC = 1.5;
+const DEPTHS_ELDRITCH_REWIND_LOOKBACK_SEC = 1;
+/** Brief violet/void glow on boss + player after a rewind snap resolves (keep in sync with `hunterDraw` boss glow). */
+const DEPTHS_ELDRITCH_REWIND_GLOW_SEC = 0.52;
 const DEPTHS_PLAYER_POS_TRAIL_MAX_SEC = 2.6;
 const DEPTHS_PLAYER_POS_TRAIL_MAX_SAMPLES = 220;
 
@@ -772,6 +776,8 @@ function boot() {
   let depthsBossPostLandBob = /** @type {{ anchorY: number; startSim: number } | null} */ (null);
   /** Eldritch rewind telegraph (`null` = idle); `boss` is a hunter entity ref from `hunterRuntime`. */
   let depthsEldritchRewind = /** @type {{ boss: object } | null} */ (null);
+  /** After rewind snap: draw a short glow on the player until this sim time. */
+  let depthsEldritchRewindGlowPlayerUntil = 0;
   /** Boss-fight-only samples for rewind (`t` = simElapsed). */
   const depthsPlayerPosTrail = /** @type {{ t: number; x: number; y: number }[]} */ ([]);
   const SWAMP_MUD_TRAIL_MAX = 58;
@@ -1055,6 +1061,7 @@ function boot() {
     depthsBossWaveTouchImmuneUntil = 0;
     depthsBossPostLandBob = null;
     depthsEldritchRewind = null;
+    depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
   }
 
@@ -1211,7 +1218,7 @@ function boot() {
   function tickDepthsEldritchRewindAttack() {
     if (!hunterRuntime || !huntersEnabled) return;
 
-    const resolveDepthsEldritchRewindSnap = () => {
+    const resolveDepthsEldritchRewindSnap = (/** @type {object | null} */ bossForGlow) => {
       const lookT = simElapsed - DEPTHS_ELDRITCH_REWIND_LOOKBACK_SEC;
       const pos = sampleDepthsPlayerPosAtSim(lookT);
       if (pos) {
@@ -1223,7 +1230,19 @@ function boot() {
           depthsBossResolvePlayerAgainstObstaclesIterations(20);
         }
       }
+      const glowBloom = bossForGlow ?? findDepthsEldritchBloomHunter();
+      if (glowBloom) glowBloom.depthsRewindGlowUntil = simElapsed + DEPTHS_ELDRITCH_REWIND_GLOW_SEC;
+      if (!runDead) {
+        const sx = glowBloom ? glowBloom.x : player.x;
+        const sy = glowBloom ? glowBloom.y : player.y;
+        damagePlayerThroughPath(1, {
+          sourceX: sx,
+          sourceY: sy,
+          depthsEldritchRewindSnap: true,
+        });
+      }
       playerDamage.bumpScreenShake(11, 0.26);
+      depthsEldritchRewindGlowPlayerUntil = simElapsed + DEPTHS_ELDRITCH_REWIND_GLOW_SEC;
     };
 
     const fy0 = depthsBossRisingWaveFrontY;
@@ -1252,7 +1271,7 @@ function boot() {
         return;
       }
       if (distAboveWave >= DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX) {
-        resolveDepthsEldritchRewindSnap();
+        resolveDepthsEldritchRewindSnap(boss);
         depthsEldritchRewind = null;
       }
       return;
@@ -1268,7 +1287,7 @@ function boot() {
     if (!bloom) return;
 
     if (distAboveWave >= DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX) {
-      resolveDepthsEldritchRewindSnap();
+      resolveDepthsEldritchRewindSnap(bloom);
       return;
     }
 
@@ -1405,6 +1424,36 @@ function boot() {
     drawRing(player.x, player.y, player.r + 26);
   }
 
+  function drawDepthsEldritchRewindResolveGlowWorld(ctx) {
+    if (pathRuntime.getCurrentPathId() !== "depths" || !isDepthsBossFightLevel()) return;
+    if (!(depthsEldritchRewindGlowPlayerUntil > simElapsed)) return;
+    const rem = depthsEldritchRewindGlowPlayerUntil - simElapsed;
+    const g = clamp(rem / DEPTHS_ELDRITCH_REWIND_GLOW_SEC, 0, 1);
+    const pulse = Math.sin(g * Math.PI);
+    const px = player.x;
+    const py = player.y;
+    const pr = player.r;
+    const outer = pr + 52 + (1 - g) * 28;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const grd = ctx.createRadialGradient(px, py, pr * 0.15, px, py, outer);
+    grd.addColorStop(0, `rgba(248, 240, 255, ${0.42 * pulse})`);
+    grd.addColorStop(0.35, `rgba(160, 110, 210, ${0.28 * pulse})`);
+    grd.addColorStop(0.65, `rgba(90, 40, 120, ${0.16 * pulse})`);
+    grd.addColorStop(1, "rgba(12, 4, 22, 0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(px, py, outer, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = `rgba(200, 170, 255, ${0.35 * pulse * g})`;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(px, py, pr + 14 + (1 - g) * 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function tickDepthsBossRisingWaveChase(dt) {
     const ph = worldToHex(player.x, player.y);
     if (specials.isSafehouseHexTile(ph.q, ph.r)) return;
@@ -1413,7 +1462,11 @@ function boot() {
       depthsBossRisingWaveFrontY = player.y + DEPTHS_BOSS_WAVE_START_BELOW_PLAYER_PX;
     }
 
-    const waveSpeed = PLAYER_SPEED * DEPTHS_BOSS_RISING_WAVE_SPEED_MULT;
+    const dangerRamp01 =
+      hunterRuntime && huntersEnabled ? hunterRuntime.getDangerRamp01() : 0;
+    const waveRiseMult =
+      DEPTHS_BOSS_RISING_WAVE_SPEED_MULT * (1 + DEPTHS_BOSS_WAVE_RISE_DANGER_SPEED_EXTRA * dangerRamp01);
+    const waveSpeed = PLAYER_SPEED * waveRiseMult;
     depthsBossRisingWaveFrontY -= waveSpeed * dt;
 
     const fy = depthsBossRisingWaveFrontY;
@@ -1426,7 +1479,7 @@ function boot() {
         const ease = u * u;
         const depthInSurf = Math.max(0, player.y + player.r * 0.55 - (fy - 10));
         const pull = PLAYER_SPEED * DEPTHS_BOSS_SURF_PULL_PEAK_MULT * ease * (0.28 + 0.72 * clamp(depthInSurf / 160, 0, 1));
-        const carry = PLAYER_SPEED * DEPTHS_BOSS_RISING_WAVE_SPEED_MULT * DEPTHS_BOSS_SURF_CARRY_WAVE_MULT * ease;
+        const carry = PLAYER_SPEED * waveRiseMult * DEPTHS_BOSS_SURF_CARRY_WAVE_MULT * ease;
         depthsBossNudgePlayerVerticalWorld(-(pull + carry) * dt);
       } else if (t < surfTotal) {
         if (depthsBossSpitTargetY == null) {
@@ -1451,12 +1504,20 @@ function boot() {
         depthsBossWaveTouchImmuneUntil = simElapsed + DEPTHS_BOSS_WAVE_HIT_COOLDOWN_SEC;
 
         playerTimelockUntil = Math.max(playerTimelockUntil, t0 + DEPTHS_BOSS_SPLASH_STUN_SEC);
-        playerDamage.bumpScreenShake(16, 0.3);
-        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 2.4, "rgba(255, 255, 255, 0.82)", t0, 0.44);
-        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 5.2, "rgba(224, 242, 254, 0.62)", t0, 0.5);
-        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 8.5, "rgba(125, 211, 252, 0.5)", t0, 0.55);
-        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 12, "rgba(14, 165, 233, 0.4)", t0, 0.6);
-        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 16, "rgba(8, 47, 73, 0.32)", t0, 0.64);
+        playerDamage.bumpScreenShake(21, 0.36);
+        if (!runDead) {
+          damagePlayerThroughPath(1, {
+            sourceX: landX,
+            sourceY: landY,
+            depthsBossWaveSpit: true,
+          });
+        }
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 1.85, "rgba(255, 255, 255, 0.96)", t0, 0.4, { lineWidth: 3.6 });
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 2.85, "rgba(240, 249, 255, 0.92)", t0, 0.5, { lineWidth: 3.2 });
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 4.9, "rgba(200, 235, 255, 0.82)", t0, 0.58, { lineWidth: 2.9 });
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 7.6, "rgba(94, 205, 255, 0.68)", t0, 0.64);
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 11.2, "rgba(34, 180, 240, 0.58)", t0, 0.7);
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 15.2, "rgba(16, 112, 168, 0.48)", t0, 0.76);
         depthsBossPostLandBob = { anchorY: player.y, startSim: t0 };
       }
       return;
@@ -2948,6 +3009,7 @@ function boot() {
     timelockEnemyUntil = 0;
     playerTimelockUntil = 0;
     depthsEldritchRewind = null;
+    depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
@@ -3420,6 +3482,7 @@ function boot() {
     timelockEnemyUntil = 0;
     playerTimelockUntil = 0;
     depthsEldritchRewind = null;
+    depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
@@ -5473,6 +5536,7 @@ function boot() {
     drawPlayerBody(ctx, player.x, player.y, player.r, player.facing, hurt01, bodyAlpha);
     if (depthsPathActive && isDepthsBossFightLevel()) {
       drawDepthsEldritchRewindClockRings(ctx);
+      drawDepthsEldritchRewindResolveGlowWorld(ctx);
     }
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkParryUntil === "function") {
       drawBulwarkParry(ctx, player, simElapsed, character.getBulwarkParryUntil());

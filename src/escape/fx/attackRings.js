@@ -1,6 +1,6 @@
 /**
  * REFERENCE `entities.attackRings` — expanding stroke rings for ability impacts.
- * @typedef {{ x: number; y: number; r: number; color: string; bornAt: number; expiresAt: number }} AttackRing
+ * @typedef {{ x: number; y: number; r: number; color: string; bornAt: number; expiresAt: number; lineWidth?: number }} AttackRing
  */
 
 function clamp(x, a, b) {
@@ -30,7 +30,7 @@ export function drawAttackRings(ctx, rings, elapsed) {
     ctx.save();
     ctx.strokeStyle = ring.color;
     ctx.globalAlpha = 0.85 * (1 - t);
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = ring.lineWidth ?? 2.5;
     ctx.beginPath();
     ctx.arc(ring.x, ring.y, rr, 0, Math.PI * 2);
     ctx.stroke();
@@ -46,8 +46,9 @@ export function drawAttackRings(ctx, rings, elapsed) {
  * @param {string} color
  * @param {number} bornAt
  * @param {number} durationSec
+ * @param {{ lineWidth?: number }} [opts]
  */
-export function pushAttackRing(rings, x, y, r, color, bornAt, durationSec) {
+export function pushAttackRing(rings, x, y, r, color, bornAt, durationSec, opts) {
   rings.push({
     x,
     y,
@@ -55,5 +56,6 @@ export function pushAttackRing(rings, x, y, r, color, bornAt, durationSec) {
     color,
     bornAt,
     expiresAt: bornAt + durationSec,
+    ...(opts?.lineWidth != null ? { lineWidth: opts.lineWidth } : {}),
   });
 }

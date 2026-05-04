@@ -378,14 +378,43 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
   const bob = Math.sin(t * 1.25 + phase) * 1.8;
   const cy = y + bob;
   const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
+  const maxSpan = r * 2.2 * 2.5;
 
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(x, cy);
+
+  const glowUntil = Number(h.depthsRewindGlowUntil);
+  /** Match `DEPTHS_ELDRITCH_REWIND_GLOW_SEC` in `entry.js`. */
+  const ELDRITCH_REWIND_GLOW_SEC = 0.52;
+  if (glowUntil > simElapsed) {
+    const rem = glowUntil - simElapsed;
+    const g = clamp(rem / ELDRITCH_REWIND_GLOW_SEC, 0, 1);
+    const pulse = Math.sin(g * Math.PI);
+    const R = maxSpan * 0.62;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const grd = ctx.createRadialGradient(0, 0, R * 0.06, 0, 0, R * 1.08);
+    grd.addColorStop(0, `rgba(236, 224, 255, ${0.52 * pulse})`);
+    grd.addColorStop(0.38, `rgba(130, 72, 175, ${0.34 * pulse})`);
+    grd.addColorStop(0.72, `rgba(70, 28, 95, ${0.2 * pulse})`);
+    grd.addColorStop(1, "rgba(10, 2, 20, 0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 1.08, 0, TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = `rgba(210, 180, 255, ${0.38 * pulse * g})`;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 0.52 + (1 - g) * R * 0.12, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   ctx.rotate(DEPTHS_ELDRITCH_BOSS_SPRITE_YAW);
 
   const img = depthsEldritchBossImg;
-  const maxSpan = r * 2.2 * 2.5;
   if (img.complete && img.naturalWidth > 0) {
     const iw = img.naturalWidth;
     const ih = img.naturalHeight;
