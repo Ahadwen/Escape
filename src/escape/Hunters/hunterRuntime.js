@@ -92,6 +92,7 @@ const SWAMP_FROG_LAND_EXPLODE_DIST = SWAMP_FROG_BLAST_R + 24;
  * @property {() => string | null} [getDebugHunterTypeFilter] — debug-only forced wave spawn type (null = normal mix)
  * @property {() => boolean} [getSwampBootlegColourblind] — swamp crystal curse: uniform grey-green hunter bodies
  * @property {() => boolean} [getSuppressDepthsBossNormalSpawns] — Depths display L5: no wave spawns / scheduled jobs
+ * @property {() => number | null} [getDepthsBossRisingWaveFrontY] — Depths L5: world Y of rising tide front (+Y down); null when inactive
  */
 
 export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
@@ -126,6 +127,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     getDebugHunterTypeFilter: getDebugHunterTypeFilterDep,
     getSwampBootlegColourblind: getSwampBootlegColourblindDep,
     getSuppressDepthsBossNormalSpawns: getSuppressDepthsBossNormalSpawnsDep,
+    getDepthsBossRisingWaveFrontY: getDepthsBossRisingWaveFrontYDep,
   } = deps;
 
   const worldToHex = worldToHexDep ?? (() => ({ q: 0, r: 0 }));
@@ -146,6 +148,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const getBulwarkPlantedFlag = getBulwarkPlantedFlagDep ?? (() => null);
   const getDebugHunterTypeFilter = getDebugHunterTypeFilterDep ?? (() => null);
   const getSwampBootlegColourblind = getSwampBootlegColourblindDep ?? (() => false);
+  const getDepthsBossRisingWaveFrontY = getDepthsBossRisingWaveFrontYDep ?? (() => null);
 
   /** Half flat-to-flat span of one hex (pointy hex, `HEX_SIZE` = circumradius). */
   const DEPTHS_BOLT_AGENCY_DIST = (HEX_SIZE * Math.sqrt(3)) / 2;
@@ -483,6 +486,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (type === "sniper") return 12;
     if (type === "ghost") return 14;
     if (type === "depthsTentacle") return 8;
+    if (type === "depthsEldritchBloom") return 40;
     if (type === "spawner" || type === "cryptSpawner") return 18;
     if (type === "airSpawner" || type === "depthsBoltSpawner") return 26;
     if (type === "laser" || type === "laserBlue" || type === "depthsGrappleLaser") return 13;
@@ -717,6 +721,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.opacity = 1;
       h.x = h.depthsAnchorX;
       h.y = h.depthsAnchorY;
+    } else if (type === "depthsEldritchBloom") {
+      r = 40;
+      life = 86400 * 120;
+      lastShotAt = elapsed + 999;
+      h.opacity = 1;
+      h.depthsOrbitSign = rand() < 0.5 ? -1 : 1;
     } else if (type === "ghost") {
       r = 14;
       life = 20;
@@ -1358,6 +1368,74 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           h.opacity = (1 - h.depthsSplashU) * 0.95;
           continue;
         }
+        continue;
+      }
+
+      if (h.type === "depthsEldritchBloom") {
+        const waveY = getDepthsBossRisingWaveFrontY();
+        /** Preferred float: this far below the rising front (+Y down). */
+        const ELDRITCH_FLOAT_BELOW_WAVE = 150;
+        /** When |player.y − wave| is below this, no extra “rise toward player” ceiling beyond the wave. */
+        const ELDRITCH_PLAYER_WAVE_DIST_LO = 300;
+        /** At this |player.y − wave| or more, boss uses full `ELDRITCH_CEILING_ABOVE_WAVE` (ramp completes here). */
+        const ELDRITCH_PLAYER_WAVE_DIST_HI = 500;
+        /** Max how far above the wave front the boss may target (px), when player is far from the wave. */
+        const ELDRITCH_CEILING_ABOVE_WAVE = 820;
+        /** How strongly vertical target follows the player (0 = stay on float line, 1 = match player y). */
+        const ELDRITCH_PLAYER_Y_BLEND = 0.62;
+
+        let targetY;
+        let yMinClamp;
+        let yMaxClamp;
+        if (waveY != null && Number.isFinite(waveY)) {
+          const prefY = waveY + ELDRITCH_FLOAT_BELOW_WAVE;
+          const distPw = Math.abs(player.y - waveY);
+          const riseT = clamp(
+            (distPw - ELDRITCH_PLAYER_WAVE_DIST_LO) /
+              Math.max(1e-4, ELDRITCH_PLAYER_WAVE_DIST_HI - ELDRITCH_PLAYER_WAVE_DIST_LO),
+            0,
+            1,
+          );
+          const riseCap = riseT * ELDRITCH_CEILING_ABOVE_WAVE;
+          yMinClamp = waveY - riseCap;
+          targetY = prefY + (player.y - prefY) * ELDRITCH_PLAYER_Y_BLEND;
+          targetY = Math.max(targetY, yMinClamp);
+          yMaxClamp = waveY + 450;
+        } else {
+          targetY = player.y + 170;
+          yMinClamp = player.y - 380;
+          yMaxClamp = player.y + 520;
+        }
+        const tx = player.x - h.x;
+        const ty = targetY - h.y;
+        const tlen = Math.hypot(tx, ty) || 1;
+        let mx = tx / tlen;
+        let my = ty / tlen;
+        const spin = Number(h.depthsOrbitSign) || 1;
+        const tangX = -my * spin * 0.42;
+        const tangY = mx * spin * 0.42;
+        mx = mx * 0.68 + tangX;
+        my = my * 0.68 + tangY;
+        const mlen0 = Math.hypot(mx, my) || 1;
+        mx /= mlen0;
+        my /= mlen0;
+        const steer = 0.4;
+        const inertia = 1 - steer;
+        h._eldritchMvX = (h._eldritchMvX ?? mx) * inertia + mx * steer;
+        h._eldritchMvY = (h._eldritchMvY ?? my) * inertia + my * steer;
+        const mlen = Math.hypot(h._eldritchMvX, h._eldritchMvY) || 1;
+        h._eldritchMvX /= mlen;
+        h._eldritchMvY /= mlen;
+        h.dir.x = h._eldritchMvX;
+        h.dir.y = h._eldritchMvY;
+        const spd = 178 * runLevelEnemySpeedMult() * midgameEnemySpeedMult() * boneEnemySpeedMult();
+        moveCircleWithCollisions(h, h._eldritchMvX * spd, h._eldritchMvY * spd, spDt, {
+          blockValiantEnemyShockFields: true,
+          ignoreObstacles: true,
+        });
+        const leashX = 400;
+        h.x = clamp(h.x, player.x - leashX, player.x + leashX);
+        h.y = clamp(h.y, yMinClamp, yMaxClamp);
         continue;
       }
 
@@ -2007,7 +2085,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const elapsed = getSimElapsed();
     const player = getPlayer();
     for (const h of entities.hunters) {
-      if (h.type === "depthsTentacle") continue;
+      if (h.type === "depthsTentacle" || h.type === "depthsEldritchBloom") continue;
       if (elapsed < h.hitLockUntil) continue;
       if (hitDecoyIfAny(h, h.r + 2)) {
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
@@ -2042,7 +2120,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
     if (!depthsPathActive()) {
       for (let i = entities.hunters.length - 1; i >= 0; i--) {
-        if (entities.hunters[i].type === "depthsTentacle") entities.hunters.splice(i, 1);
+        const ht = entities.hunters[i].type;
+        if (ht === "depthsTentacle" || ht === "depthsEldritchBloom") entities.hunters.splice(i, 1);
       }
     }
     while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {
@@ -2050,6 +2129,31 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       else spawnState.spawnScheduled.shift()?.fn();
     }
     if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn) advanceSpawnWave();
+
+    if (bossNoSpawn && depthsPathActive()) {
+      let hasEldritch = false;
+      for (const h of entities.hunters) {
+        if (h.type === "depthsEldritchBloom") {
+          hasEldritch = true;
+          break;
+        }
+      }
+      if (!hasEldritch) {
+        const p = getPlayer();
+        const er = hunterRadiusForType("depthsEldritchBloom");
+        for (let attempt = 0; attempt < 56; attempt++) {
+          const ang = Math.random() * Math.PI * 2;
+          const d = rand(420, 760);
+          const sx = p.x + Math.cos(ang) * d;
+          const sy = p.y + Math.sin(ang) * d;
+          if (forbiddenHexDep?.(sx, sy)) continue;
+          const circ = { x: sx, y: sy, r: er };
+          if (outOfBoundsCircle(circ) || collidesAnyObstacle(circ)) continue;
+          spawnHunter("depthsEldritchBloom", sx, sy);
+          break;
+        }
+      }
+    }
 
     for (let i = entities.hunters.length - 1; i >= 0; i--) {
       const h = entities.hunters[i];
@@ -2119,6 +2223,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const h = entities.hunters[i];
       const hq = worldToHex(h.x, h.y);
       if (hq.q !== q || hq.r !== r) continue;
+      if (h.type === "depthsEldritchBloom") continue;
       if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner" || h.type === "depthsBoltSpawner") {
         ejectSpawnerHunterFromSpecialHexFootprint(h);
         continue;

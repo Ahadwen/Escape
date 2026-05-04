@@ -256,8 +256,10 @@ const DEPTHS_WHIRLPOOL_TOOTH_VISUAL_SCALE = 0.75;
 /** Depths sniper linger pool: strip ability-based move speed (burst / ult / Lunatic sprint leg) for this long after contact. */
 const DEPTHS_SNIPER_POOL_SUPPRESS_ABILITY_SPEED_SEC = 1;
 
+/** Fifth sanctuary tier — UI display level = `runLevel + 1` (no new map card drops; heal crystals unchanged). */
+const DISPLAY_LEVEL_FIVE_RUN_LEVEL = 4;
 /** Depths display level 5 — boss chase (`runLevel` after four sanctuary ups). */
-const DEPTHS_BOSS_CHASE_RUN_LEVEL = 4;
+const DEPTHS_BOSS_CHASE_RUN_LEVEL = DISPLAY_LEVEL_FIVE_RUN_LEVEL;
 /** Display depth 4 (`runLevel === 3`) — storm whirlpool roll + mid-wash tentacle burst **only** here (not L1–3 or boss L5). */
 const DEPTHS_WHIRLPOOL_RUN_LEVEL = 3;
 /** Rising flood: slightly faster than base walk so walking alone cannot outrun it. */
@@ -279,6 +281,14 @@ const DEPTHS_BOSS_WAVE_HIT_COOLDOWN_SEC = 0.72;
 const DEPTHS_BOSS_POST_LAND_BOB_DELAY_SEC = 0.045;
 const DEPTHS_BOSS_POST_LAND_BOB_TOTAL_SEC = 0.52;
 const DEPTHS_BOSS_POST_LAND_BOB_DEPTH_PX = 13;
+/** Eldritch L5: rings from `WARN` px above the wave; rewind snaps at `TRIGGER` px; arc fills over that span. */
+const DEPTHS_ELDRITCH_REWIND_WARN_ABOVE_WAVE_PX = 330;
+const DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX = 540;
+/** If player drops this many px below `WARN` while winding, cancel (wave motion / jitter). */
+const DEPTHS_ELDRITCH_REWIND_CANCEL_BELOW_WARN_PX = 28;
+const DEPTHS_ELDRITCH_REWIND_LOOKBACK_SEC = 1.5;
+const DEPTHS_PLAYER_POS_TRAIL_MAX_SEC = 2.6;
+const DEPTHS_PLAYER_POS_TRAIL_MAX_SAMPLES = 220;
 
 function depthsStormHash01(n) {
   return ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
@@ -381,6 +391,7 @@ function boot() {
   }
 
   const runLogLiveEl = document.getElementById("run-log-live");
+  const debugDepthsWaterDistEl = document.getElementById("debug-depths-water-dist-value");
   if (runLogLiveEl) runLogger.bindTextSink((text) => (runLogLiveEl.textContent = text));
   document.getElementById("run-log-print-console")?.addEventListener("click", () => {
     const text = runLogger.text();
@@ -759,6 +770,10 @@ function boot() {
   let depthsBossWaveTouchImmuneUntil = 0;
   /** Tide deposit: gentle sink-then-float on `anchorY` while splash rings play (`null` = idle). */
   let depthsBossPostLandBob = /** @type {{ anchorY: number; startSim: number } | null} */ (null);
+  /** Eldritch rewind telegraph (`null` = idle); `boss` is a hunter entity ref from `hunterRuntime`. */
+  let depthsEldritchRewind = /** @type {{ boss: object } | null} */ (null);
+  /** Boss-fight-only samples for rewind (`t` = simElapsed). */
+  const depthsPlayerPosTrail = /** @type {{ t: number; x: number; y: number }[]} */ ([]);
   const SWAMP_MUD_TRAIL_MAX = 58;
   const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
   const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
@@ -1039,6 +1054,8 @@ function boot() {
     depthsBossSpitTargetY = null;
     depthsBossWaveTouchImmuneUntil = 0;
     depthsBossPostLandBob = null;
+    depthsEldritchRewind = null;
+    depthsPlayerPosTrail.length = 0;
   }
 
   /** Depths display L5 — boss tide tier; arena/surge/roulette/forge event ticks are skipped (safehouse still runs). */
@@ -1155,6 +1172,152 @@ function boot() {
     depthsBossNudgePlayerVerticalWorld(yWant - player.y);
     depthsBossClampPlayerToLegalGroundAfterSpit();
     depthsBossPostLandBob.anchorY = player.y - bob;
+  }
+
+  function pushDepthsPlayerPosTrailSample() {
+    const t = simElapsed;
+    const cut = t - DEPTHS_PLAYER_POS_TRAIL_MAX_SEC;
+    while (depthsPlayerPosTrail.length && depthsPlayerPosTrail[0].t < cut) depthsPlayerPosTrail.shift();
+    depthsPlayerPosTrail.push({ t, x: player.x, y: player.y });
+    while (depthsPlayerPosTrail.length > DEPTHS_PLAYER_POS_TRAIL_MAX_SAMPLES) depthsPlayerPosTrail.shift();
+  }
+
+  /** @param {number} tTarget */
+  function sampleDepthsPlayerPosAtSim(tTarget) {
+    const a = depthsPlayerPosTrail;
+    if (a.length === 0) return null;
+    if (tTarget <= a[0].t) return { x: a[0].x, y: a[0].y };
+    const last = a[a.length - 1];
+    if (tTarget >= last.t) return { x: last.x, y: last.y };
+    for (let i = 1; i < a.length; i++) {
+      if (a[i].t >= tTarget) {
+        const p0 = a[i - 1];
+        const p1 = a[i];
+        const u = (tTarget - p0.t) / Math.max(1e-5, p1.t - p0.t);
+        return { x: p0.x + (p1.x - p0.x) * u, y: p0.y + (p1.y - p0.y) * u };
+      }
+    }
+    return null;
+  }
+
+  function findDepthsEldritchBloomHunter() {
+    if (!hunterRuntime) return null;
+    for (const h of hunterRuntime.entities.hunters) {
+      if (h.type === "depthsEldritchBloom") return h;
+    }
+    return null;
+  }
+
+  function tickDepthsEldritchRewindAttack() {
+    if (!hunterRuntime || !huntersEnabled) return;
+
+    const resolveDepthsEldritchRewindSnap = () => {
+      const lookT = simElapsed - DEPTHS_ELDRITCH_REWIND_LOOKBACK_SEC;
+      const pos = sampleDepthsPlayerPosAtSim(lookT);
+      if (pos) {
+        player.x = pos.x;
+        player.y = pos.y;
+        depthsBossResolvePlayerAgainstObstaclesIterations(24);
+        if (circleOverlapsAnyRect(player.x, player.y, player.r, obstaclesForPlayerCollision())) {
+          depthsBossEjectFromTerrainIfStuck();
+          depthsBossResolvePlayerAgainstObstaclesIterations(20);
+        }
+      }
+      playerDamage.bumpScreenShake(11, 0.26);
+    };
+
+    const fy0 = depthsBossRisingWaveFrontY;
+    const waveOk = fy0 != null && Number.isFinite(fy0);
+    const distAboveWave = waveOk ? fy0 - player.y : Number.NEGATIVE_INFINITY;
+    const span = Math.max(
+      1e-4,
+      DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX - DEPTHS_ELDRITCH_REWIND_WARN_ABOVE_WAVE_PX,
+    );
+
+    if (depthsEldritchRewind) {
+      const boss = depthsEldritchRewind.boss;
+      const alive =
+        boss &&
+        hunterRuntime.entities.hunters.indexOf(boss) >= 0 &&
+        (boss.hp ?? 1) > 0;
+      if (!alive) {
+        depthsEldritchRewind = null;
+        return;
+      }
+      if (
+        !waveOk ||
+        distAboveWave < DEPTHS_ELDRITCH_REWIND_WARN_ABOVE_WAVE_PX - DEPTHS_ELDRITCH_REWIND_CANCEL_BELOW_WARN_PX
+      ) {
+        depthsEldritchRewind = null;
+        return;
+      }
+      if (distAboveWave >= DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX) {
+        resolveDepthsEldritchRewindSnap();
+        depthsEldritchRewind = null;
+      }
+      return;
+    }
+
+    if (!isDepthsBossFightLevel()) return;
+    const ph = worldToHex(player.x, player.y);
+    if (specials.isSafehouseHexTile(ph.q, ph.r)) return;
+    if (!waveOk) return;
+    if (distAboveWave < DEPTHS_ELDRITCH_REWIND_WARN_ABOVE_WAVE_PX) return;
+
+    const bloom = findDepthsEldritchBloomHunter();
+    if (!bloom) return;
+
+    if (distAboveWave >= DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX) {
+      resolveDepthsEldritchRewindSnap();
+      return;
+    }
+
+    depthsEldritchRewind = { boss: bloom };
+  }
+
+  function drawDepthsEldritchRewindClockRings(ctx) {
+    if (!depthsEldritchRewind || !hunterRuntime) return;
+    const boss = depthsEldritchRewind.boss;
+    if (!boss || hunterRuntime.entities.hunters.indexOf(boss) < 0) return;
+
+    const fy = depthsBossRisingWaveFrontY;
+    if (fy == null || !Number.isFinite(fy)) return;
+    const distAboveWave = fy - player.y;
+    const span = Math.max(
+      1e-4,
+      DEPTHS_ELDRITCH_REWIND_TRIGGER_ABOVE_WAVE_PX - DEPTHS_ELDRITCH_REWIND_WARN_ABOVE_WAVE_PX,
+    );
+    const windUpU = clamp(
+      (distAboveWave - DEPTHS_ELDRITCH_REWIND_WARN_ABOVE_WAVE_PX) / span,
+      0,
+      1,
+    );
+    const sweep = Math.max(0.06, windUpU * Math.PI * 2);
+
+    const t = simElapsed;
+    const phase = Number(boss.bornAt ?? 0) * 0.09;
+    const bob = Math.sin(t * 1.25 + phase) * 1.8;
+    const bossCy = boss.y + bob;
+
+    const drawRing = (cx, cy, radius) => {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.strokeStyle = `rgba(220, 38, 38, ${0.38 + 0.48 * windUpU})`;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, -Math.PI / 2, -Math.PI / 2 + sweep, false);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(254, 202, 202, ${0.24 + 0.42 * windUpU})`;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 5, -Math.PI / 2, -Math.PI / 2 + sweep * 0.98, false);
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    const br = boss.r * 3.15;
+    drawRing(boss.x, bossCy, br);
+    drawRing(player.x, player.y, player.r + 26);
   }
 
   function tickDepthsBossRisingWaveChase(dt) {
@@ -2699,6 +2862,8 @@ function boot() {
     timelockEnemyFrom = 0;
     timelockEnemyUntil = 0;
     playerTimelockUntil = 0;
+    depthsEldritchRewind = null;
+    depthsPlayerPosTrail.length = 0;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
     depthsSniperAbilitySpeedSuppressUntil = 0;
@@ -3062,6 +3227,7 @@ function boot() {
     getDifficultyClockSec: () => safehouseHexFlow.getDifficultyClockSec(simElapsed),
     getRunLevel: () => runLevel,
     getSuppressDepthsBossNormalSpawns: () => isDepthsBossFightLevel(),
+    getDepthsBossRisingWaveFrontY: () => depthsBossRisingWaveFrontY,
     isWorldPointOnSafehouseBarrierDisk,
     clampHunterOutsideSafehouseDisk,
     isWorldPointOnForgeRouletteBarrierTile: (x, y) =>
@@ -3097,11 +3263,13 @@ function boot() {
     markProceduralSurgeHexSpent: (q, r) => specials.markProceduralSurgeHexSpent(q, r),
     damagePlayer: (amt, opts) => damagePlayerThroughPath(amt, opts),
     bumpScreenShake: (s, sec) => playerDamage.bumpScreenShake(s, sec),
-    dropSpecialEventJokerReward: () =>
+    dropSpecialEventJokerReward: () => {
+      if (runLevel === DISPLAY_LEVEL_FIVE_RUN_LEVEL) return;
       dropJokerRewardFromSpecialEvent({
         getCharacterId: () => activeCharacterId,
         openCardPickup: (card) => cardPickup?.openCardPickup(card),
-      }),
+      });
+    },
     spawnHunter: (type, x, y, opts) => hunterRuntime.spawnHunter(type, x, y, opts),
     killHuntersOnSurgeHex: (q, r) => hunterRuntime.killHuntersStandingOnSurgeHex(q, r),
     cleanupArenaNexusSiegeCombat: () => hunterRuntime.cleanupArenaNexusSiegeCombat(),
@@ -3166,6 +3334,8 @@ function boot() {
     timelockEnemyFrom = 0;
     timelockEnemyUntil = 0;
     playerTimelockUntil = 0;
+    depthsEldritchRewind = null;
+    depthsPlayerPosTrail.length = 0;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
     depthsSniperAbilitySpeedSuppressUntil = 0;
@@ -4288,6 +4458,10 @@ function boot() {
       player._px = player.x;
       player._py = player.y;
 
+      if (!paused && isDepthsBossFightLevel() && specialsSimUnpaused()) {
+        pushDepthsPlayerPosTrailSample();
+      }
+
       pruneSwampMudTrail();
       if (pathRuntime.getCurrentPathId() === "swamp") {
         const sp = Math.hypot(player.velX, player.velY);
@@ -4364,6 +4538,7 @@ function boot() {
           player._py = player.y;
           player._px = player.x;
         }
+        if (!paused) tickDepthsEldritchRewindAttack();
       }
     }
 
@@ -4409,7 +4584,11 @@ function boot() {
       }
 
       if (simElapsed >= nextCardSpawnAt) {
-        if (!runDead && activeCharacterId !== "lunatic") {
+        if (
+          !runDead &&
+          activeCharacterId !== "lunatic" &&
+          runLevel !== DISPLAY_LEVEL_FIVE_RUN_LEVEL
+        ) {
           if (collectibles.filter((c) => c.kind === "card").length < MAX_CARD_PICKUPS) {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: CARD_PICKUP_HIT_R });
             if (pt) {
@@ -5207,6 +5386,9 @@ function boot() {
     }
     if (swampPathActive) drawSwampPlayerMudChurnWorld(ctx);
     drawPlayerBody(ctx, player.x, player.y, player.r, player.facing, hurt01, bodyAlpha);
+    if (depthsPathActive && isDepthsBossFightLevel()) {
+      drawDepthsEldritchRewindClockRings(ctx);
+    }
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkParryUntil === "function") {
       drawBulwarkParry(ctx, player, simElapsed, character.getBulwarkParryUntil());
     }
@@ -5349,6 +5531,17 @@ function boot() {
         viewH / 2 + 24,
       );
       ctx.restore();
+    }
+
+    if (debugDepthsWaterDistEl) {
+      const fy = depthsBossRisingWaveFrontY;
+      if (pathRuntime.getCurrentPathId() === "depths" && fy != null && Number.isFinite(fy)) {
+        const d = Math.round(player.y - fy);
+        const dist = Math.abs(d);
+        debugDepthsWaterDistEl.textContent = `${dist} px (${d >= 0 ? "below" : "above"} wave front)`;
+      } else {
+        debugDepthsWaterDistEl.textContent = "—";
+      }
     }
 
     raf = window.requestAnimationFrame(frame);

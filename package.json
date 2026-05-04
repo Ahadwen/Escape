@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "bundle:escape": "esbuild src/escape/entry.js --bundle --format=iife --platform=browser --outfile=src/escape/standalone.js",
+    "bundle:escape": "esbuild src/escape/entry.js --bundle --format=iife --platform=browser --outfile=src/escape/standalone.js --loader:.png=dataurl",
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"
   },

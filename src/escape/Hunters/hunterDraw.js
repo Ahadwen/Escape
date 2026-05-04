@@ -1,5 +1,73 @@
 import { TAU } from "../constants.js";
 import { clamp } from "./hunterGeometry.js";
+import depthsEldritchBossUrl from "../../assets/Cthulu.png";
+
+/** Preloaded boss PNG (2D canvas). */
+const depthsEldritchBossImg = new Image();
+depthsEldritchBossImg.src = depthsEldritchBossUrl;
+
+/** Extra radians applied when drawing the boss PNG; 0 = use the asset’s native orientation. */
+const DEPTHS_ELDRITCH_BOSS_SPRITE_YAW = 0;
+
+/** Offscreen buffer for boss shading (getImageData / putImageData). */
+const _eldritchShade = {
+  /** @type {HTMLCanvasElement | null} */
+  canvas: null,
+  /** @type {CanvasRenderingContext2D | null} */
+  ctx: null,
+};
+
+function ensureEldritchShadeCanvas(dw, dh) {
+  if (!_eldritchShade.canvas || _eldritchShade.canvas.width !== dw || _eldritchShade.canvas.height !== dh) {
+    _eldritchShade.canvas = document.createElement("canvas");
+    _eldritchShade.canvas.width = dw;
+    _eldritchShade.canvas.height = dh;
+    _eldritchShade.ctx = _eldritchShade.canvas.getContext("2d", { willReadFrequently: true });
+  }
+  return _eldritchShade;
+}
+
+/** Treat clearly red-dominant pixels as authored (eyes, gore); body/purple shifts with `brightMul`. */
+function eldritchProtectedRed(pr, pg, pb) {
+  const dr = pr - pg;
+  const db = pr - pb;
+  if (pr < 38) return false;
+  if (dr < 12 || db < 12) return false;
+  if (pr > 236 && pg > 220 && pb > 210) return false;
+  return true;
+}
+
+/**
+ * @param {CanvasImageSource} img
+ * @param {number} dw
+ * @param {number} dh
+ * @param {number} brightMul
+ * @returns {HTMLCanvasElement | null}
+ */
+function eldritchBossShadedCanvas(img, dw, dh, brightMul) {
+  const { canvas, ctx } = ensureEldritchShadeCanvas(dw, dh);
+  if (!ctx || !canvas) return null;
+  ctx.clearRect(0, 0, dw, dh);
+  ctx.drawImage(img, 0, 0, dw, dh);
+  let imageData;
+  try {
+    imageData = ctx.getImageData(0, 0, dw, dh);
+  } catch {
+    return null;
+  }
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i];
+    const g = d[i + 1];
+    const b = d[i + 2];
+    if (eldritchProtectedRed(r, g, b)) continue;
+    d[i] = clamp((r * brightMul) | 0, 0, 255);
+    d[i + 1] = clamp((g * brightMul) | 0, 0, 255);
+    d[i + 2] = clamp((b * brightMul) | 0, 0, 255);
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
 
 /** Frog detonation burst + mud pool grow-in duration (seconds); same easing for both. */
 export const FROG_SPLASH_GROW_SEC = 0.88;
@@ -46,6 +114,9 @@ export function hunterPalette(type) {
     /** Depths bolt-spawner shot — not a spawn `type`; used from `drawHunterBody` when `h.depthsBoltMinion`. */
     case "depthsBoltMinion":
       return { light: "#a7f3d0", core: "#5b21b6", shadow: "#134e4a", rim: "#2dd4bf", mark: "#ede9fe" };
+    /** Depths L5 eldritch orb — custom body draw; palette fallback only. */
+    case "depthsEldritchBloom":
+      return { light: "#a78bfa", core: "#4c1d95", shadow: "#1e0533", rim: "#7c3aed", mark: "#fecaca" };
     case "ghost":
       return { light: "#f3f4f6", core: "#cbd5e1", shadow: "#6b7280", rim: "#e5e7eb", mark: "#ffffff" };
     default:
@@ -297,6 +368,53 @@ function drawDepthsTentacle(ctx, h, simElapsed) {
   ctx.restore();
 }
 
+/**
+ * Depths L5 boss: raster from `src/assets/Cthulu.png`, scaled (~2.5× base fit on hit radius), yaw toward player (`h.dir`).
+ */
+function drawDepthsEldritchBloom(ctx, h, simElapsed) {
+  const { x, y, r } = h;
+  const t = simElapsed;
+  const phase = Number(h.bornAt ?? 0) * 0.09;
+  const bob = Math.sin(t * 1.25 + phase) * 1.8;
+  const cy = y + bob;
+  const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, cy);
+  ctx.rotate(DEPTHS_ELDRITCH_BOSS_SPRITE_YAW);
+
+  const img = depthsEldritchBossImg;
+  const maxSpan = r * 2.2 * 2.5;
+  if (img.complete && img.naturalWidth > 0) {
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+    let dw = maxSpan;
+    let dh = (ih / iw) * dw;
+    if (dh > maxSpan) {
+      dh = maxSpan;
+      dw = (iw / ih) * dh;
+    }
+    const pulse = 0.5 + 0.5 * Math.sin(t * 1.95 + phase * 1.15);
+    const brightMul = 0.56 + pulse * 0.52;
+    const shaded = eldritchBossShadedCanvas(img, (dw + 0.5) | 0, (dh + 0.5) | 0, brightMul);
+    if (shaded) {
+      ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);
+    } else {
+      ctx.filter = `brightness(${brightMul.toFixed(3)})`;
+      ctx.drawImage(img, -dw * 0.5, -dh * 0.5, dw, dh);
+      ctx.filter = "none";
+    }
+  } else {
+    ctx.fillStyle = "#1a1028";
+    ctx.beginPath();
+    ctx.arc(0, 0, maxSpan * 0.45, 0, TAU);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 /** @param {CanvasRenderingContext2D} ctx
  * @param {object} h
  * @param {{ colourblind?: boolean; simElapsed?: number; depthsPath?: boolean }} [opts]
@@ -305,6 +423,11 @@ export function drawHunterBody(ctx, h, opts = {}) {
   if (h.type === "depthsTentacle") {
     const t = Number(opts.simElapsed);
     drawDepthsTentacle(ctx, h, Number.isFinite(t) ? t : 0);
+    return;
+  }
+  if (h.type === "depthsEldritchBloom") {
+    const t = Number(opts.simElapsed);
+    drawDepthsEldritchBloom(ctx, h, Number.isFinite(t) ? t : 0);
     return;
   }
   if (h.type === "cryptSpawner" && h.cryptDisguised) {
@@ -1047,7 +1170,7 @@ export function drawSpawnerChargeClocks(ctx, hunters, now) {
 
 export function drawHunterLifeBars(ctx, hunters, now) {
   for (const h of hunters) {
-    if (h.type === "depthsTentacle") continue;
+    if (h.type === "depthsTentacle" || h.type === "depthsEldritchBloom") continue;
     if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
     const total = h.life || Math.max(0.0001, h.dieAt - h.bornAt);
     const lifeLeft = clamp((h.dieAt - now) / total, 0, 1);
