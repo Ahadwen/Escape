@@ -223,6 +223,11 @@ const DEPTHS_STORM_WAVE_PERIOD_SEC = 11;
 /** Carry speed vs walk, scaled by sin(π·progress); direction is wave travel, not facing. */
 const DEPTHS_STORM_WAVE_PUSH_PEAK_MULT = 2.62;
 const DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT = 0.34;
+/** P2→P3 scripted storm: horizontal push waves + lightning buckets (storm length from `EldritchBlood`). */
+const ELDRITCH_P2P3_PUSH_GAP_MIN_SEC = 0.4;
+const ELDRITCH_P2P3_PUSH_GAP_MAX_SEC = 0.9;
+const ELDRITCH_P2P3_PUSH_WASH_DUR_SEC = 0.52;
+const ELDRITCH_P2P3_LIGHTNING_BUCKET_SEC = 0.1;
 /** Storm progress at which we treat the wash as having “hit” the player (burst scheduling). */
 const DEPTHS_TENTACLE_HIT_PROGRESS = 0.5;
 const DEPTHS_TENTACLE_BURST_PAUSE_SEC = 0.3;
@@ -302,6 +307,38 @@ const DEPTHS_PLAYER_POS_TRAIL_MAX_SAMPLES = 220;
 
 function depthsStormHash01(n) {
   return ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
+}
+
+/** Deterministic gap (s) between P2→P3 push wave starts; `gapIndex` is the gap after wave `gapIndex`. */
+function eldritchP2P3PushGapSec(tStorm0, gapIndex) {
+  const base = (Math.floor(Math.abs(tStorm0) * 100000 + 0.5) ^ (gapIndex * 13847711)) >>> 0;
+  return (
+    ELDRITCH_P2P3_PUSH_GAP_MIN_SEC +
+    depthsStormHash01(base + gapIndex * 15641) *
+      (ELDRITCH_P2P3_PUSH_GAP_MAX_SEC - ELDRITCH_P2P3_PUSH_GAP_MIN_SEC)
+  );
+}
+
+function eldritchP2P3PushWaveStartRel(tStorm0, waveIndex) {
+  let t = 0;
+  for (let j = 0; j < waveIndex; j++) {
+    t += eldritchP2P3PushGapSec(tStorm0, j);
+  }
+  return t;
+}
+
+/**
+ * Which scripted push wave is active at `tr` seconds after storm start (draw + sim must match).
+ * @returns {{ i: number; lt: number } | null}
+ */
+function eldritchP2P3ActivePushWaveRel(tStorm0, tr, washDur, stormLenSec) {
+  for (let i = 0; i < 40; i++) {
+    const start = eldritchP2P3PushWaveStartRel(tStorm0, i);
+    if (start > stormLenSec + 1e-6) break;
+    if (tr < start) return null;
+    if (tr < start + washDur) return { i, lt: tr - start };
+  }
+  return null;
 }
 
 /** Surge wash timing for one storm cycle index (same cadence as `getDepthsStormWaveState`). */
@@ -2054,22 +2091,28 @@ function boot() {
       const t0s = Number(p2p3BloomFx.depthsEldritchP2P3StormBurstStartSim ?? 0);
       const trs = simElapsed - t0s;
       if (trs >= 0 && trs < ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC) {
-        const intv = 0.32;
-        const washD = 0.26;
-        const xMid = x0 + w * 0.5;
-        const yMid = y0 + h * 0.5;
-        const diagBase = Math.hypot(w, h) * 0.52;
-        for (let wi = 0; wi < 44; wi++) {
-          if (wi * intv > ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC + washD) break;
-          const lt = trs - wi * intv;
-          if (lt < 0 || lt >= washD) continue;
+        const washD = ELDRITCH_P2P3_PUSH_WASH_DUR_SEC;
+        const act = eldritchP2P3ActivePushWaveRel(
+          t0s,
+          trs,
+          washD,
+          ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC,
+        );
+        if (act) {
+          const { i: wi, lt } = act;
           const progress = lt / washD;
+          const xMid = x0 + w * 0.5;
+          const yMid = y0 + h * 0.5;
+          const diagBase = Math.hypot(w, h) * 0.52;
           const waveIdx = 95000 + wi;
           const shell = Math.sin(Math.PI * progress);
-          const bandAngle = depthsStormHash01(waveIdx + 923) * Math.PI * 2;
-          const bandThickness = 58 + depthsStormHash01(waveIdx + 614) * 72;
+          const bandAngle = 0;
+          const bandThickness = 72 + depthsStormHash01(waveIdx + 614) * 48;
           const diag = diagBase + bandThickness;
-          const xPosBase = -diag + progress * (2 * diag);
+          const travelRight =
+            depthsStormHash01((Math.floor(t0s * 100000 + 0.5) ^ 0x5afe5afe) + wi * 99991) >= 0.5;
+          const sweep = travelRight ? progress : 1 - progress;
+          const xPosBase = -diag + sweep * (2 * diag);
           const ripplePhase = simElapsed * 2.05 + wi * 2.71;
           const kRipple = 0.0112;
           const ampCrest = bandThickness * 0.42;
@@ -2085,7 +2128,7 @@ function boot() {
             xPosBase + bandThickness * 2.25,
             0,
           );
-          const a0 = 0.07 + shell * 0.24;
+          const a0 = 0.06 + shell * 0.18;
           g.addColorStop(0, "rgba(255, 255, 255, 0)");
           g.addColorStop(0.25, `rgba(220, 238, 252, ${a0 * 0.48})`);
           g.addColorStop(0.5, `rgba(248, 252, 255, ${a0 * 0.68})`);
@@ -2158,9 +2201,14 @@ function boot() {
     const inStrike2 = wantDouble && cycle >= t2 && cycle < t2 + flashDur2;
     const strike = inStrike1 || inStrike2;
 
-    const drawOneBolt = (u, seed) => {
+    const drawOneBolt = (u, seed, salt = 0) => {
       const alpha = Math.max(0, Math.min(1, u)) * 0.92;
-      const sx = x0 + w * (0.1 + strike01(seed) * 0.8);
+      /** P2→P3 passes `salt` so bolts spread on X; normal strikes keep the original `strike01` placement. */
+      const mix = (Math.imul(seed, 0x9e3779b9) + (salt >>> 0)) >>> 0;
+      const sx =
+        salt === 0
+          ? x0 + w * (0.1 + strike01(seed) * 0.8)
+          : x0 + w * (0.02 + depthsStormHash01(mix + 1) * 0.96);
       const segN = 11 + (seed % 6);
       ctx.save();
       ctx.globalCompositeOperation = "screen";
@@ -2175,7 +2223,7 @@ function boot() {
       ctx.shadowBlur = 18;
       ctx.beginPath();
       let x = sx;
-      let y = y0 + 12 + (strike01(seed + 3) * 56);
+      let y = y0 + 12 + strike01(seed + 3) * 56;
       ctx.moveTo(x, y);
       for (let s = 0; s < segN; s++) {
         const jx =
@@ -2201,14 +2249,16 @@ function boot() {
       const t0l = Number(p2p3BloomLt.depthsEldritchP2P3StormBurstStartSim ?? 0);
       const trl = simElapsed - t0l;
       if (trl >= 0 && trl < ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC) {
-        const every = 0.085;
-        const n = Math.floor(trl / every);
-        const loc = (trl % every) / every;
-        if (loc < 0.28) {
-          const uBolt = loc / 0.28;
-          drawOneBolt(uBolt, n * 199971 + 17000);
-          if (strike01(n + 501) < 0.58) drawOneBolt(uBolt * 0.85, n * 199971 + 444881);
-        }
+        const bucketT = ELDRITCH_P2P3_LIGHTNING_BUCKET_SEC;
+        const b = Math.floor(trl / bucketT);
+        const intra = trl - b * bucketT;
+        const half = bucketT * 0.5;
+        const u1 = Math.sin(Math.PI * clamp(intra / half, 0, 1));
+        const u2 = Math.sin(Math.PI * clamp((intra - half) / half, 0, 1));
+        const saltA = (b * 2654435761) ^ (Math.floor(intra * 100000) + 11);
+        const saltB = (b * 1597334677) ^ (Math.floor(intra * 97777) + 9331);
+        if (u1 > 0.04) drawOneBolt(u1, b * 7919 + 11, saltA);
+        if (u2 > 0.04) drawOneBolt(u2, b * 7919 + 9331, saltB);
       }
     }
   }
@@ -4863,22 +4913,28 @@ function boot() {
           const tStorm0 = Number(p2p3BloomPush.depthsEldritchP2P3StormBurstStartSim ?? 0);
           const tr = simElapsed - tStorm0;
           if (tr >= 0 && tr < ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC) {
-            const interval = 0.32;
-            const washDur = 0.26;
+            const washDur = ELDRITCH_P2P3_PUSH_WASH_DUR_SEC;
+            const act = eldritchP2P3ActivePushWaveRel(
+              tStorm0,
+              tr,
+              washDur,
+              ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC,
+            );
             let wxAcc = 0;
             let wyAcc = 0;
-            for (let wi = 0; wi < 40; wi++) {
-              if (wi * interval > ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC + washDur) break;
-              const lt = tr - wi * interval;
-              if (lt < 0 || lt >= washDur) continue;
-              const progress = lt / washDur;
+            if (act) {
+              const progress = act.lt / washDur;
               const env = Math.sin(Math.PI * progress);
-              const bandAngle = depthsStormHash01(wi + 9923) * Math.PI * 2;
+              const travelX =
+                depthsStormHash01((Math.floor(tStorm0 * 100000 + 0.5) ^ 0x5afe5afe) + act.i * 99991) < 0.5
+                  ? -1
+                  : 1;
+              const travelY = 0;
               const pushSpeed =
                 PLAYER_SPEED *
                 (DEPTHS_STORM_WAVE_PUSH_PEAK_MULT * env + DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT);
-              wxAcc += Math.cos(bandAngle) * pushSpeed * dt;
-              wyAcc += Math.sin(bandAngle) * pushSpeed * dt;
+              wxAcc = travelX * pushSpeed * dt;
+              wyAcc = travelY * pushSpeed * dt;
             }
             if (wxAcc !== 0 || wyAcc !== 0) {
               const obsForWave = obstaclesForPlayerCollision();

@@ -1429,6 +1429,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         if (h.depthsEldritchP2P3InterludeScripted) {
           continue;
         }
+        if (h.depthsEldritchTriplicateScripted) {
+          continue;
+        }
         if (h.depthsEldritchPostCageScripted) {
           continue;
         }
