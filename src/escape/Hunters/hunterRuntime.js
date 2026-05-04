@@ -54,6 +54,7 @@ import {
   frogMudPoolGrowScale,
   FROG_SPLASH_GROW_SEC,
 } from "./hunterDraw.js";
+import { ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX } from "../specials/EldritchBlood.js";
 
 /** Swamp frog: detonation / pool radius (px). ~3× the original ~35 (“~200% bigger”). */
 const SWAMP_FROG_BLAST_R = 105;
@@ -353,8 +354,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const player = getPlayer();
     const elapsed = getSimElapsed();
     const fallback = { x: hunter.x + hunter.dir.x * 40, y: hunter.y + hunter.dir.y * 40 };
+    /** Depths L5 eldritch chase: hunters must keep real aggro (clubs burst invis / post-hit untargetable / rogue misdirection). */
+    const depthsBossChaseIgnoresPlayerStealth =
+      depthsPathActive() && !!getSuppressDepthsBossNormalSpawnsDep?.();
 
-    if (elapsed < getPlayerUntargetableUntil()) {
+    if (!depthsBossChaseIgnoresPlayerStealth && elapsed < getPlayerUntargetableUntil()) {
       return nearestDecoy(hunter) || fallback;
     }
 
@@ -367,14 +371,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
 
     const inv = getInventory();
-    if (getCharacterId() === "rogue" && pickRogueHunterTarget) {
+    if (!depthsBossChaseIgnoresPlayerStealth && getCharacterId() === "rogue" && pickRogueHunterTarget) {
       return pickRogueHunterTarget(hunter, player, inv, nearestDecoy, hasLineOfSight, fallback, elapsed);
     }
 
-    if (elapsed < (inv.clubsInvisUntil ?? 0)) {
+    if (!depthsBossChaseIgnoresPlayerStealth && elapsed < (inv.clubsInvisUntil ?? 0)) {
       return nearestDecoy(hunter) || fallback;
     }
-    if (getCharacterId() === "rogue" && elapsed < (inv.spadesLandingStealthUntil ?? 0)) {
+    if (
+      !depthsBossChaseIgnoresPlayerStealth &&
+      getCharacterId() === "rogue" &&
+      elapsed < (inv.spadesLandingStealthUntil ?? 0)
+    ) {
       return nearestDecoy(hunter) || fallback;
     }
 
@@ -491,6 +499,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (type === "airSpawner" || type === "depthsBoltSpawner") return 26;
     if (type === "laser" || type === "laserBlue" || type === "depthsGrappleLaser") return 13;
     if (type === "depthsShardChaser") return 10;
+    if (type === "depthsEldritchBarrageBolt") return 6.5;
     if (type === "fast") return 9;
     if (type === "frogChaser") return 11;
     return 10;
@@ -721,6 +730,16 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.opacity = 1;
       h.x = h.depthsAnchorX;
       h.y = h.depthsAnchorY;
+    } else if (type === "depthsEldritchBarrageBolt") {
+      r = 6.5;
+      life = 3.25;
+      lastShotAt = elapsed + 999;
+      h.opacity = 1;
+      h.depthsEldritchBarrageBolt = true;
+      const ang = Number(opts?.eldritchBarrageAngle ?? 0);
+      const spd = Number(opts?.eldritchBarrageSpeed ?? 390);
+      h.eldritchBarrageVx = Math.cos(ang) * spd;
+      h.eldritchBarrageVy = Math.sin(ang) * spd;
     } else if (type === "depthsEldritchBloom") {
       r = 40;
       life = 86400 * 120;
@@ -1093,6 +1112,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         continue;
       }
 
+      if (h.type === "depthsEldritchBarrageBolt") {
+        moveCircleWithCollisions(h, h.eldritchBarrageVx, h.eldritchBarrageVy, spDt, {
+          ignoreObstacles: true,
+          blockValiantEnemyShockFields: true,
+        });
+        continue;
+      }
+
       if (h.type === "ghost") {
         const target = pickTargetForHunter(h);
         const ghostSpeed = h.ghostDashSpeed * boneEnemySpeedMult();
@@ -1373,6 +1400,105 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
       if (h.type === "depthsEldritchBloom") {
         const waveY = getDepthsBossRisingWaveFrontY();
+        if (h.depthsEldritchBarrageAttackActive) {
+          continue;
+        }
+        /** Lightning volleys: stay `ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX` above the wave and keep drawing glow (see `hunterDraw`). */
+        if (h.depthsEldritchLightningCastActive && waveY != null && Number.isFinite(waveY)) {
+          const capY = waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX;
+          h.y = capY;
+          const eldritchBossChase = depthsPathActive() && !!getSuppressDepthsBossNormalSpawnsDep?.();
+          const wanderT = elapsed * 0.22 + Number(h.bornAt ?? 0) * 0.00062;
+          const spin = Number(h.depthsOrbitSign) || 1;
+          const wanderAmp = 150;
+          const lateral =
+            Math.sin(wanderT) * wanderAmp * 0.62 +
+            Math.sin(wanderT * 1.57 + spin * 1.1) * wanderAmp * 0.38;
+          const aimX = player.x + lateral;
+          const spd =
+            178 *
+            (eldritchBossChase ? 1.16 : 1) *
+            runLevelEnemySpeedMult() *
+            midgameEnemySpeedMult() *
+            boneEnemySpeedMult();
+          const tx = aimX - h.x;
+          const mx = clamp(tx / 380, -1, 1);
+          const prevX = h.x;
+          moveCircleWithCollisions(h, mx * spd * 0.68, 0, spDt, {
+            blockValiantEnemyShockFields: true,
+            ignoreObstacles: true,
+          });
+          const leashX = eldritchBossChase ? 480 : 380;
+          h.x = clamp(h.x, player.x - leashX, player.x + leashX);
+          const dxm = h.x - prevX;
+          h.dir.x = Math.abs(dxm) > 0.06 ? Math.sign(dxm) : tx >= 0 ? 1 : -1;
+          h.dir.y = -0.48;
+          const ddir = Math.hypot(h.dir.x, h.dir.y) || 1;
+          h.dir.x /= ddir;
+          h.dir.y /= ddir;
+          continue;
+        }
+        if (Number(h.depthsEldritchTelegraphHoldUntil ?? 0) > elapsed) {
+          continue;
+        }
+        if (h.depthsEldritchOrbStrikeChanneling) {
+          continue;
+        }
+        const eldritchBossChase = depthsPathActive() && !!getSuppressDepthsBossNormalSpawnsDep?.();
+        const prepStart = Number(h.depthsSpellLiftPrepStartSim ?? 0);
+        const prepEnd = Number(h.depthsSpellLiftPrepEndSim ?? 0);
+        const inSpellLiftPrep =
+          prepEnd > prepStart &&
+          elapsed >= prepStart &&
+          elapsed < prepEnd &&
+          waveY != null &&
+          Number.isFinite(waveY);
+
+        if (inSpellLiftPrep) {
+          const capY = waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX;
+          const dur = prepEnd - prepStart;
+          const u = dur > 1e-6 ? clamp((elapsed - prepStart) / dur, 0, 1) : 1;
+          const easeInOut =
+            u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+          if (Number(h._depthsSpellPrepAnchorSim ?? 0) !== prepStart) {
+            h.depthsSpellPrepAnchorY = h.y;
+            h._depthsSpellPrepAnchorSim = prepStart;
+          }
+          const ay = Number(h.depthsSpellPrepAnchorY);
+          const destY = Math.min(ay, capY);
+          h.y = ay + (destY - ay) * easeInOut;
+
+          const wanderT = elapsed * 0.22 + Number(h.bornAt ?? 0) * 0.00062;
+          const spin = Number(h.depthsOrbitSign) || 1;
+          const wanderAmp = 150;
+          const lateral =
+            Math.sin(wanderT) * wanderAmp * 0.62 +
+            Math.sin(wanderT * 1.57 + spin * 1.1) * wanderAmp * 0.38;
+          const aimX = player.x + lateral;
+          const spd =
+            178 *
+            (eldritchBossChase ? 1.16 : 1) *
+            runLevelEnemySpeedMult() *
+            midgameEnemySpeedMult() *
+            boneEnemySpeedMult();
+          const tx = aimX - h.x;
+          const mx = clamp(tx / 380, -1, 1);
+          const prevX = h.x;
+          moveCircleWithCollisions(h, mx * spd * 0.68, 0, spDt, {
+            blockValiantEnemyShockFields: true,
+            ignoreObstacles: true,
+          });
+          const leashX = eldritchBossChase ? 480 : 380;
+          h.x = clamp(h.x, player.x - leashX, player.x + leashX);
+          const dxm = h.x - prevX;
+          h.dir.x = Math.abs(dxm) > 0.06 ? Math.sign(dxm) : tx >= 0 ? 1 : -1;
+          h.dir.y = -0.48;
+          const ddir = Math.hypot(h.dir.x, h.dir.y) || 1;
+          h.dir.x /= ddir;
+          h.dir.y /= ddir;
+          continue;
+        }
+
         /** Preferred float: this far below the rising front (+Y down). */
         const ELDRITCH_FLOAT_BELOW_WAVE = 150;
         /** When |player.y − wave| is below this, no extra “rise toward player” ceiling beyond the wave. */
@@ -1406,6 +1532,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           yMinClamp = player.y - 380;
           yMaxClamp = player.y + 520;
         }
+        if (h.depthsCastLiftActive && waveY != null && Number.isFinite(waveY)) {
+          const castCapY = waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX;
+          yMaxClamp = Math.min(yMaxClamp, castCapY);
+          yMinClamp = Math.min(yMinClamp, yMaxClamp);
+          targetY = Math.min(targetY, castCapY);
+        }
         /** Slow horizontal wander so the boss drifts side-to-side instead of parking on `player.x`. */
         const wanderT = elapsed * 0.29 + Number(h.bornAt ?? 0) * 0.00062;
         const spin = Number(h.depthsOrbitSign) || 1;
@@ -1435,12 +1567,17 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h._eldritchMvY /= mlen;
         h.dir.x = h._eldritchMvX;
         h.dir.y = h._eldritchMvY;
-        const spd = 178 * runLevelEnemySpeedMult() * midgameEnemySpeedMult() * boneEnemySpeedMult();
+        const spd =
+          178 *
+          (eldritchBossChase ? 1.16 : 1) *
+          runLevelEnemySpeedMult() *
+          midgameEnemySpeedMult() *
+          boneEnemySpeedMult();
         moveCircleWithCollisions(h, h._eldritchMvX * spd, h._eldritchMvY * spd, spDt, {
           blockValiantEnemyShockFields: true,
           ignoreObstacles: true,
         });
-        const leashX = 380;
+        const leashX = eldritchBossChase ? 480 : 380;
         h.x = clamp(h.x, player.x - leashX, player.x + leashX);
         h.y = clamp(h.y, yMinClamp, yMaxClamp);
         continue;
@@ -2100,7 +2237,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
       const rr = h.r + player.r;
       if (distSq(h, player) <= rr * rr) {
-        damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+        damagePlayer(1, {
+          sourceX: h.x,
+          sourceY: h.y,
+          ...(h.depthsEldritchBarrageBolt ? { eldritchBloodAttack: "eldritchBarrageBolt" } : {}),
+        });
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
       }
     }
@@ -2128,7 +2269,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (!depthsPathActive()) {
       for (let i = entities.hunters.length - 1; i >= 0; i--) {
         const ht = entities.hunters[i].type;
-        if (ht === "depthsTentacle" || ht === "depthsEldritchBloom") entities.hunters.splice(i, 1);
+        if (ht === "depthsTentacle" || ht === "depthsEldritchBloom" || ht === "depthsEldritchBarrageBolt")
+          entities.hunters.splice(i, 1);
       }
     }
     while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {

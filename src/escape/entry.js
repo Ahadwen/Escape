@@ -120,6 +120,7 @@ import {
   getSwampBootlegSidebarRows,
 } from "./swamp/swampBootlegRuntime.js";
 import { createSafehouseHexFlow } from "./specials/safehouseHexFlow.js";
+import { createEldritchBloodFlow } from "./specials/EldritchBlood.js";
 import { createEventHexController } from "./WorldGeneration/eventTiles/eventController.js";
 import { dropJokerRewardFromSpecialEvent } from "./items/jokerEventReward.js";
 import { createHunterRuntime } from "./Hunters/hunterRuntime.js";
@@ -279,6 +280,8 @@ const DEPTHS_BOSS_SURF_SPIT_APPROACH_RATE = 16;
 const DEPTHS_BOSS_SPLASH_STUN_SEC = 0.1;
 const DEPTHS_BOSS_WAVE_START_BELOW_PLAYER_PX = 420;
 const DEPTHS_BOSS_WAVE_HIT_COOLDOWN_SEC = 0.72;
+/** Tide sweep: skip obstacle resolution this long after touch / after final spit Y (then clamp once). */
+const DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC = 0.2;
 /** After tide deposit: brief delay then dip + rise (sin), timed with splash rings. */
 const DEPTHS_BOSS_POST_LAND_BOB_DELAY_SEC = 0.045;
 const DEPTHS_BOSS_POST_LAND_BOB_TOTAL_SEC = 0.52;
@@ -424,6 +427,7 @@ function boot() {
 
   /** Declared early so west-test `change` / death callbacks never hit the TDZ on these bindings. */
   let hunterRuntime = /** @type {ReturnType<typeof createHunterRuntime> | null} */ (null);
+  let eldritchBlood = /** @type {ReturnType<typeof createEldritchBloodFlow> | null} */ (null);
   let hexEventRuntime = /** @type {ReturnType<typeof createEventHexController> | null} */ (null);
 
   /** Simulation clock in seconds — before tile/special managers so `getSimElapsed` is valid on first `ensureTilesForPlayer`. */
@@ -725,6 +729,8 @@ function boot() {
   let boneBlindDebuffFadeEnd = 0;
   /** True if the blind debuff was triggered by a blue laser (pale-blue accent for that debuff). */
   let boneBlindDebuffFromBlueLaser = false;
+  /** `simElapsed` until which a full-view white flare plays after Depths eldritch lightning tags the player. */
+  let eldritchLightningHitScreenFlashUntil = 0;
   const BONE_BLIND_DEBUFF_PEAK_SEC = 0.92;
   const BONE_BLIND_DEBUFF_FADE_SEC = 0.55;
   /** Tracks Knight clubs invisibility window for edge detection (eject from terrain when it ends). */
@@ -774,6 +780,10 @@ function boot() {
   let depthsBossWaveTouchImmuneUntil = 0;
   /** Tide deposit: gentle sink-then-float on `anchorY` while splash rings play (`null` = idle). */
   let depthsBossPostLandBob = /** @type {{ anchorY: number; startSim: number } | null} */ (null);
+  /** While `simElapsed <` this, tide nudges / clamp skip rect collision (then one deferred settle). */
+  let depthsBossSurfTerrainFreeUntil = 0;
+  /** When non-zero, run `depthsBossClampPlayerToLegalGroundAfterSpit` once at this `simElapsed`. */
+  let depthsBossSurfDeferredClampSim = 0;
   /** Eldritch rewind telegraph (`null` = idle); `boss` is a hunter entity ref from `hunterRuntime`. */
   let depthsEldritchRewind = /** @type {{ boss: object } | null} */ (null);
   /** After rewind snap: draw a short glow on the player until this sim time. */
@@ -1060,9 +1070,12 @@ function boot() {
     depthsBossSpitTargetY = null;
     depthsBossWaveTouchImmuneUntil = 0;
     depthsBossPostLandBob = null;
+    depthsBossSurfTerrainFreeUntil = 0;
+    depthsBossSurfDeferredClampSim = 0;
     depthsEldritchRewind = null;
     depthsEldritchRewindGlowPlayerUntil = 0;
     depthsPlayerPosTrail.length = 0;
+    eldritchBlood?.reset();
   }
 
   /** Depths display L5 — boss tide tier; arena/surge/roulette/forge event ticks are skipped (safehouse still runs). */
@@ -1114,6 +1127,10 @@ function boot() {
 
   function depthsBossNudgePlayerVerticalWorld(dy) {
     if (Math.abs(dy) < 1e-6) return;
+    if (depthsBossSurfTerrainGhostNow()) {
+      player.y += dy;
+      return;
+    }
     const obs = obstaclesForPlayerCollision();
     const steps = Math.max(1, Math.ceil(Math.abs(dy) / Math.max(2.5, player.r * 0.28)));
     const step = dy / steps;
@@ -1141,7 +1158,12 @@ function boot() {
     if (player.y < targetY) player.y = targetY;
   }
 
+  function depthsBossSurfTerrainGhostNow() {
+    return isDepthsBossFightLevel() && simElapsed < depthsBossSurfTerrainFreeUntil;
+  }
+
   function depthsBossClampPlayerToLegalGroundAfterSpit() {
+    if (depthsBossSurfTerrainGhostNow()) return;
     depthsBossResolvePlayerAgainstObstaclesIterations(26);
     for (
       let z = 0;
@@ -1458,8 +1480,14 @@ function boot() {
     const ph = worldToHex(player.x, player.y);
     if (specials.isSafehouseHexTile(ph.q, ph.r)) return;
 
+    if (depthsBossSurfDeferredClampSim > 0 && simElapsed >= depthsBossSurfDeferredClampSim) {
+      depthsBossSurfDeferredClampSim = 0;
+      depthsBossClampPlayerToLegalGroundAfterSpit();
+    }
+
     if (depthsBossRisingWaveFrontY == null) {
       depthsBossRisingWaveFrontY = player.y + DEPTHS_BOSS_WAVE_START_BELOW_PLAYER_PX;
+      eldritchBlood?.notifyFightClockStart(simElapsed);
     }
 
     const dangerRamp01 =
@@ -1494,7 +1522,8 @@ function boot() {
             ? depthsBossSpitTargetY
             : fy - DEPTHS_BOSS_SURF_SPIT_TARGET_ABOVE_FRONT_PX;
         player.y = tyFinal;
-        depthsBossClampPlayerToLegalGroundAfterSpit();
+        depthsBossSurfTerrainFreeUntil = simElapsed + DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC;
+        depthsBossSurfDeferredClampSim = simElapsed + DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC;
 
         const landX = player.x;
         const landY = player.y;
@@ -1530,6 +1559,8 @@ function boot() {
 
     depthsBossSurfStartSim = simElapsed;
     depthsBossSpitTargetY = null;
+    depthsBossSurfDeferredClampSim = 0;
+    depthsBossSurfTerrainFreeUntil = simElapsed + DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC;
   }
 
   /** @param {{ markWaveIdx?: number }} [opts] — `markWaveIdx` ties to storm wave so the natural spawn does not double-fire. */
@@ -3021,6 +3052,7 @@ function boot() {
     boneBlindDebuffPeakEnd = 0;
     boneBlindDebuffFadeEnd = 0;
     boneBlindDebuffFromBlueLaser = false;
+    eldritchLightningHitScreenFlashUntil = 0;
     resetSwampInfection();
     resetFireGrowthZones();
     swampMudTrail.length = 0;
@@ -3395,6 +3427,47 @@ function boot() {
   }), "hunters", runLogger, { skip: ["draw", "tick"] });
   hunterRuntime.reset();
 
+  eldritchBlood = createEldritchBloodFlow({
+    getSimElapsed: () => simElapsed,
+    getPlayer: () => player,
+    getRunDead: () => runDead,
+    isDepthsBossFightLevel: () => isDepthsBossFightLevel(),
+    isPlayerInSafehouse: () => {
+      const ph = worldToHex(player.x, player.y);
+      return specials.isSafehouseHexTile(ph.q, ph.r);
+    },
+    getHuntersEnabled: () => huntersEnabled,
+    getHunterRuntime: () => hunterRuntime,
+    stormHash01Dep: depthsStormHash01,
+    damagePlayerThroughPath,
+    bumpScreenShake: (strength, sec) => playerDamage.bumpScreenShake(strength, sec),
+    getBloomHunter: () => findDepthsEldritchBloomHunter(),
+    randRange,
+    getWorldDrawBounds: () => {
+      const pad = 100;
+      return {
+        x0: cameraX - pad,
+        y0: cameraY - pad,
+        x1: cameraX + canvas.width + pad,
+        y1: cameraY + canvas.height + pad,
+      };
+    },
+    tentacleBurstPauseSec: DEPTHS_TENTACLE_BURST_PAUSE_SEC,
+    tentacleBurstIntervalSec: DEPTHS_TENTACLE_BURST_INTERVAL_SEC,
+    tentacleSpawnRadiusPx: DEPTHS_TENTACLE_SPAWN_RADIUS_PX,
+    tentacleBurstSpanSecBase: DEPTHS_TENTACLE_BURST_SPAN_SEC,
+    getDepthsBossRisingWaveFrontY: () => depthsBossRisingWaveFrontY,
+    onLightningColumnPlayerHit: ({ playerX, playerY }) => {
+      const t0 = simElapsed;
+      const ELDRITCH_LIGHTNING_HIT_SCREEN_FLASH_SEC = 0.16;
+      eldritchLightningHitScreenFlashUntil = simElapsed + ELDRITCH_LIGHTNING_HIT_SCREEN_FLASH_SEC;
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 1.05, "rgba(255, 255, 255, 0.94)", t0, 0.28, { lineWidth: 4.4 });
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 2.2, "rgba(252, 252, 255, 0.82)", t0, 0.36, { lineWidth: 3.2 });
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 4.4, "rgba(240, 248, 255, 0.62)", t0, 0.46);
+      pushAttackRing(attackRings, playerX, playerY, PLAYER_RADIUS * 8.5, "rgba(220, 235, 255, 0.38)", t0, 0.54);
+    },
+  });
+
   hexEventRuntime = instrumentObjectMethods(createEventHexController({
     getSimElapsed: () => simElapsed,
     getPlayer: () => player,
@@ -3494,6 +3567,7 @@ function boot() {
     boneBlindDebuffPeakEnd = 0;
     boneBlindDebuffFadeEnd = 0;
     boneBlindDebuffFromBlueLaser = false;
+    eldritchLightningHitScreenFlashUntil = 0;
     resetSwampInfection();
     resetFireGrowthZones();
     swampMudTrail.length = 0;
@@ -4438,14 +4512,16 @@ function boot() {
         for (let i = 0; i < moveSteps; i++) {
           player.x += stepX;
           player.y += stepY;
-          const preResolveX = player.x;
-          const preResolveY = player.y;
-          const stepResolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obstaclesForPlayerCollision());
-          if (Math.abs(stepResolved.x - preResolveX) > 1e-6 || Math.abs(stepResolved.y - preResolveY) > 1e-6) {
-            sweepTouchedObstacle = true;
+          if (!depthsBossSurfTerrainGhostNow()) {
+            const preResolveX = player.x;
+            const preResolveY = player.y;
+            const stepResolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obstaclesForPlayerCollision());
+            if (Math.abs(stepResolved.x - preResolveX) > 1e-6 || Math.abs(stepResolved.y - preResolveY) > 1e-6) {
+              sweepTouchedObstacle = true;
+            }
+            player.x = stepResolved.x;
+            player.y = stepResolved.y;
           }
-          player.x = stepResolved.x;
-          player.y = stepResolved.y;
         }
       } else if (lunaticMove) {
         rogueMovementIntent = lunaticMove.rogueMovementIntent;
@@ -4462,13 +4538,17 @@ function boot() {
       let touchedObstacle = false;
       if (!lunaticMove) {
         const obsForPlayer = obstaclesForPlayerCollision();
-        const resolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForPlayer);
-        touchedObstacle =
-          sweepTouchedObstacle ||
-          Math.abs(resolved.x - player.x) > 1e-6 ||
-          Math.abs(resolved.y - player.y) > 1e-6;
-        player.x = resolved.x;
-        player.y = resolved.y;
+        if (!depthsBossSurfTerrainGhostNow()) {
+          const resolved = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForPlayer);
+          touchedObstacle =
+            sweepTouchedObstacle ||
+            Math.abs(resolved.x - player.x) > 1e-6 ||
+            Math.abs(resolved.y - player.y) > 1e-6;
+          player.x = resolved.x;
+          player.y = resolved.y;
+        } else {
+          touchedObstacle = sweepTouchedObstacle;
+        }
         if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
           character.getBulwarkWorld().clampPlayerInDeathLock(player);
         }
@@ -4686,7 +4766,10 @@ function boot() {
           player._py = player.y;
           player._px = player.x;
         }
-        if (!paused) tickDepthsEldritchRewindAttack();
+        if (!paused) {
+          eldritchBlood?.tick(dt);
+          tickDepthsEldritchRewindAttack();
+        }
       }
     }
 
@@ -4891,7 +4974,12 @@ function boot() {
           const len = Math.hypot(dx, dy) || 1;
           const ux = dx / len;
           const uy = dy / len;
-          if (h.type !== "spawner" && h.type !== "airSpawner" && h.type !== "cryptSpawner") {
+          if (
+            h.type !== "spawner" &&
+            h.type !== "airSpawner" &&
+            h.type !== "cryptSpawner" &&
+            h.type !== "depthsEldritchBarrageBolt"
+          ) {
             h.x += ux * 95;
             h.y += uy * 95;
           }
@@ -5273,6 +5361,7 @@ function boot() {
     );
     if (depthsPathActive && isDepthsBossFightLevel()) {
       drawDepthsBossRisingChaseWaveWorld(ctx, viewW, viewH);
+      eldritchBlood?.drawUnderHunters(ctx);
     }
     if (huntersEnabled) {
       if (firePathActive) {
@@ -5281,6 +5370,9 @@ function boot() {
         for (const h of hunterRuntime.entities.hunters) h.fireGlow = false;
       }
       hunterRuntime.draw(ctx);
+    }
+    if (depthsPathActive && isDepthsBossFightLevel()) {
+      eldritchBlood?.drawOverHunters(ctx);
     }
     for (const c of collectibles) {
       if (c.kind === "heal") {
@@ -5659,6 +5751,16 @@ function boot() {
     if (playerDamage.combat.hurtFlashRemain > 0) {
       ctx.save();
       ctx.fillStyle = "rgba(220, 38, 38, 0.24)";
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
+    }
+
+    if (simElapsed < eldritchLightningHitScreenFlashUntil) {
+      const flashDur = 0.16;
+      const u = Math.max(0, Math.min(1, (eldritchLightningHitScreenFlashUntil - simElapsed) / flashDur));
+      const a = 0.62 * u * u;
+      ctx.save();
+      ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
       ctx.fillRect(0, 0, viewW, viewH);
       ctx.restore();
     }

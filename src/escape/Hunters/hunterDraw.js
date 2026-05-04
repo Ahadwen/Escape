@@ -1,5 +1,6 @@
 import { TAU } from "../constants.js";
 import { clamp } from "./hunterGeometry.js";
+import { ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC } from "../specials/EldritchBlood.js";
 import depthsEldritchBossUrl from "../../assets/Cthulu.png";
 
 /** Preloaded boss PNG (2D canvas). */
@@ -114,9 +115,11 @@ export function hunterPalette(type) {
     /** Depths bolt-spawner shot — not a spawn `type`; used from `drawHunterBody` when `h.depthsBoltMinion`. */
     case "depthsBoltMinion":
       return { light: "#a7f3d0", core: "#5b21b6", shadow: "#134e4a", rim: "#2dd4bf", mark: "#ede9fe" };
-    /** Depths L5 eldritch orb — custom body draw; palette fallback only. */
+    /** Depths L5 eldritch bloom — custom body draw; palette fallback only. */
     case "depthsEldritchBloom":
       return { light: "#a78bfa", core: "#4c1d95", shadow: "#1e0533", rim: "#7c3aed", mark: "#fecaca" };
+    case "depthsEldritchBarrageBolt":
+      return { light: "#c4b5fd", core: "#312e81", shadow: "#0f172a", rim: "#38bdf8", mark: "#e0e7ff" };
     case "ghost":
       return { light: "#f3f4f6", core: "#cbd5e1", shadow: "#6b7280", rim: "#e5e7eb", mark: "#ffffff" };
     default:
@@ -368,6 +371,39 @@ function drawDepthsTentacle(ctx, h, simElapsed) {
   ctx.restore();
 }
 
+/** Depths L5 eldritch scripted radial burst — small dark electric dart (passes through terrain). */
+function drawDepthsEldritchBarrageBolt(ctx, h, simElapsed) {
+  const t = Number(h.bornAt ?? 0) * 0.02 + simElapsed * 22;
+  const pulse = 0.5 + 0.5 * Math.sin(t);
+  const { x, y, r } = h;
+  const vx = Number(h.eldritchBarrageVx ?? 1);
+  const vy = Number(h.eldritchBarrageVy ?? 0);
+  const ang = Math.atan2(vy, vx);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.globalCompositeOperation = "lighter";
+  const core = ctx.createLinearGradient(-r * 3, 0, r * 3.5, 0);
+  core.addColorStop(0, "rgba(15, 8, 32, 0)");
+  core.addColorStop(0.35, `rgba(56, 189, 248, ${0.35 + 0.25 * pulse})`);
+  core.addColorStop(0.55, `rgba(167, 139, 250, ${0.55 + 0.2 * pulse})`);
+  core.addColorStop(0.72, `rgba(30, 20, 60, ${0.75})`);
+  core.addColorStop(1, "rgba(4, 2, 12, 0)");
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r * 4.2, r * 1.05, 0, 0, TAU);
+  ctx.fill();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = `rgba(12, 8, 28, ${0.82 + 0.12 * pulse})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.85, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = `rgba(186, 230, 253, ${0.45 + 0.35 * pulse})`;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.restore();
+}
+
 /**
  * Depths L5 boss: raster from `src/assets/Cthulu.png`, scaled (~2.5× base fit on hit radius), yaw toward player (`h.dir`).
  */
@@ -384,10 +420,23 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
   ctx.globalAlpha = alpha;
   ctx.translate(x, cy);
 
+  const bpUntil = Number(h.depthsBetweenPhasesUntil);
+  const bpStart = Number(h.depthsBetweenPhasesStartSim ?? 0);
+  const inInterlude = bpUntil > t && bpStart > 0;
+  /** 0→1 progress through the scripted P1→P2 interlude (≈ `ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC`). */
+  const interludeU = inInterlude
+    ? clamp((t - bpStart) / Math.max(1e-4, ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC), 0, 1)
+    : 0;
+  const inhaleSeg = interludeU < 0.62;
+  const inhaleU01 = inhaleSeg ? clamp(interludeU / 0.62, 0, 1) : 0;
+  const inhaleEase = inhaleU01 * inhaleU01 * (3 - 2 * inhaleU01);
+  const burstU01 = !inhaleSeg ? clamp((interludeU - 0.62) / 0.38, 0, 1) : 0;
+  const burstEase = burstU01 * burstU01 * (3 - 2 * burstU01);
+
   const glowUntil = Number(h.depthsRewindGlowUntil);
   /** Match `DEPTHS_ELDRITCH_REWIND_GLOW_SEC` in `entry.js`. */
   const ELDRITCH_REWIND_GLOW_SEC = 0.52;
-  if (glowUntil > simElapsed) {
+  if (!inInterlude && glowUntil > simElapsed) {
     const rem = glowUntil - simElapsed;
     const g = clamp(rem / ELDRITCH_REWIND_GLOW_SEC, 0, 1);
     const pulse = Math.sin(g * Math.PI);
@@ -412,6 +461,144 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
     ctx.restore();
   }
 
+  const teleUntil = Number(h.depthsEldritchTeleportFxUntil);
+  if (!inInterlude && teleUntil > t) {
+    const gx = Number(h.depthsEldritchTeleportGhostX);
+    const gy = Number(h.depthsEldritchTeleportGhostY);
+    if (Number.isFinite(gx) && Number.isFinite(gy)) {
+      const lx = gx - x;
+      const ly = gy - cy;
+      const rem = teleUntil - t;
+      const u = clamp(rem / 0.36, 0, 1);
+      const pulse = 0.5 + 0.5 * Math.sin(t * 28 + u * 6);
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.globalCompositeOperation = "lighter";
+      const R = maxSpan * (0.55 + (1 - u) * 0.5);
+      const grd = ctx.createRadialGradient(0, 0, 2, 0, 0, R);
+      grd.addColorStop(0, `rgba(255, 250, 255, ${0.35 * (1 - u) * pulse})`);
+      grd.addColorStop(0.25, `rgba(120, 200, 255, ${0.42 * (1 - u * 0.5)})`);
+      grd.addColorStop(0.55, `rgba(40, 20, 80, ${0.55 * (1 - u * 0.3)})`);
+      grd.addColorStop(1, "rgba(4, 0, 10, 0)");
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(0, 0, R, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(224, 242, 255, ${0.55 * (1 - u * 0.4)})`;
+      ctx.lineWidth = 3 + (1 - u) * 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, R * (0.42 + 0.12 * pulse), 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([7, 11]);
+      ctx.beginPath();
+      ctx.arc(0, 0, R * 0.72, -t * 2.2, -t * 2.2 + TAU * 0.88);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+
+  if (!inInterlude && h.depthsEldritchLightningCastActive) {
+    const pulse = 0.55 + 0.45 * Math.sin(t * 20 + phase * 0.9);
+    const R = maxSpan * 0.78;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const grd = ctx.createRadialGradient(0, 0, R * 0.04, 0, 0, R * 1.12);
+    grd.addColorStop(0, `rgba(255, 255, 255, ${0.42 + 0.28 * pulse})`);
+    grd.addColorStop(0.28, `rgba(186, 240, 255, ${0.5 * pulse})`);
+    grd.addColorStop(0.55, `rgba(56, 189, 248, ${0.38 * pulse})`);
+    grd.addColorStop(0.82, `rgba(14, 116, 144, ${0.16 * pulse})`);
+    grd.addColorStop(1, "rgba(6, 20, 40, 0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 1.12, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(224, 250, 255, ${0.35 + 0.45 * pulse})`;
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 0.48 + pulse * R * 0.08, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (!inInterlude && h.depthsEldritchBarrageAttackActive && !h.depthsEldritchLightningCastActive) {
+    const pulse = 0.55 + 0.45 * Math.sin(t * 17 + phase * 0.7);
+    const R = maxSpan * 0.72;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const grd = ctx.createRadialGradient(0, 0, R * 0.05, 0, 0, R * 1.05);
+    grd.addColorStop(0, `rgba(230, 210, 255, ${0.38 + 0.22 * pulse})`);
+    grd.addColorStop(0.3, `rgba(90, 40, 140, ${0.45 * pulse})`);
+    grd.addColorStop(0.6, `rgba(30, 12, 60, ${0.35 * pulse})`);
+    grd.addColorStop(1, "rgba(4, 0, 10, 0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 1.05, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(56, 189, 248, ${0.28 + 0.35 * pulse})`;
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.arc(0, 0, R * 0.5 + pulse * R * 0.06, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (inInterlude) {
+    const pull = inhaleEase;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const streamN = 17;
+    for (let i = 0; i < streamN; i++) {
+      const ang = (i / streamN) * TAU + t * (0.55 + pull * 2.1);
+      const rOut = maxSpan * (1.02 - 0.42 * pull);
+      const wob = Math.sin(t * 19 + i * 0.9) * maxSpan * 0.05 * pull;
+      const x0 = Math.cos(ang) * rOut + Math.cos(ang + 0.7) * wob;
+      const y0 = Math.sin(ang) * rOut + Math.sin(ang + 0.7) * wob;
+      const cxm = Math.cos(ang + 0.5) * rOut * 0.35 * pull;
+      const cym = Math.sin(ang + 0.5) * rOut * 0.35 * pull;
+      ctx.strokeStyle = `rgba(220, 50, 80, ${0.1 + 0.38 * pull})`;
+      ctx.lineWidth = 1.8 + pull * 2.4;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(cxm, cym, 0, 0);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = "source-over";
+    const grd = ctx.createRadialGradient(0, 0, maxSpan * 0.08, 0, 0, maxSpan * 1.15);
+    grd.addColorStop(0, `rgba(40, 6, 18, ${0.55 * pull})`);
+    grd.addColorStop(0.45, `rgba(12, 4, 22, ${0.35 * pull})`);
+    grd.addColorStop(0.78, `rgba(4, 2, 10, ${0.12 * pull})`);
+    grd.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(0, 0, maxSpan * 1.12, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    if (burstU01 > 0.004) {
+      const fade = (1 - burstU01) * (1 - burstU01);
+      const ringR = maxSpan * (0.32 + burstEase * 1.48);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = `rgba(255, 200, 220, ${0.62 * fade})`;
+      ctx.lineWidth = 5 + (1 - burstU01) * 10;
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(160, 40, 100, ${0.45 * fade})`;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR * (0.88 - 0.1 * burstEase), 0, TAU);
+      ctx.stroke();
+      ctx.globalAlpha = 0.35 * fade;
+      ctx.fillStyle = "rgba(90, 20, 60, 0.25)";
+      ctx.beginPath();
+      ctx.arc(0, 0, ringR * 0.55, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   ctx.rotate(DEPTHS_ELDRITCH_BOSS_SPRITE_YAW);
 
   const img = depthsEldritchBossImg;
@@ -426,7 +613,19 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
     }
     const pulse = 0.5 + 0.5 * Math.sin(t * 1.95 + phase * 1.15);
     /** Deeper troughs than before; peaks ~unchanged — reds stay on `eldritchProtectedRed` path. */
-    const brightMul = 0.32 + pulse * 0.78;
+    const brightMul = inInterlude
+      ? Math.max(
+          0.028,
+          0.05 +
+            inhaleEase * 0.055 +
+            (inhaleSeg ? 0.018 * Math.sin(t * 15) : -0.012 * burstEase) +
+            (burstU01 > 0.02 ? burstEase * 0.04 : 0),
+        )
+      : h.depthsEldritchLightningCastActive
+        ? 0.62 + pulse * 0.38
+        : h.depthsEldritchBarrageAttackActive
+          ? 0.54 + pulse * 0.42
+          : 0.32 + pulse * 0.78;
     const shaded = eldritchBossShadedCanvas(img, (dw + 0.5) | 0, (dh + 0.5) | 0, brightMul);
     if (shaded) {
       ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);
@@ -458,6 +657,11 @@ export function drawHunterBody(ctx, h, opts = {}) {
   if (h.type === "depthsEldritchBloom") {
     const t = Number(opts.simElapsed);
     drawDepthsEldritchBloom(ctx, h, Number.isFinite(t) ? t : 0);
+    return;
+  }
+  if (h.type === "depthsEldritchBarrageBolt") {
+    const t = Number(opts.simElapsed);
+    drawDepthsEldritchBarrageBolt(ctx, h, Number.isFinite(t) ? t : 0);
     return;
   }
   if (h.type === "cryptSpawner" && h.cryptDisguised) {
@@ -1200,7 +1404,8 @@ export function drawSpawnerChargeClocks(ctx, hunters, now) {
 
 export function drawHunterLifeBars(ctx, hunters, now) {
   for (const h of hunters) {
-    if (h.type === "depthsTentacle" || h.type === "depthsEldritchBloom") continue;
+    if (h.type === "depthsTentacle" || h.type === "depthsEldritchBloom" || h.type === "depthsEldritchBarrageBolt")
+      continue;
     if (h.type === "cryptSpawner" && h.cryptDisguised) continue;
     const total = h.life || Math.max(0.0001, h.dieAt - h.bornAt);
     const lifeLeft = clamp((h.dieAt - now) / total, 0, 1);
