@@ -4,7 +4,7 @@
  * Phase 1: for `ELDRITCH_BLOOD_PHASE1_DURATION_SEC` after the intro, random orb / lightning / radial barrage
  * spells fire every `ELDRITCH_BLOOD_ATTACK_COOLDOWN_*` seconds (same spells may repeat).
  * Phase 2: same drift → prep → glow → cadence (`ELDRITCH_BLOOD_PHASE2_DURATION_SEC`), different attack pool; first strike is floating cage arena.
- * Phase 3: begins after the P2→P3 interlude (`macroPhase === 5`); attack scripting can extend here later.
+ * Phase 3: after the P2→P3 interlude (`macroPhase === 5`), entry drift then 100s of random spells from the six P1+P2 attacks, then a vanish flash.
  */
 import { PLAYER_RADIUS } from "../balance.js";
 import { clamp, pointToSegmentDistance } from "../Hunters/hunterGeometry.js";
@@ -21,6 +21,15 @@ export const ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC = 1.5;
 /** Random cooldown `[lo, hi)` seconds between P1 spells (after a spell fully resolves, before the next arms). */
 export const ELDRITCH_BLOOD_ATTACK_COOLDOWN_LO_SEC = 4;
 export const ELDRITCH_BLOOD_ATTACK_COOLDOWN_HI_SEC = 7;
+/** Phase 3: longer than P1/P2; spells arm faster between casts. */
+export const ELDRITCH_BLOOD_PHASE3_DURATION_SEC = 100;
+export const ELDRITCH_BLOOD_PHASE3_ATTACK_COOLDOWN_LO_SEC = 0.85;
+export const ELDRITCH_BLOOD_PHASE3_ATTACK_COOLDOWN_HI_SEC = 1.55;
+/** Boss vanish: bright flash at bloom then sprite hidden. */
+export const ELDRITCH_BLOOD_PHASE3_END_FLASH_SEC = 0.28;
+/** After interlude: boss starts this far above the rising wave (px), then eases to cast height over `…_DRIFT_SEC`. */
+export const ELDRITCH_BLOOD_PHASE3_ENTRY_ABOVE_WAVE_PX = 400;
+export const ELDRITCH_BLOOD_PHASE3_ENTRY_DRIFT_SEC = 1;
 /** Visual-only interlude after P1 ends (boss “gathers” then “releases”); no gameplay effect. */
 export const ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC = 8;
 /** Mirrors P1: same 80s scripted window and gap cadence until the P2→P3 interlude arms. */
@@ -138,6 +147,9 @@ const BARRAGE_SPAWN_WINDOW_SEC = 0.36;
 const BARRAGE_POST_VOLLEY_WAIT_SEC = 0.7;
 const BARRAGE_TELEPORT_SEC = 0.36;
 const BARRAGE_TELEPORT_SWAP_AT = 0.14;
+/** Each flank “round” fires this many radial volleys, `BARRAGE_MICRO_VOLLEY_GAP_SEC` apart (was one volley). */
+const BARRAGE_MICRO_VOLLEY_COUNT = 4;
+const BARRAGE_MICRO_VOLLEY_GAP_SEC = 0.1;
 
 /** P2 “swarm”: barrage-style flank lock, depths bolt-spawner `fast` minions every `P2_SWARM_SPAWN_INTERVAL_SEC`, teleport, then repeat. */
 const P2_SWARM_SPAWN_INTERVAL_SEC = 0.1;
@@ -336,8 +348,11 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   let p2TriplicateStrike = null;
   /** `macroPhase === 3` wall clock baseline. */
   let p2PhaseEnterSim = 0;
-  /** `macroPhase === 5` wall clock baseline (P3 combat stub). */
+  /** `macroPhase === 5` wall clock baseline (P3 combat). */
   let p3PhaseEnterSim = 0;
+  /** @type {"gap"} */
+  let p3Mode = /** @type {"gap"} */ ("gap");
+  let p3NextAttackSim = 0;
   /** @type {"idle" | "gap"} */
   let p2Mode = /** @type {"idle" | "gap"} */ ("idle");
   let p2NextAttackSim = 0;
@@ -416,10 +431,20 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     p2NextAttackSim = 0;
     p2StrikeIndex = 0;
     p3PhaseEnterSim = 0;
+    p3Mode = "gap";
+    p3NextAttackSim = 0;
     clearBloomScriptedTelegraph();
     p2P3ReturnAnchored = false;
     const bloomReset = getBloomHunter();
-    if (bloomReset) bloomReset.depthsEldritchPhase3Tone = false;
+    if (bloomReset) {
+      bloomReset.depthsEldritchPhase3Tone = false;
+      bloomReset.depthsEldritchP3VanishFlashStartSim = 0;
+      bloomReset.depthsEldritchP3BossHidden = false;
+      bloomReset.depthsEldritchP3DriftStartSim = 0;
+      bloomReset.depthsEldritchP3DriftUntilSim = 0;
+      bloomReset.depthsEldritchP3DriftFromY = 0;
+      bloomReset.depthsEldritchP3DriftToY = 0;
+    }
   }
 
   /** Call when `depthsBossRisingWaveFrontY` first becomes active (leaving sanctuary / chase start). */
@@ -560,7 +585,29 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   }
 
   /** After lightning or orb+tentacles fully resolves: either end P1 or arm the next random spell after `[4,7)` s. */
+  function scheduleP3GapFromSpellEnd(simElapsed) {
+    p3Mode = "gap";
+    if (simElapsed - p3PhaseEnterSim >= ELDRITCH_BLOOD_PHASE3_DURATION_SEC) {
+      p3NextAttackSim = simElapsed + 1e9;
+      return;
+    }
+    p3NextAttackSim =
+      simElapsed +
+      randRange(
+        ELDRITCH_BLOOD_PHASE3_ATTACK_COOLDOWN_LO_SEC,
+        ELDRITCH_BLOOD_PHASE3_ATTACK_COOLDOWN_HI_SEC + 1e-6,
+      );
+  }
+
+  function rollP3NextSpellKind() {
+    return /** @type {0 | 1 | 2 | 3 | 4 | 5} */ (Math.floor(randRange(0, 5.999999)));
+  }
+
   function scheduleP1GapFromSpellEnd(simElapsed) {
+    if (macroPhase === 5) {
+      scheduleP3GapFromSpellEnd(simElapsed);
+      return;
+    }
     if (simElapsed - p1PhaseEnterSim >= ELDRITCH_BLOOD_PHASE1_DURATION_SEC) {
       endP1Wave();
       return;
@@ -637,6 +684,12 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       bloom.depthsEldritchP2P3ReturnFromX = 0;
       bloom.depthsEldritchP2P3ReturnFromY = 0;
       bloom.depthsEldritchP2P3InterludeScripted = true;
+      bloom.depthsEldritchP3DriftStartSim = 0;
+      bloom.depthsEldritchP3DriftUntilSim = 0;
+      bloom.depthsEldritchP3DriftFromY = 0;
+      bloom.depthsEldritchP3DriftToY = 0;
+      bloom.depthsEldritchP3VanishFlashStartSim = 0;
+      bloom.depthsEldritchP3BossHidden = false;
       bloom.depthsEldritchOrbStrikeChanneling = false;
       bloom.depthsCastLiftActive = false;
       bloom.depthsEldritchTelegraphHoldUntil = 0;
@@ -671,14 +724,30 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       bloom.depthsEldritchP2P3ReturnFromY = 0;
       bloom.depthsEldritchPhase2Tone = false;
       bloom.depthsEldritchPhase3Tone = true;
-      if (waveY != null && Number.isFinite(waveY)) {
-        bloom.y = waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX;
-      }
       const leashX = 480;
       bloom.x = clamp(bloom.x, player.x - leashX, player.x + leashX);
+      const castY =
+        waveY != null && Number.isFinite(waveY) ? waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX : bloom.y;
+      if (waveY != null && Number.isFinite(waveY)) {
+        bloom.depthsEldritchP3DriftFromY = waveY - ELDRITCH_BLOOD_PHASE3_ENTRY_ABOVE_WAVE_PX;
+        bloom.depthsEldritchP3DriftToY = castY;
+        bloom.y = bloom.depthsEldritchP3DriftFromY;
+      } else {
+        bloom.depthsEldritchP3DriftFromY = bloom.y;
+        bloom.depthsEldritchP3DriftToY = castY;
+      }
+      bloom.depthsEldritchP3DriftStartSim = simElapsed;
+      bloom.depthsEldritchP3DriftUntilSim = simElapsed + ELDRITCH_BLOOD_PHASE3_ENTRY_DRIFT_SEC;
+      bloom.depthsEldritchP3VanishFlashStartSim = 0;
+      bloom.depthsEldritchP3BossHidden = false;
     }
     macroPhase = 5;
     p3PhaseEnterSim = simElapsed;
+    p3Mode = "gap";
+    p3NextAttackSim =
+      simElapsed +
+      ELDRITCH_BLOOD_PHASE3_ENTRY_DRIFT_SEC +
+      ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
   }
 
   function tickP2P3Interlude(_dt) {
@@ -688,6 +757,8 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     if (!bloom) {
       macroPhase = 5;
       p3PhaseEnterSim = sim;
+      p3Mode = "gap";
+      p3NextAttackSim = sim + ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
       return;
     }
     const t0 = Number(bloom.depthsEldritchP2P3InterludeStartSim ?? 0);
@@ -757,6 +828,10 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   }
 
   function scheduleP2GapFromSpellEnd(simElapsed) {
+    if (macroPhase === 5) {
+      scheduleP3GapFromSpellEnd(simElapsed);
+      return;
+    }
     if (simElapsed - p2PhaseEnterSim >= ELDRITCH_BLOOD_PHASE2_DURATION_SEC) {
       beginP2ToP3Interlude(simElapsed);
       return;
@@ -1425,6 +1500,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       dashVx: 0,
       dashVy: 0,
       volleySpawned: 0,
+      microSpawned: [0, 0, 0, 0],
       teleportSwapped: false,
     };
     p1Mode = "strike";
@@ -1475,6 +1551,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         B.phaseStartSim = sim;
         B.volleyIndex = 0;
         B.volleySpawned = 0;
+        B.microSpawned = [0, 0, 0, 0];
         B.dashVx = 0;
         B.dashVy = 0;
       }
@@ -1483,20 +1560,35 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
     if (B.phase === "volley") {
       const tRel = sim - B.phaseStartSim;
-      while (B.volleySpawned < BARRAGE_PROJECTILE_COUNT) {
-        const nextT = (B.volleySpawned / BARRAGE_PROJECTILE_COUNT) * BARRAGE_SPAWN_WINDOW_SEC;
-        if (tRel + 1e-4 < nextT) break;
-        const ang =
-          (B.volleySpawned / BARRAGE_PROJECTILE_COUNT) * Math.PI * 2 + randRange(-0.09, 0.09);
-        const spd = randRange(BARRAGE_PROJECTILE_SPEED_LO, BARRAGE_PROJECTILE_SPEED_HI + 1e-6);
-        rt.spawnHunter("depthsEldritchBarrageBolt", bloom.x, bloom.y, {
-          eldritchBarrageAngle: ang,
-          eldritchBarrageSpeed: spd,
-        });
-        B.volleySpawned += 1;
+      const MICRO_N = BARRAGE_MICRO_VOLLEY_COUNT;
+      const MICRO_GAP = BARRAGE_MICRO_VOLLEY_GAP_SEC;
+      let micro = B.microSpawned;
+      if (!micro || micro.length !== MICRO_N) {
+        micro = [0, 0, 0, 0];
+        B.microSpawned = micro;
       }
-      const volleyDoneT = BARRAGE_SPAWN_WINDOW_SEC + BARRAGE_POST_VOLLEY_WAIT_SEC;
-      if (B.volleySpawned >= BARRAGE_PROJECTILE_COUNT && tRel >= volleyDoneT) {
+      for (let k = 0; k < MICRO_N; k++) {
+        const tK = tRel - k * MICRO_GAP;
+        if (tK < 0) continue;
+        while (micro[k] < BARRAGE_PROJECTILE_COUNT) {
+          const nextT = (micro[k] / BARRAGE_PROJECTILE_COUNT) * BARRAGE_SPAWN_WINDOW_SEC;
+          if (tK + 1e-4 < nextT) break;
+          const ang =
+            (micro[k] / BARRAGE_PROJECTILE_COUNT) * Math.PI * 2 +
+            randRange(-0.09, 0.09) +
+            k * (Math.PI / (BARRAGE_PROJECTILE_COUNT * 2));
+          const spd = randRange(BARRAGE_PROJECTILE_SPEED_LO, BARRAGE_PROJECTILE_SPEED_HI + 1e-6);
+          rt.spawnHunter("depthsEldritchBarrageBolt", bloom.x, bloom.y, {
+            eldritchBarrageAngle: ang,
+            eldritchBarrageSpeed: spd,
+          });
+          micro[k] += 1;
+        }
+      }
+      const volleyDoneT =
+        (MICRO_N - 1) * MICRO_GAP + BARRAGE_SPAWN_WINDOW_SEC + BARRAGE_POST_VOLLEY_WAIT_SEC;
+      const microDone = micro.every((n) => n >= BARRAGE_PROJECTILE_COUNT);
+      if (microDone && tRel >= volleyDoneT) {
         if (B.volleyIndex >= 2) {
           finishBarrageStrike(sim);
           return;
@@ -1526,6 +1618,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         B.phase = "volley";
         B.phaseStartSim = sim;
         B.volleySpawned = 0;
+        B.microSpawned = [0, 0, 0, 0];
         bloom.depthsEldritchTeleportFxUntil = 0;
       }
       return;
@@ -1974,10 +2067,6 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       return;
     }
 
-    if (macroPhase === 5) {
-      return;
-    }
-
     if (macroPhase === 3 && simElapsed - p2PhaseEnterSim >= ELDRITCH_BLOOD_PHASE2_DURATION_SEC) {
       beginP2ToP3Interlude(simElapsed);
       return;
@@ -1985,6 +2074,15 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
     const fightAge = simElapsed - fightStartSim;
     const bloom = getBloomHunter();
+    if (
+      macroPhase === 5 &&
+      bloom &&
+      simElapsed - p3PhaseEnterSim >= ELDRITCH_BLOOD_PHASE3_DURATION_SEC &&
+      !(Number(bloom.depthsEldritchP3VanishFlashStartSim) > 0)
+    ) {
+      abortP3CombatStrikesForEnd();
+      bloom.depthsEldritchP3VanishFlashStartSim = simElapsed;
+    }
 
     if (floatingCageStrike) {
       tickFloatingCageStrike(dt);
@@ -2012,11 +2110,11 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       return;
     }
 
-    if (macroPhase <= 1) {
-      if (p1Mode === "tentacles") {
-        return;
-      }
+    if ((macroPhase <= 1 || macroPhase === 5) && p1Mode === "tentacles") {
+      return;
+    }
 
+    if (macroPhase <= 1) {
       if (macroPhase === 0) {
         if (fightAge < ELDRITCH_BLOOD_PHASE1_START_SEC || !bloom) return;
         macroPhase = 1;
@@ -2064,6 +2162,77 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         }
       }
       return;
+    }
+
+    if (macroPhase === 5) {
+      tickPhase3(dt, simElapsed, bloom);
+    }
+  }
+
+  function abortP3CombatStrikesForEnd() {
+    floatingCageStrike = null;
+    p2TriplicateStrike = null;
+    p2SwarmStrike = null;
+    homingOrbStrike = null;
+    lightningStrike = null;
+    eldritchBarrageStrike = null;
+    tentacleHitSim = 0;
+    tentacleLastK = -1;
+    p1Mode = "gap";
+    clearBloomScriptedTelegraph();
+    p3NextAttackSim = getSimElapsed() + 1e9;
+    bumpScreenShake(44, 0.4);
+  }
+
+  function tickPhase3(_dt, simElapsed, bloom) {
+    const player = getPlayer();
+    if (bloom && Number(bloom.depthsEldritchP3DriftUntilSim) > simElapsed) {
+      const start = Number(bloom.depthsEldritchP3DriftStartSim);
+      const du = Math.max(1e-4, ELDRITCH_BLOOD_PHASE3_ENTRY_DRIFT_SEC);
+      const u = clamp((simElapsed - start) / du, 0, 1);
+      const e = u * u * (3 - 2 * u);
+      const fromY = Number(bloom.depthsEldritchP3DriftFromY);
+      const waveY = getDepthsBossRisingWaveFrontY?.() ?? null;
+      const toY =
+        waveY != null && Number.isFinite(waveY)
+          ? waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX
+          : Number(bloom.depthsEldritchP3DriftToY);
+      bloom.y = fromY + (toY - fromY) * e;
+      bloom.dir.x = bloom.x < player.x ? -1 : 1;
+      bloom.dir.y = -0.35;
+      const dlen = Math.hypot(bloom.dir.x, bloom.dir.y) || 1;
+      bloom.dir.x /= dlen;
+      bloom.dir.y /= dlen;
+      return;
+    }
+
+    const relP3 = simElapsed - p3PhaseEnterSim;
+    if (relP3 >= ELDRITCH_BLOOD_PHASE3_DURATION_SEC) {
+      if (bloom && Number(bloom.depthsEldritchP3VanishFlashStartSim) > 0) {
+        const tFlash = Number(bloom.depthsEldritchP3VanishFlashStartSim);
+        if (simElapsed - tFlash >= ELDRITCH_BLOOD_PHASE3_END_FLASH_SEC) {
+          bloom.depthsEldritchP3BossHidden = true;
+        }
+      }
+      return;
+    }
+    if (!bloom) return;
+
+    if (simElapsed >= p3NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC) {
+      bloom.depthsSpellLiftPrepStartSim = p3NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC;
+      bloom.depthsSpellLiftPrepEndSim = p3NextAttackSim;
+    }
+    if (simElapsed >= p3NextAttackSim - ELDRITCH_BLOOD_CAST_PREP_DRIFT_SEC) {
+      bloom.depthsCastLiftActive = true;
+    }
+    if (simElapsed >= p3NextAttackSim) {
+      const k = rollP3NextSpellKind();
+      if (k === 0) beginHomingOrbStrike(bloom);
+      else if (k === 1) beginLightningStrike(bloom);
+      else if (k === 2) beginBarrageStrike(bloom);
+      else if (k === 3) beginFloatingCageStrike(bloom);
+      else if (k === 4) beginP2SwarmStrike(bloom);
+      else beginP2TriplicateStrike(bloom);
     }
   }
 
@@ -2164,6 +2333,36 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   function drawUnderHunters(ctx) {
     if (!isDepthsBossFightLevel()) return;
     const bloom = getBloomHunter();
+    const simU = getSimElapsed();
+    if (bloom?.depthsEldritchPhase3Tone) {
+      const tV = Number(bloom.depthsEldritchP3VanishFlashStartSim ?? 0);
+      if (tV > 0 && !bloom.depthsEldritchP3BossHidden) {
+        const u = clamp((simU - tV) / Math.max(1e-4, ELDRITCH_BLOOD_PHASE3_END_FLASH_SEC), 0, 1);
+        const peak = Math.sin(u * Math.PI);
+        const cx = bloom.x;
+        const cy = bloom.y;
+        const br = Number(bloom.r) || 40;
+        const R = br * (2.4 + 14 * peak);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, R);
+        g.addColorStop(0, `rgba(255, 255, 255, ${0.55 + 0.4 * peak})`);
+        g.addColorStop(0.2, `rgba(220, 240, 255, ${0.45 * peak})`);
+        g.addColorStop(0.45, `rgba(160, 200, 255, ${0.35 * peak})`);
+        g.addColorStop(0.75, `rgba(80, 140, 220, ${0.18 * peak})`);
+        g.addColorStop(1, "rgba(20, 40, 80, 0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = 0.22 + 0.55 * peak;
+        ctx.fillStyle = "rgba(248, 252, 255, 0.95)";
+        ctx.fillRect(cx - R * 1.2, cy - R * 1.2, R * 2.4, R * 2.4);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      }
+    }
     drawP2TriplicateUnder(ctx, bloom);
     const fc = floatingCageStrike;
     const ctrCage = fc ? getFloatingCageCenterWorldXY() : null;

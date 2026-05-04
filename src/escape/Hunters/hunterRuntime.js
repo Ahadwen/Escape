@@ -1429,6 +1429,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         if (h.depthsEldritchP2P3InterludeScripted) {
           continue;
         }
+        if (Number(h.depthsEldritchP3DriftUntilSim ?? 0) > elapsed) {
+          continue;
+        }
+        if (h.depthsEldritchP3BossHidden) {
+          continue;
+        }
         if (h.depthsEldritchTriplicateScripted) {
           continue;
         }

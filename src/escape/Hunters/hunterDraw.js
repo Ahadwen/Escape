@@ -1,6 +1,9 @@
 import { TAU } from "../constants.js";
 import { clamp } from "./hunterGeometry.js";
-import { ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC } from "../specials/EldritchBlood.js";
+import {
+  ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC,
+  ELDRITCH_BLOOD_PHASE3_END_FLASH_SEC,
+} from "../specials/EldritchBlood.js";
 import depthsEldritchBossUrl from "../../assets/Cthulu.png";
 import depthsEldritchLightningUrl from "../../assets/lightning.png";
 
@@ -479,6 +482,12 @@ function drawDepthsEldritchCageLunge(ctx, h, opts = {}) {
  * Depths L5 boss: raster from `src/assets/Cthulu.png`, scaled (~2.5× base fit on hit radius), yaw toward player (`h.dir`).
  */
 function drawDepthsEldritchBloom(ctx, h, simElapsed) {
+  if (h.depthsEldritchP3BossHidden) return;
+  const vanishT = Number(h.depthsEldritchP3VanishFlashStartSim ?? 0);
+  if (h.depthsEldritchPhase3Tone && vanishT > 0) {
+    const age = simElapsed - vanishT;
+    if (age >= 0 && age < ELDRITCH_BLOOD_PHASE3_END_FLASH_SEC) return;
+  }
   const { x, y, r } = h;
   const t = simElapsed;
   const phase = Number(h.bornAt ?? 0) * 0.09;
