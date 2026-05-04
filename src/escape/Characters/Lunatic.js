@@ -256,6 +256,7 @@ export function createLunatic() {
      * @param {object} ctx.inventory
      * @param {number} ctx.PLAYER_SPEED
      * @param {number} ctx.ultimateSpeedUntil
+     * @param {boolean} [ctx.suppressAbilitySpeedBonuses] — Depths sniper pool: sprint / ult move speed off
      * @param {number} ctx.laserSlowMult
      * @param {() => unknown[]} ctx.getObsForCollision
      * @param {(x: number, y: number, r: number, rects: unknown[]) => { x: number; y: number }} ctx.resolvePlayerAgainstRects
@@ -275,6 +276,7 @@ export function createLunatic() {
         inventory = {},
         PLAYER_SPEED,
         ultimateSpeedUntil,
+        suppressAbilitySpeedBonuses = false,
         laserSlowMult,
         getObsForCollision,
         resolvePlayerAgainstRects,
@@ -352,6 +354,10 @@ export function createLunatic() {
         if (simElapsed < roarUntil) speedMult *= LUNATIC_ROAR_SPEED_MULT;
       }
 
+      if (suppressAbilitySpeedBonuses && phase !== "stumble") {
+        speedMult = 1;
+      }
+
       const laserM = laserSlowMult;
       let sp =
         PLAYER_SPEED *
@@ -359,7 +365,7 @@ export function createLunatic() {
         (player.speedPassiveMult ?? 1) *
         laserM *
         speedMult;
-      if (simElapsed < ultimateSpeedUntil) sp *= 1.75;
+      if (!suppressAbilitySpeedBonuses && simElapsed < ultimateSpeedUntil) sp *= 1.75;
       if (simElapsed < (inventory?.spadesObstacleBoostUntil ?? 0)) {
         sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
       }

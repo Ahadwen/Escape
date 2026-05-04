@@ -229,7 +229,7 @@ const DEPTHS_TENTACLE_SPAWN_RADIUS_PX = 320;
 const DEPTHS_TENTACLE_BURST_COUNT =
   Math.round(DEPTHS_TENTACLE_BURST_SPAN_SEC / DEPTHS_TENTACLE_BURST_INTERVAL_SEC) + 1;
 
-/** Deterministic chance each storm cycle is a whirlpool instead of the surge wash (no push / tentacle window). */
+/** Whirlpool-vs-wash coin flip applies only on Depths display level 4 (`runLevel === 3`). */
 const DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE = 1 / 5;
 /** Radial pull = `PLAYER_SPEED * mult` during whirlpool (must stay >1 so walking cannot cancel the drain). */
 const DEPTHS_WHIRLPOOL_PULL_MULT = 2.88;
@@ -253,6 +253,32 @@ const DEPTHS_WHIRLPOOL_PULL_TIMEOUT_SEC = 4.5;
 const DEPTHS_WHIRLPOOL_DASH_TELEPORT_MIN = 28;
 /** Tooth wedge span + reach only (`WARN_*` radii unchanged). ~0.75 ≈ quarter smaller teeth. */
 const DEPTHS_WHIRLPOOL_TOOTH_VISUAL_SCALE = 0.75;
+/** Depths sniper linger pool: strip ability-based move speed (burst / ult / Lunatic sprint leg) for this long after contact. */
+const DEPTHS_SNIPER_POOL_SUPPRESS_ABILITY_SPEED_SEC = 1;
+
+/** Depths display level 5 — boss chase (`runLevel` after four sanctuary ups). */
+const DEPTHS_BOSS_CHASE_RUN_LEVEL = 4;
+/** Display depth 4 (`runLevel === 3`) — storm whirlpool roll + mid-wash tentacle burst **only** here (not L1–3 or boss L5). */
+const DEPTHS_WHIRLPOOL_RUN_LEVEL = 3;
+/** Rising flood: slightly faster than base walk so walking alone cannot outrun it. */
+const DEPTHS_BOSS_RISING_WAVE_SPEED_MULT = 1.06;
+/** Tide sweep: drag into the breaker, then spit ahead of the front (no hard stun / teleport). */
+const DEPTHS_BOSS_SURF_DRAG_SEC = 0.54;
+const DEPTHS_BOSS_SURF_SPIT_SEC = 0.38;
+const DEPTHS_BOSS_SURF_PULL_PEAK_MULT = 2.14;
+const DEPTHS_BOSS_SURF_CARRY_WAVE_MULT = 0.24;
+/** Spit phase: settle toward this offset above the wave front (−Y = up). */
+const DEPTHS_BOSS_SURF_SPIT_TARGET_ABOVE_FRONT_PX = 500;
+/** Higher = reaches long spit target within `DEPTHS_BOSS_SURF_SPIT_SEC`. */
+const DEPTHS_BOSS_SURF_SPIT_APPROACH_RATE = 16;
+/** Brief stun when tide deposit lands (after spit). */
+const DEPTHS_BOSS_SPLASH_STUN_SEC = 0.1;
+const DEPTHS_BOSS_WAVE_START_BELOW_PLAYER_PX = 420;
+const DEPTHS_BOSS_WAVE_HIT_COOLDOWN_SEC = 0.72;
+/** After tide deposit: brief delay then dip + rise (sin), timed with splash rings. */
+const DEPTHS_BOSS_POST_LAND_BOB_DELAY_SEC = 0.045;
+const DEPTHS_BOSS_POST_LAND_BOB_TOTAL_SEC = 0.52;
+const DEPTHS_BOSS_POST_LAND_BOB_DEPTH_PX = 13;
 
 function depthsStormHash01(n) {
   return ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
@@ -265,7 +291,8 @@ function getDepthsStormWaveWashTiming(idx) {
   return { washDur, washStart };
 }
 
-function depthsStormWaveUsesWhirlpoolInsteadOfWash(idx) {
+function depthsStormWaveUsesWhirlpoolInsteadOfWash(idx, runLevelForDepths) {
+  if (runLevelForDepths !== DEPTHS_WHIRLPOOL_RUN_LEVEL) return false;
   return depthsStormHash01(idx + 3333) < DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE;
 }
 
@@ -669,6 +696,8 @@ function boot() {
   let playerTimelockUntil = 0;
   let timelockWorldShakeAt = 0;
   let ultimateSpeedUntil = 0;
+  /** While `simElapsed < this`, walking / Lunatic move ignore burst, ult speed, and Lunatic sprint speed mult. */
+  let depthsSniperAbilitySpeedSuppressUntil = 0;
   let knightSpadesWorldSlowUntil = 0;
   let fireIgniteUntil = 0;
   let fireIgniteNextTickAt = 0;
@@ -719,6 +748,15 @@ function boot() {
   let depthsWhirlpoolEscaped = false;
   /** Previous `simElapsed - waveT` within the current wave; `NaN` until first tick after a reset (avoids bogus wash-start cross). */
   let depthsWhirlpoolLastTInWave = Number.NaN;
+  /** Depths L5 boss: horizontal world Y of rising water front (+Y down); `null` until player leaves sanctuary hex. */
+  let depthsBossRisingWaveFrontY = /** @type {number | null} */ (null);
+  /** Non-zero `simElapsed` when tide sweep started (`0` = idle). */
+  let depthsBossSurfStartSim = 0;
+  /** World Y target for spit phase (`null` until spit phase locks it). */
+  let depthsBossSpitTargetY = /** @type {number | null} */ (null);
+  let depthsBossWaveTouchImmuneUntil = 0;
+  /** Tide deposit: gentle sink-then-float on `anchorY` while splash rings play (`null` = idle). */
+  let depthsBossPostLandBob = /** @type {{ anchorY: number; startSim: number } | null} */ (null);
   const SWAMP_MUD_TRAIL_MAX = 58;
   const SWAMP_MUD_TRAIL_SAMPLE_MIN = 4.2;
   const SWAMP_MUD_TRAIL_DECAY_SEC = 5.2;
@@ -991,6 +1029,195 @@ function boot() {
     depthsWhirlpoolTriggeredWaveIdx = -1;
     depthsWhirlpoolPhaseStartSim = 0;
     depthsWhirlpoolLastTInWave = Number.NaN;
+  }
+
+  function resetDepthsBossRisingWaveChase() {
+    depthsBossRisingWaveFrontY = null;
+    depthsBossSurfStartSim = 0;
+    depthsBossSpitTargetY = null;
+    depthsBossWaveTouchImmuneUntil = 0;
+    depthsBossPostLandBob = null;
+  }
+
+  function isDepthsBossFightLevel() {
+    return pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL;
+  }
+
+  /** More MTV passes than global `resolvePlayerAgainstRects` (6) — corners / stacks need deeper separation. */
+  function depthsBossResolvePlayerAgainstObstaclesIterations(maxIter) {
+    const obs = obstaclesForPlayerCollision();
+    let px = player.x;
+    let py = player.y;
+    const pr = player.r;
+    for (let iter = 0; iter < maxIter; iter++) {
+      let any = false;
+      for (const o of obs) {
+        const m = circleRectMTV(px, py, pr, o);
+        if (m) {
+          px += m.dx;
+          py += m.dy;
+          any = true;
+        }
+      }
+      if (!any) break;
+    }
+    player.x = px;
+    player.y = py;
+  }
+
+  /** Spiral search for a free circle center (same idea as Lunatic `ejectFromObstaclesIfStuck`). */
+  function depthsBossEjectFromTerrainIfStuck() {
+    const STEP = 3;
+    const ANGLES = 28;
+    const MAX_R = 260;
+    for (let rad = STEP; rad <= MAX_R; rad += STEP) {
+      for (let i = 0; i < ANGLES; i++) {
+        const ang = (i / ANGLES) * Math.PI * 2;
+        const candX = player.x + Math.cos(ang) * rad;
+        const candY = player.y + Math.sin(ang) * rad;
+        const obs = obstaclesForPlayerCollision();
+        if (!circleOverlapsAnyRect(candX, candY, player.r, obs)) {
+          player.x = candX;
+          player.y = candY;
+          return;
+        }
+      }
+    }
+  }
+
+  function depthsBossNudgePlayerVerticalWorld(dy) {
+    if (Math.abs(dy) < 1e-6) return;
+    const obs = obstaclesForPlayerCollision();
+    const steps = Math.max(1, Math.ceil(Math.abs(dy) / Math.max(2.5, player.r * 0.28)));
+    const step = dy / steps;
+    for (let i = 0; i < steps; i++) {
+      player.y += step;
+      const r = resolvePlayerAgainstRects(player.x, player.y, player.r, obs);
+      player.x = r.x;
+      player.y = r.y;
+    }
+    if (circleOverlapsAnyRect(player.x, player.y, player.r, obstaclesForPlayerCollision())) {
+      depthsBossResolvePlayerAgainstObstaclesIterations(22);
+      if (circleOverlapsAnyRect(player.x, player.y, player.r, obstaclesForPlayerCollision())) {
+        depthsBossEjectFromTerrainIfStuck();
+      }
+      depthsBossResolvePlayerAgainstObstaclesIterations(16);
+    }
+  }
+
+  /** Spit phase: move through obstacles; `targetY` is world Y cap (smaller = further “up”). */
+  function depthsBossNudgePlayerVerticalTowardSpitTarget(targetY, blend) {
+    const b = Math.min(1, Math.max(0, blend));
+    const dy = (targetY - player.y) * b;
+    if (Math.abs(dy) < 1e-6) return;
+    player.y += dy;
+    if (player.y < targetY) player.y = targetY;
+  }
+
+  function depthsBossClampPlayerToLegalGroundAfterSpit() {
+    depthsBossResolvePlayerAgainstObstaclesIterations(26);
+    for (
+      let z = 0;
+      z < 20 && circleOverlapsAnyRect(player.x, player.y, player.r, obstaclesForPlayerCollision());
+      z++
+    ) {
+      player.y -= 6;
+      depthsBossResolvePlayerAgainstObstaclesIterations(20);
+    }
+    if (circleOverlapsAnyRect(player.x, player.y, player.r, obstaclesForPlayerCollision())) {
+      depthsBossEjectFromTerrainIfStuck();
+      depthsBossResolvePlayerAgainstObstaclesIterations(26);
+    }
+  }
+
+  /** Small sink-then-float after tide deposit (runs even during splash timelock). */
+  function tickDepthsBossPostLandBob() {
+    if (!depthsBossPostLandBob) return;
+    if (!isDepthsBossFightLevel() || !specialsSimUnpaused()) {
+      depthsBossPostLandBob = null;
+      return;
+    }
+    const { startSim } = depthsBossPostLandBob;
+    const age = simElapsed - startSim;
+    if (age >= DEPTHS_BOSS_POST_LAND_BOB_TOTAL_SEC) {
+      depthsBossClampPlayerToLegalGroundAfterSpit();
+      depthsBossPostLandBob = null;
+      return;
+    }
+    if (age < DEPTHS_BOSS_POST_LAND_BOB_DELAY_SEC) return;
+    const span = Math.max(1e-4, DEPTHS_BOSS_POST_LAND_BOB_TOTAL_SEC - DEPTHS_BOSS_POST_LAND_BOB_DELAY_SEC);
+    const u = clamp((age - DEPTHS_BOSS_POST_LAND_BOB_DELAY_SEC) / span, 0, 1);
+    const bob = Math.sin(Math.PI * u) * DEPTHS_BOSS_POST_LAND_BOB_DEPTH_PX;
+    const yWant = depthsBossPostLandBob.anchorY + bob;
+    depthsBossNudgePlayerVerticalWorld(yWant - player.y);
+    depthsBossClampPlayerToLegalGroundAfterSpit();
+    depthsBossPostLandBob.anchorY = player.y - bob;
+  }
+
+  function tickDepthsBossRisingWaveChase(dt) {
+    const ph = worldToHex(player.x, player.y);
+    if (specials.isSafehouseHexTile(ph.q, ph.r)) return;
+
+    if (depthsBossRisingWaveFrontY == null) {
+      depthsBossRisingWaveFrontY = player.y + DEPTHS_BOSS_WAVE_START_BELOW_PLAYER_PX;
+    }
+
+    const waveSpeed = PLAYER_SPEED * DEPTHS_BOSS_RISING_WAVE_SPEED_MULT;
+    depthsBossRisingWaveFrontY -= waveSpeed * dt;
+
+    const fy = depthsBossRisingWaveFrontY;
+    const surfTotal = DEPTHS_BOSS_SURF_DRAG_SEC + DEPTHS_BOSS_SURF_SPIT_SEC;
+
+    if (depthsBossSurfStartSim > 0) {
+      const t = simElapsed - depthsBossSurfStartSim;
+      if (t < DEPTHS_BOSS_SURF_DRAG_SEC) {
+        const u = clamp(t / Math.max(1e-4, DEPTHS_BOSS_SURF_DRAG_SEC), 0, 1);
+        const ease = u * u;
+        const depthInSurf = Math.max(0, player.y + player.r * 0.55 - (fy - 10));
+        const pull = PLAYER_SPEED * DEPTHS_BOSS_SURF_PULL_PEAK_MULT * ease * (0.28 + 0.72 * clamp(depthInSurf / 160, 0, 1));
+        const carry = PLAYER_SPEED * DEPTHS_BOSS_RISING_WAVE_SPEED_MULT * DEPTHS_BOSS_SURF_CARRY_WAVE_MULT * ease;
+        depthsBossNudgePlayerVerticalWorld(-(pull + carry) * dt);
+      } else if (t < surfTotal) {
+        if (depthsBossSpitTargetY == null) {
+          depthsBossSpitTargetY = fy - DEPTHS_BOSS_SURF_SPIT_TARGET_ABOVE_FRONT_PX;
+        }
+        const ty = depthsBossSpitTargetY;
+        const alpha = 1 - Math.exp(-DEPTHS_BOSS_SURF_SPIT_APPROACH_RATE * dt);
+        depthsBossNudgePlayerVerticalTowardSpitTarget(ty, Math.min(1, alpha * 1.15));
+      } else {
+        const tyFinal =
+          depthsBossSpitTargetY != null
+            ? depthsBossSpitTargetY
+            : fy - DEPTHS_BOSS_SURF_SPIT_TARGET_ABOVE_FRONT_PX;
+        player.y = tyFinal;
+        depthsBossClampPlayerToLegalGroundAfterSpit();
+
+        const landX = player.x;
+        const landY = player.y;
+        const t0 = simElapsed;
+        depthsBossSurfStartSim = 0;
+        depthsBossSpitTargetY = null;
+        depthsBossWaveTouchImmuneUntil = simElapsed + DEPTHS_BOSS_WAVE_HIT_COOLDOWN_SEC;
+
+        playerTimelockUntil = Math.max(playerTimelockUntil, t0 + DEPTHS_BOSS_SPLASH_STUN_SEC);
+        playerDamage.bumpScreenShake(16, 0.3);
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 2.4, "rgba(255, 255, 255, 0.82)", t0, 0.44);
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 5.2, "rgba(224, 242, 254, 0.62)", t0, 0.5);
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 8.5, "rgba(125, 211, 252, 0.5)", t0, 0.55);
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 12, "rgba(14, 165, 233, 0.4)", t0, 0.6);
+        pushAttackRing(attackRings, landX, landY, PLAYER_RADIUS * 16, "rgba(8, 47, 73, 0.32)", t0, 0.64);
+        depthsBossPostLandBob = { anchorY: player.y, startSim: t0 };
+      }
+      return;
+    }
+
+    if (simElapsed < depthsBossWaveTouchImmuneUntil) return;
+
+    const inSurfZone = player.y + player.r * 0.9 >= fy - 18;
+    if (!inSurfZone) return;
+
+    depthsBossSurfStartSim = simElapsed;
+    depthsBossSpitTargetY = null;
   }
 
   /** @param {{ markWaveIdx?: number }} [opts] — `markWaveIdx` ties to storm wave so the natural spawn does not double-fire. */
@@ -1344,7 +1571,7 @@ function boot() {
 
     const depthsStormWaveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
     const dw = getDepthsStormWaveState(simElapsed);
-    if (dw.active && !depthsStormWaveUsesWhirlpoolInsteadOfWash(depthsStormWaveIdx)) {
+    if (dw.active && !depthsStormWaveUsesWhirlpoolInsteadOfWash(depthsStormWaveIdx, runLevel)) {
       const xMid = x0 + w * 0.5;
       const yMid = y0 + h * 0.5;
       const diag = Math.hypot(w, h) * 0.52 + dw.bandThickness;
@@ -1469,6 +1696,91 @@ function boot() {
       if (inStrike1) drawOneBolt(cycle / flashDur, baseSeed);
       if (inStrike2) drawOneBolt((cycle - t2) / flashDur2, baseSeed + 0x9e3779b9);
     }
+  }
+
+  /**
+   * Depths L5 boss: rising chase flood — same language as storm wash (screen band + rippling crest),
+   * drawn after terrain / special hexes so it reads as washing **over** the floor.
+   */
+  function drawDepthsBossRisingChaseWaveWorld(ctx, viewW, viewH) {
+    if (!isDepthsBossFightLevel() || depthsBossRisingWaveFrontY == null) return;
+    const pad = 56;
+    const x0 = cameraX - pad;
+    const y0 = cameraY - pad;
+    const w = viewW + pad * 2;
+    const h = viewH + pad * 2;
+    const fy = depthsBossRisingWaveFrontY;
+    const yBot = y0 + h + 220;
+    if (fy > yBot) return;
+
+    const bandThickness = 88 + 22 * (0.5 + 0.5 * Math.sin(simElapsed * 0.95));
+    const shell = 0.45 + 0.55 * Math.sin(simElapsed * 1.02 + fy * 0.001);
+    const ripplePhase = simElapsed * 1.65 + 1403;
+    const kRipple = 0.0106;
+    const ampCrest = bandThickness * 0.42;
+    const ampChop = bandThickness * 0.15;
+    const yLip = fy - bandThickness * 0.42;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+
+    const g = ctx.createLinearGradient(0, yLip - bandThickness * 0.35, 0, fy + bandThickness * 2.4);
+    const a0 = 0.09 + shell * 0.24;
+    g.addColorStop(0, "rgba(255, 255, 255, 0)");
+    g.addColorStop(0.22, `rgba(220, 238, 252, ${a0 * 0.48})`);
+    g.addColorStop(0.52, `rgba(248, 252, 255, ${a0 * 0.7})`);
+    g.addColorStop(0.78, `rgba(125, 211, 252, ${a0 * 0.42})`);
+    g.addColorStop(1, `rgba(14, 116, 144, ${a0 * 0.35})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(x0, yLip, w, yBot - yLip);
+
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    for (let layer = 0; layer < 3; layer++) {
+      ctx.globalAlpha = (0.22 + shell * 0.34) * (1 - layer * 0.24);
+      ctx.strokeStyle = layer === 0 ? "rgba(255, 255, 255, 0.88)" : "rgba(210, 236, 255, 0.72)";
+      ctx.lineWidth = Math.max(1.4, bandThickness * (0.1 - layer * 0.022));
+      if (layer === 0) {
+        ctx.shadowColor = "rgba(186, 230, 253, 0.5)";
+        ctx.shadowBlur = 12;
+      } else {
+        ctx.shadowBlur = 0;
+      }
+      ctx.beginPath();
+      let first = true;
+      for (let x = x0; x <= x0 + w; x += 5) {
+        const yc =
+          fy +
+          ampCrest * Math.sin(x * kRipple + ripplePhase + layer * 1.05) +
+          ampChop * Math.sin(x * kRipple * 2.65 + ripplePhase * 1.3 + layer);
+        if (first) {
+          ctx.moveTo(x, yc);
+          first = false;
+        } else ctx.lineTo(x, yc);
+      }
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.12 + shell * 0.18;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = 1.35;
+    for (let r = 0; r < 4; r++) {
+      const yOff = (r - 1.5) * 5.5;
+      ctx.beginPath();
+      let first2 = true;
+      for (let x = x0; x <= x0 + w; x += 9) {
+        const yc =
+          fy +
+          yOff +
+          ampCrest * 0.52 * Math.sin(x * kRipple * 1.12 + ripplePhase + r * 0.68);
+        if (first2) {
+          ctx.moveTo(x, yc);
+          first2 = false;
+        } else ctx.lineTo(x, yc);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /** Halls path: soft warm marble sheen over the floor (call after terrain blocks). */
@@ -2386,6 +2698,7 @@ function boot() {
     playerTimelockUntil = 0;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
+    depthsSniperAbilitySpeedSuppressUntil = 0;
     knightSpadesWorldSlowUntil = 0;
     fireIgniteUntil = 0;
     fireIgniteNextTickAt = 0;
@@ -2438,6 +2751,7 @@ function boot() {
     depthsTentacleBurstScheduledWaveIdx = -1;
     depthsTentacleBurstLastSpawnK = -1;
     resetDepthsWhirlpoolForRun();
+    resetDepthsBossRisingWaveChase();
     hexEventRuntime?.reset();
     if (typeof character.resetRunState === "function") {
       character.resetRunState(hexKey(activePlayerHex.q, activePlayerHex.r));
@@ -2544,6 +2858,11 @@ function boot() {
           pathRuntime.ensurePathAssignedForLevel(runLevel);
           resetSwampInfection();
           refreshDebugRunProgressUi();
+          if (pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL) {
+            hunterRuntime?.clearHunterSwarmEntities?.();
+            resetDepthsBossRisingWaveChase();
+            resetDepthsWhirlpoolForRun();
+          }
         },
         onSpawnAnchorResetToDifficultyClock: (eff) => {
           hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
@@ -2739,6 +3058,7 @@ function boot() {
     ejectSpawnerHunterFromSpecialHexFootprint,
     getDifficultyClockSec: () => safehouseHexFlow.getDifficultyClockSec(simElapsed),
     getRunLevel: () => runLevel,
+    getSuppressDepthsBossNormalSpawns: () => isDepthsBossFightLevel(),
     isWorldPointOnSafehouseBarrierDisk,
     clampHunterOutsideSafehouseDisk,
     isWorldPointOnForgeRouletteBarrierTile: (x, y) =>
@@ -2800,6 +3120,7 @@ function boot() {
     depthsTentacleBurstScheduledWaveIdx = -1;
     depthsTentacleBurstLastSpawnK = -1;
     resetDepthsWhirlpoolForRun();
+    resetDepthsBossRisingWaveChase();
     character = instrumentObjectMethods(createCharacterController(activeCharacterId, rogueWorld, valiantWorld, bulwarkWorld), "character", runLogger, {
       skip: ["getAbilityHud"],
     });
@@ -2844,6 +3165,7 @@ function boot() {
     playerTimelockUntil = 0;
     timelockWorldShakeAt = 0;
     ultimateSpeedUntil = 0;
+    depthsSniperAbilitySpeedSuppressUntil = 0;
     knightSpadesWorldSlowUntil = 0;
     fireIgniteUntil = 0;
     fireIgniteNextTickAt = 0;
@@ -3041,6 +3363,7 @@ function boot() {
       depthsTentacleBurstScheduledWaveIdx = -1;
       depthsTentacleBurstLastSpawnK = -1;
       resetDepthsWhirlpoolForRun();
+      resetDepthsBossRisingWaveChase();
     });
   }
   if (devHunterTypeFilterEl && "value" in devHunterTypeFilterEl) {
@@ -3058,6 +3381,7 @@ function boot() {
       depthsTentacleBurstScheduledWaveIdx = -1;
       depthsTentacleBurstLastSpawnK = -1;
       resetDepthsWhirlpoolForRun();
+      resetDepthsBossRisingWaveChase();
     });
   }
 
@@ -3086,6 +3410,7 @@ function boot() {
     }
     const eff = safehouseHexFlow.getDifficultyClockSec(simElapsed);
     hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
+    resetDepthsBossRisingWaveChase();
     resetSwampInfection();
     refreshDebugRunProgressUi();
   }
@@ -3553,6 +3878,30 @@ function boot() {
   let last = performance.now() / 1000;
   let raf = 0;
 
+  function registerDepthsSniperPoolAbilitySpeedSuppress() {
+    const zones = hunterRuntime?.entities?.dangerZones;
+    if (!zones?.length) return;
+    const px = player.x;
+    const py = player.y;
+    const pr = player.r;
+    for (let i = 0; i < zones.length; i++) {
+      const zone = zones[i];
+      if (!zone?.depthsSniperZone || !zone.exploded) continue;
+      if (simElapsed >= (zone.lingerUntil ?? zone.detonateAt)) continue;
+      const zr = zone.r ?? 0;
+      const rr = zr * 0.92 + pr;
+      const dx = px - zone.x;
+      const dy = py - zone.y;
+      if (dx * dx + dy * dy <= rr * rr) {
+        depthsSniperAbilitySpeedSuppressUntil = Math.max(
+          depthsSniperAbilitySpeedSuppressUntil,
+          simElapsed + DEPTHS_SNIPER_POOL_SUPPRESS_ABILITY_SPEED_SEC,
+        );
+        return;
+      }
+    }
+  }
+
   function frame(nowMs) {
     try {
     const now = nowMs / 1000;
@@ -3676,6 +4025,7 @@ function boot() {
         player._px = player.x;
         player._py = player.y;
       } else {
+      const abilitySpeedSuppressed = simElapsed < depthsSniperAbilitySpeedSuppressUntil;
       const lunaticMove =
         activeCharacterId === "lunatic" && typeof character.applyMovementFrame === "function"
           ? character.applyMovementFrame({
@@ -3693,6 +4043,7 @@ function boot() {
               inventory,
               PLAYER_SPEED,
               ultimateSpeedUntil,
+              suppressAbilitySpeedBonuses: abilitySpeedSuppressed,
               laserSlowMult:
                 playerDamage.getMovementSlowMult() *
                 (pathRuntime.getCurrentPathId() === "swamp" && hunterRuntime
@@ -3738,8 +4089,8 @@ function boot() {
           rogueMovementIntent = !rogueDashHold;
           player.facing = { x: vx / len, y: vy / len };
           if (!rogueDashHold) {
-            let sp = PLAYER_SPEED * (player.speedBurstMult ?? 1);
-            if (simElapsed < ultimateSpeedUntil) sp *= 1.75;
+            let sp = PLAYER_SPEED * (abilitySpeedSuppressed ? 1 : (player.speedBurstMult ?? 1));
+            if (!abilitySpeedSuppressed && simElapsed < ultimateSpeedUntil) sp *= 1.75;
             sp *= player.speedPassiveMult ?? 1;
             if (simElapsed < (inventory.spadesObstacleBoostUntil ?? 0)) {
               sp *= 1 + Math.max(0, (player.terrainTouchMult ?? 1) - 1);
@@ -3832,7 +4183,8 @@ function boot() {
         const waveT = waveIdx * DEPTHS_STORM_WAVE_PERIOD_SEC;
         const tInWave = simElapsed - waveT;
         const { washStart } = getDepthsStormWaveWashTiming(waveIdx);
-        const isWhirlpoolWave = depthsStormWaveUsesWhirlpoolInsteadOfWash(waveIdx);
+        const isWhirlpoolWave = depthsStormWaveUsesWhirlpoolInsteadOfWash(waveIdx, runLevel);
+
         if (waveIdx !== depthsStormLastWaveIdx) {
           depthsStormLastWaveIdx = waveIdx;
           depthsStormLastProgress = -1;
@@ -3840,8 +4192,16 @@ function boot() {
           depthsTentacleBurstLastSpawnK = -1;
           resetDepthsWhirlpoolForRun();
         }
+
         const dw = getDepthsStormWaveState(simElapsed);
         const wavePushActive = dw.active && !isWhirlpoolWave;
+
+        if (isDepthsBossFightLevel()) {
+          tickDepthsBossRisingWaveChase(dt);
+        } else {
+          resetDepthsBossRisingWaveChase();
+        }
+
         if (wavePushActive) {
           const env = Math.sin(Math.PI * dw.progress);
           const pushSpeed =
@@ -3860,6 +4220,7 @@ function boot() {
             player.y = wr.y;
           }
           if (
+            runLevel === DEPTHS_WHIRLPOOL_RUN_LEVEL &&
             huntersEnabled &&
             hunterRuntime &&
             depthsTentacleBurstScheduledWaveIdx !== waveIdx &&
@@ -3891,6 +4252,7 @@ function boot() {
           depthsWhirlpoolEscaped = true;
         }
         if (
+          runLevel === DEPTHS_WHIRLPOOL_RUN_LEVEL &&
           huntersEnabled &&
           hunterRuntime &&
           depthsTentacleBurstScheduledWaveIdx === waveIdx &&
@@ -3990,6 +4352,15 @@ function boot() {
           );
         }
       }
+      }
+
+      if (!runDead && specialsSimUnpaused() && isDepthsBossFightLevel()) {
+        const pyBeforeBob = player.y;
+        tickDepthsBossPostLandBob();
+        if (Math.abs(player.y - pyBeforeBob) > 1e-4) {
+          player._py = player.y;
+          player._px = player.x;
+        }
       }
     }
 
@@ -4286,6 +4657,7 @@ function boot() {
 
       if (huntersEnabled && !runDead) {
         hunterRuntime.tick(dt * worldTimeScale, { suppressRangedAttacks: timelockFrozen });
+        registerDepthsSniperPoolAbilitySpeedSuppress();
         if (pathRuntime.getCurrentPathId() === "swamp") {
           tickSwampHunterMudTrails(dt);
         }
@@ -4567,6 +4939,9 @@ function boot() {
       specials.isSurgeSpent,
       hexEventRuntime?.getSurgeDrawState() ?? null,
     );
+    if (depthsPathActive && isDepthsBossFightLevel()) {
+      drawDepthsBossRisingChaseWaveWorld(ctx, viewW, viewH);
+    }
     if (huntersEnabled) {
       if (firePathActive) {
         for (const h of hunterRuntime.entities.hunters) h.fireGlow = true;

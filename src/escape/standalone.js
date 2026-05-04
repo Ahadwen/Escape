@@ -12901,6 +12901,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
   var DEPTHS_TENTACLE_SPAWN_RADIUS_PX = 320;
   var DEPTHS_TENTACLE_BURST_COUNT = Math.round(DEPTHS_TENTACLE_BURST_SPAN_SEC / DEPTHS_TENTACLE_BURST_INTERVAL_SEC) + 1;
   var DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE = 1 / 5;
+  var DEPTHS_WHIRLPOOL_RUN_LEVEL = 3;
   var DEPTHS_WHIRLPOOL_PULL_MULT = 2.88;
   var DEPTHS_WHIRLPOOL_SWIRL_EDGE = 215;
   var DEPTHS_WHIRLPOOL_CENTER_EPS = 20;
@@ -12924,7 +12925,8 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
     const washStart = depthsStormHash01(idx + 709) * Math.max(0.08, DEPTHS_STORM_WAVE_PERIOD_SEC - washDur - 0.55);
     return { washDur, washStart };
   }
-  function depthsStormWaveUsesWhirlpoolInsteadOfWash(idx) {
+  function depthsStormWaveUsesWhirlpoolInsteadOfWash(idx, runLevelForDepths) {
+    if (runLevelForDepths !== DEPTHS_WHIRLPOOL_RUN_LEVEL) return false;
     return depthsStormHash01(idx + 3333) < DEPTHS_WHIRLPOOL_INSTEAD_OF_WASH_CHANCE;
   }
   function getDepthsStormWaveState(simElapsed) {
@@ -13875,7 +13877,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
       ctx2.restore();
       const depthsStormWaveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
       const dw = getDepthsStormWaveState(simElapsed);
-      if (dw.active && !depthsStormWaveUsesWhirlpoolInsteadOfWash(depthsStormWaveIdx)) {
+      if (dw.active && !depthsStormWaveUsesWhirlpoolInsteadOfWash(depthsStormWaveIdx, runLevel)) {
         const xMid = x0 + w * 0.5;
         const yMid = y0 + h * 0.5;
         const diag = Math.hypot(w, h) * 0.52 + dw.bandThickness;
@@ -16071,7 +16073,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               const waveT = waveIdx * DEPTHS_STORM_WAVE_PERIOD_SEC;
               const tInWave = simElapsed - waveT;
               const { washStart } = getDepthsStormWaveWashTiming(waveIdx);
-              const isWhirlpoolWave = depthsStormWaveUsesWhirlpoolInsteadOfWash(waveIdx);
+              const isWhirlpoolWave = depthsStormWaveUsesWhirlpoolInsteadOfWash(waveIdx, runLevel);
               if (waveIdx !== depthsStormLastWaveIdx) {
                 depthsStormLastWaveIdx = waveIdx;
                 depthsStormLastProgress = -1;
@@ -16096,7 +16098,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
                   player.x = wr.x;
                   player.y = wr.y;
                 }
-                if (huntersEnabled && hunterRuntime && depthsTentacleBurstScheduledWaveIdx !== waveIdx && depthsStormLastProgress < DEPTHS_TENTACLE_HIT_PROGRESS && dw.progress >= DEPTHS_TENTACLE_HIT_PROGRESS) {
+                if (runLevel === DEPTHS_WHIRLPOOL_RUN_LEVEL && huntersEnabled && hunterRuntime && depthsTentacleBurstScheduledWaveIdx !== waveIdx && depthsStormLastProgress < DEPTHS_TENTACLE_HIT_PROGRESS && dw.progress >= DEPTHS_TENTACLE_HIT_PROGRESS) {
                   depthsTentacleBurstScheduledWaveIdx = waveIdx;
                   depthsTentacleBurstHitSim = simElapsed;
                   depthsTentacleBurstLastSpawnK = -1;
@@ -16111,7 +16113,7 @@ Planted ${fd.hp}/${BULWARK_FLAG_MAX_HP} \xB7 pickup +${pickupHp} HP` : "Flag dow
               if (depthsWhirlpoolPhase !== "idle" && Math.hypot(player.x - whirlpoolFrameStartX, player.y - whirlpoolFrameStartY) >= DEPTHS_WHIRLPOOL_DASH_TELEPORT_MIN) {
                 depthsWhirlpoolEscaped = true;
               }
-              if (huntersEnabled && hunterRuntime && depthsTentacleBurstScheduledWaveIdx === waveIdx && depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT) {
+              if (runLevel === DEPTHS_WHIRLPOOL_RUN_LEVEL && huntersEnabled && hunterRuntime && depthsTentacleBurstScheduledWaveIdx === waveIdx && depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT) {
                 const burstStart = depthsTentacleBurstHitSim + DEPTHS_TENTACLE_BURST_PAUSE_SEC;
                 if (simElapsed >= burstStart) {
                   while (depthsTentacleBurstLastSpawnK + 1 < DEPTHS_TENTACLE_BURST_COUNT) {

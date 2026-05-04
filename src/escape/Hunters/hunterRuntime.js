@@ -91,6 +91,7 @@ const SWAMP_FROG_LAND_EXPLODE_DIST = SWAMP_FROG_BLAST_R + 24;
  * @property {() => { x: number; y: number; r: number; lureR: number } | null} [getBulwarkPlantedFlag] — planted Bulwark flag lures hunters in radius
  * @property {() => string | null} [getDebugHunterTypeFilter] — debug-only forced wave spawn type (null = normal mix)
  * @property {() => boolean} [getSwampBootlegColourblind] — swamp crystal curse: uniform grey-green hunter bodies
+ * @property {() => boolean} [getSuppressDepthsBossNormalSpawns] — Depths display L5: no wave spawns / scheduled jobs
  */
 
 export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
@@ -124,6 +125,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     getBulwarkPlantedFlag: getBulwarkPlantedFlagDep,
     getDebugHunterTypeFilter: getDebugHunterTypeFilterDep,
     getSwampBootlegColourblind: getSwampBootlegColourblindDep,
+    getSuppressDepthsBossNormalSpawns: getSuppressDepthsBossNormalSpawnsDep,
   } = deps;
 
   const worldToHex = worldToHexDep ?? (() => ({ q: 0, r: 0 }));
@@ -2027,17 +2029,27 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
+  function depthsBossSuppressNormalSpawns() {
+    return !!(depthsPathActive() && getSuppressDepthsBossNormalSpawnsDep?.());
+  }
+
   function tickSpawnWavesAndLifetime() {
     const elapsed = getSimElapsed();
+    const bossNoSpawn = depthsBossSuppressNormalSpawns();
+    if (bossNoSpawn) {
+      spawnState.spawnScheduled.length = 0;
+      if (spawnState.nextSpawnAt < elapsed + 1e6) spawnState.nextSpawnAt = elapsed + 1e6;
+    }
     if (!depthsPathActive()) {
       for (let i = entities.hunters.length - 1; i >= 0; i--) {
         if (entities.hunters[i].type === "depthsTentacle") entities.hunters.splice(i, 1);
       }
     }
     while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {
-      spawnState.spawnScheduled.shift()?.fn();
+      if (bossNoSpawn) spawnState.spawnScheduled.shift();
+      else spawnState.spawnScheduled.shift()?.fn();
     }
-    if (elapsed >= spawnState.nextSpawnAt) advanceSpawnWave();
+    if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn) advanceSpawnWave();
 
     for (let i = entities.hunters.length - 1; i >= 0; i--) {
       const h = entities.hunters[i];
@@ -2180,6 +2192,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     spawnState.nextSpawnAt = elapsed + HUNTER_FIRST_WAVE_AT_SEC;
   }
 
+  /** Depths boss (display L5): strip ambient hunters / shells / bolts before the chase. */
+  function clearHunterSwarmEntities() {
+    entities.hunters.length = 0;
+    entities.dangerZones.length = 0;
+    entities.bullets.length = 0;
+    entities.fireArcs.length = 0;
+    entities.projectiles.length = 0;
+    entities.laserBeams.length = 0;
+    entities.swampPools.length = 0;
+    entities.swampBursts.length = 0;
+  }
+
   /** REFERENCE `applySafehouseLevelUp` spawn pacing reset. */
   function softResetSpawnPacingAfterSafehouseLevel(anchorEffectiveSurvivalSec) {
     spawnDifficultyAnchorSurvival = Math.max(0, anchorEffectiveSurvivalSec);
@@ -2293,5 +2317,6 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     bulwarkChargeApplyTerrainGroupStun,
     bulwarkParryPushHunters,
     getFrogMudPoolMoveMult,
+    clearHunterSwarmEntities,
   };
 }
