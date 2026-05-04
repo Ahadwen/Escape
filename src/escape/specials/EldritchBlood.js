@@ -4,13 +4,16 @@
  * Phase 1: for `ELDRITCH_BLOOD_PHASE1_DURATION_SEC` after the intro, random orb / lightning / radial barrage
  * spells fire every `ELDRITCH_BLOOD_ATTACK_COOLDOWN_*` seconds (same spells may repeat).
  * Phase 2: same drift → prep → glow → cadence (`ELDRITCH_BLOOD_PHASE2_DURATION_SEC`), different attack pool; first strike is floating cage arena.
+ * Phase 3: begins after the P2→P3 interlude (`macroPhase === 5`); attack scripting can extend here later.
  */
 import { PLAYER_RADIUS } from "../balance.js";
 import { clamp, pointToSegmentDistance } from "../Hunters/hunterGeometry.js";
 
+/** Wall time for each scripted boss combat phase (P1 / P2); intermissions are extra. */
+export const ELDRITCH_BLOOD_BOSS_SCRIPTED_PHASE_DURATION_SEC = 80;
 export const ELDRITCH_BLOOD_PHASE1_START_SEC = 10;
 /** Wall time from entering P1 until the scripted wave ends (no further P1 spells arm after this). */
-export const ELDRITCH_BLOOD_PHASE1_DURATION_SEC = 80;
+export const ELDRITCH_BLOOD_PHASE1_DURATION_SEC = ELDRITCH_BLOOD_BOSS_SCRIPTED_PHASE_DURATION_SEC;
 /** Boss center must stay at least this many px above the rising wave while a P1 beat is active (charge → tentacles). */
 export const ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX = 200;
 /** Seconds before strike telegraph: height clamp turns on so the bloom can drift up (no Y snap at telegraph start). */
@@ -20,8 +23,14 @@ export const ELDRITCH_BLOOD_ATTACK_COOLDOWN_LO_SEC = 4;
 export const ELDRITCH_BLOOD_ATTACK_COOLDOWN_HI_SEC = 7;
 /** Visual-only interlude after P1 ends (boss “gathers” then “releases”); no gameplay effect. */
 export const ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC = 8;
-/** Mirrors P1 scripted window until P2 resolves (later attacks can diversify). */
-export const ELDRITCH_BLOOD_PHASE2_DURATION_SEC = ELDRITCH_BLOOD_PHASE1_DURATION_SEC;
+/** Mirrors P1: same 80s scripted window and gap cadence until the P2→P3 interlude arms. */
+export const ELDRITCH_BLOOD_PHASE2_DURATION_SEC = ELDRITCH_BLOOD_BOSS_SCRIPTED_PHASE_DURATION_SEC;
+/** P2→P3: boss fades out, scripted storm washes + ambient lightning, then drifts back for phase 3. */
+export const ELDRITCH_BLOOD_P2P3_FADE_OUT_SEC = 1.15;
+export const ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC = 5;
+export const ELDRITCH_BLOOD_P2P3_RETURN_DRIFT_SEC = 1.75;
+export const ELDRITCH_BLOOD_P2_TO_P3_INTERLUDE_SEC =
+  ELDRITCH_BLOOD_P2P3_FADE_OUT_SEC + ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC + ELDRITCH_BLOOD_P2P3_RETURN_DRIFT_SEC;
 /** Floating “mini cage” arena: diameter in px (terrain ignored for the player inside the ring). */
 export const ELDRITCH_BLOOD_FLOATING_CAGE_DIAMETER_PX = 350;
 
@@ -135,6 +144,22 @@ const P2_SWARM_SPAWN_INTERVAL_SEC = 0.1;
 const P2_SWARM_BURST1_SEC = 2;
 const P2_SWARM_BURST2_SEC = 3;
 
+/** P2 triplicate lightning dash (after global prep drift from `entry.js` gap). */
+const P2_TRIPLICATE_GLOW_SEC = 0.5;
+const P2_TRIPLICATE_SPLIT_SEC = 0.52;
+const P2_TRIPLICATE_LIGHTNING_FORM_SEC = 0.4;
+const P2_TRIPLICATE_ATTACK_WINDOW_SEC = 4;
+const P2_TRIPLICATE_TELEGRAPH_SEC = 0.28;
+const P2_TRIPLICATE_DASH_SEC = 0.44;
+const P2_TRIPLICATE_DASH_OVERSHOOT_PX = 220;
+const P2_TRIPLICATE_SPLIT_RADIUS_PX = 158;
+/** Random pause only after a dash completes, before the next telegraph. */
+const P2_TRIPLICATE_PAUSE_LO_SEC = 0.1;
+const P2_TRIPLICATE_PAUSE_HI_SEC = 0.3;
+const P2_TRIPLICATE_REVERT_SEC = 0.45;
+const P2_TRIPLICATE_MERGE_SEC = 0.82;
+const P2_TRIPLICATE_DASH_HIT_HW = 40;
+
 function stormHash01(n) {
   return ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
 }
@@ -200,8 +225,8 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
   /** `simElapsed` when rising-wave chase arms (`0` = idle). */
   let fightStartSim = 0;
-  /** `0` intro · `1` P1 · `2` interlude · `3` Phase 2 · `4` P2 idle (stub). */
-  let macroPhase = /** @type {0 | 1 | 2 | 3 | 4} */ (0);
+  /** `0` intro · `1` P1 · `2` P1→P2 interlude · `3` P2 · `4` P2→P3 interlude · `5` P3. */
+  let macroPhase = /** @type {0 | 1 | 2 | 3 | 4 | 5} */ (0);
   /** `simElapsed` when `macroPhase` became `1` (used with `ELDRITCH_BLOOD_PHASE1_DURATION_SEC`). */
   let p1PhaseEnterSim = 0;
   /** `0` homing orb+tentacles · `1` lightning · `2` radial barrage + teleports. */
@@ -291,13 +316,35 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
    * }}
    */
   let p2SwarmStrike = null;
+  /**
+   * P2 triplicate: glow → split → lightning → 4s staggered telegraph+dashes → revert → merge.
+   * @type {null | {
+   *   phase: "glow" | "split" | "lightningForm" | "attack" | "revert" | "merge";
+   *   phaseStartSim: number;
+   *   anchorX: number;
+   *   anchorY: number;
+   *   clones: { x: number; y: number }[];
+   *   layout: { x: number; y: number }[] | null;
+   *   attackWindowEndSim: number;
+   *   mergeStart0?: { x: number; y: number };
+   *   mergeStart2?: { x: number; y: number };
+   *   cloneStates: { mode: "cooldown" | "telegraph" | "dash"; cooldownUntilSim: number; telegraphStartSim: number; aimPx: number; aimPy: number; dashT0: number; fx: number; fy: number; tx: number; ty: number; dashDealt: boolean }[];
+   *   mergeTargetX: number;
+   *   mergeTargetY: number;
+   * }}
+   */
+  let p2TriplicateStrike = null;
   /** `macroPhase === 3` wall clock baseline. */
   let p2PhaseEnterSim = 0;
+  /** `macroPhase === 5` wall clock baseline (P3 combat stub). */
+  let p3PhaseEnterSim = 0;
   /** @type {"idle" | "gap"} */
   let p2Mode = /** @type {"idle" | "gap"} */ ("idle");
   let p2NextAttackSim = 0;
-  /** Alternates P2 scripted beats: even → floating cage, odd → swarm. */
+  /** Cycles P2 beats: 0 cage · 1 swarm · 2 triplicate. */
   let p2StrikeIndex = 0;
+  /** One-shot: capture return drift start position when P2→P3 return phase begins. */
+  let p2P3ReturnAnchored = false;
 
   function clearBloomLiftPrepFields(h) {
     h.depthsSpellLiftPrepStartSim = 0;
@@ -320,10 +367,22 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         h.depthsEldritchTeleportGhostY = 0;
         h.depthsBetweenPhasesUntil = 0;
         h.depthsBetweenPhasesStartSim = 0;
+        h.depthsEldritchP2P3InterludeUntil = 0;
+        h.depthsEldritchP2P3InterludeStartSim = 0;
+        h.depthsEldritchP2P3AnchorX = 0;
+        h.depthsEldritchP2P3AnchorY = 0;
+        h.depthsEldritchP2P3InterludeScripted = false;
+        h.depthsEldritchP2P3ScriptedOpacity = 1;
+        h.depthsEldritchP2P3StormAmbientActive = false;
+        h.depthsEldritchP2P3StormPushBurstActive = false;
+        h.depthsEldritchP2P3StormBurstStartSim = 0;
+        h.depthsEldritchP2P3ReturnFromX = 0;
+        h.depthsEldritchP2P3ReturnFromY = 0;
         h.depthsEldritchCageStrikeActive = false;
         h.depthsEldritchPhase2Tone = false;
         h.depthsEldritchPostCageScripted = false;
         h.depthsEldritchPostCageLightningSprite = false;
+        h.depthsEldritchTriplicateScripted = false;
         h.depthsEldritchDashTrail = null;
         h.depthsPostCageLightningContactUntil = 0;
         clearBloomLiftPrepFields(h);
@@ -333,6 +392,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     eldritchBarrageStrike = null;
     floatingCageStrike = null;
     p2SwarmStrike = null;
+    p2TriplicateStrike = null;
   }
 
   function reset() {
@@ -350,11 +410,16 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     tentacleLastK = -1;
     floatingCageStrike = null;
     p2SwarmStrike = null;
+    p2TriplicateStrike = null;
     p2PhaseEnterSim = 0;
     p2Mode = "idle";
     p2NextAttackSim = 0;
     p2StrikeIndex = 0;
+    p3PhaseEnterSim = 0;
     clearBloomScriptedTelegraph();
+    p2P3ReturnAnchored = false;
+    const bloomReset = getBloomHunter();
+    if (bloomReset) bloomReset.depthsEldritchPhase3Tone = false;
   }
 
   /** Call when `depthsBossRisingWaveFrontY` first becomes active (leaving sanctuary / chase start). */
@@ -542,22 +607,158 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     bloom.y = ctr.cy + C.cageBossRelY;
   }
 
-  function endP2Wave() {
-    macroPhase = 4;
-    p2Mode = "idle";
+  function beginP2ToP3Interlude(simElapsed) {
     floatingCageStrike = null;
     p2SwarmStrike = null;
+    p2TriplicateStrike = null;
     tentacleHitSim = 0;
     tentacleLastK = -1;
     homingOrbStrike = null;
     lightningStrike = null;
     eldritchBarrageStrike = null;
     clearBloomScriptedTelegraph();
+    p2P3ReturnAnchored = false;
+    macroPhase = 4;
+    p2Mode = "idle";
+    const bloom = getBloomHunter();
+    if (bloom) {
+      bloom.depthsEldritchP2P3InterludeStartSim = simElapsed;
+      bloom.depthsEldritchP2P3InterludeUntil = simElapsed + ELDRITCH_BLOOD_P2_TO_P3_INTERLUDE_SEC;
+      bloom.depthsEldritchP2P3AnchorX = bloom.x;
+      bloom.depthsEldritchP2P3AnchorY = bloom.y;
+      bloom.depthsBetweenPhasesUntil = 0;
+      bloom.depthsBetweenPhasesStartSim = 0;
+      bloom.depthsEldritchPhase3Tone = false;
+      bloom.depthsEldritchPhase2Tone = false;
+      bloom.depthsEldritchP2P3ScriptedOpacity = 1;
+      bloom.depthsEldritchP2P3StormAmbientActive = false;
+      bloom.depthsEldritchP2P3StormPushBurstActive = false;
+      bloom.depthsEldritchP2P3StormBurstStartSim = 0;
+      bloom.depthsEldritchP2P3ReturnFromX = 0;
+      bloom.depthsEldritchP2P3ReturnFromY = 0;
+      bloom.depthsEldritchP2P3InterludeScripted = true;
+      bloom.depthsEldritchOrbStrikeChanneling = false;
+      bloom.depthsCastLiftActive = false;
+      bloom.depthsEldritchTelegraphHoldUntil = 0;
+      bloom.depthsEldritchLightningCastActive = false;
+      bloom.depthsEldritchBarrageAttackActive = false;
+      bloom.depthsEldritchCageStrikeActive = false;
+      bloom.depthsEldritchPostCageScripted = false;
+      bloom.depthsEldritchPostCageLightningSprite = false;
+      bloom.depthsEldritchTriplicateScripted = false;
+      bloom.depthsEldritchDashTrail = null;
+      bloom.depthsPostCageLightningContactUntil = 0;
+      clearBloomLiftPrepFields(bloom);
+    }
+  }
+
+  function finishP2ToP3Interlude(simElapsed) {
+    const bloom = getBloomHunter();
+    const waveY = getDepthsBossRisingWaveFrontY?.() ?? null;
+    const player = getPlayer();
+    p2P3ReturnAnchored = false;
+    if (bloom) {
+      bloom.depthsEldritchP2P3InterludeUntil = 0;
+      bloom.depthsEldritchP2P3InterludeStartSim = 0;
+      bloom.depthsEldritchP2P3InterludeScripted = false;
+      bloom.depthsEldritchP2P3AnchorX = 0;
+      bloom.depthsEldritchP2P3AnchorY = 0;
+      bloom.depthsEldritchP2P3ScriptedOpacity = 1;
+      bloom.depthsEldritchP2P3StormAmbientActive = false;
+      bloom.depthsEldritchP2P3StormPushBurstActive = false;
+      bloom.depthsEldritchP2P3StormBurstStartSim = 0;
+      bloom.depthsEldritchP2P3ReturnFromX = 0;
+      bloom.depthsEldritchP2P3ReturnFromY = 0;
+      bloom.depthsEldritchPhase2Tone = false;
+      bloom.depthsEldritchPhase3Tone = true;
+      if (waveY != null && Number.isFinite(waveY)) {
+        bloom.y = waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX;
+      }
+      const leashX = 480;
+      bloom.x = clamp(bloom.x, player.x - leashX, player.x + leashX);
+    }
+    macroPhase = 5;
+    p3PhaseEnterSim = simElapsed;
+  }
+
+  function tickP2P3Interlude(_dt) {
+    const sim = getSimElapsed();
+    const bloom = getBloomHunter();
+    const player = getPlayer();
+    if (!bloom) {
+      macroPhase = 5;
+      p3PhaseEnterSim = sim;
+      return;
+    }
+    const t0 = Number(bloom.depthsEldritchP2P3InterludeStartSim ?? 0);
+    const until = Number(bloom.depthsEldritchP2P3InterludeUntil ?? 0);
+    if (t0 <= 0 || until <= t0) {
+      finishP2ToP3Interlude(sim);
+      return;
+    }
+    const rel = sim - t0;
+    if (rel >= ELDRITCH_BLOOD_P2_TO_P3_INTERLUDE_SEC) {
+      finishP2ToP3Interlude(sim);
+      return;
+    }
+
+    const ax = Number(bloom.depthsEldritchP2P3AnchorX);
+    const ay = Number(bloom.depthsEldritchP2P3AnchorY);
+    const waveY = getDepthsBossRisingWaveFrontY?.() ?? null;
+    const b = getWorldDrawBounds();
+    const midX = Number.isFinite(b.x0) && Number.isFinite(b.x1) ? (b.x0 + b.x1) * 0.5 : player.x;
+    const capY = waveY != null && Number.isFinite(waveY) ? waveY - ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX : ay - 120;
+    const hideY = waveY != null && Number.isFinite(waveY) ? waveY + 240 : b.y1 + 260;
+
+    const smooth = (a, b, u) => a + (b - a) * (u * u * (3 - 2 * u));
+
+    const tFade = ELDRITCH_BLOOD_P2P3_FADE_OUT_SEC;
+    const tStormEnd = tFade + ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC;
+
+    bloom.depthsEldritchP2P3StormAmbientActive = false;
+    bloom.depthsEldritchP2P3StormPushBurstActive = false;
+
+    if (rel < tFade) {
+      const u = clamp(rel / Math.max(1e-4, tFade), 0, 1);
+      const e = u * u * (3 - 2 * u);
+      bloom.depthsEldritchP2P3ScriptedOpacity = 1 - e;
+      bloom.x = ax;
+      bloom.y = ay;
+    } else if (rel < tStormEnd) {
+      bloom.depthsEldritchP2P3ScriptedOpacity = 0;
+      bloom.depthsEldritchP2P3StormAmbientActive = true;
+      bloom.depthsEldritchP2P3StormPushBurstActive = true;
+      if ((Number(bloom.depthsEldritchP2P3StormBurstStartSim) || 0) <= 0) {
+        bloom.depthsEldritchP2P3StormBurstStartSim = t0 + tFade;
+      }
+      bloom.x = midX;
+      bloom.y = hideY;
+    } else {
+      const u = clamp((rel - tStormEnd) / Math.max(1e-4, ELDRITCH_BLOOD_P2P3_RETURN_DRIFT_SEC), 0, 1);
+      const e = u * u * (3 - 2 * u);
+      bloom.depthsEldritchP2P3ScriptedOpacity = e;
+      if (!p2P3ReturnAnchored) {
+        p2P3ReturnAnchored = true;
+        bloom.depthsEldritchP2P3ReturnFromX = midX;
+        bloom.depthsEldritchP2P3ReturnFromY = b.y1 + 200;
+      }
+      const fx = Number(bloom.depthsEldritchP2P3ReturnFromX);
+      const fy = Number(bloom.depthsEldritchP2P3ReturnFromY);
+      const tx = clamp(player.x, fx - 200, fx + 200);
+      bloom.x = smooth(fx, tx, e);
+      bloom.y = smooth(fy, capY, e);
+    }
+
+    bloom.dir.x = bloom.x < player.x ? -1 : 1;
+    bloom.dir.y = -0.35;
+    const dlen = Math.hypot(bloom.dir.x, bloom.dir.y) || 1;
+    bloom.dir.x /= dlen;
+    bloom.dir.y /= dlen;
   }
 
   function scheduleP2GapFromSpellEnd(simElapsed) {
     if (simElapsed - p2PhaseEnterSim >= ELDRITCH_BLOOD_PHASE2_DURATION_SEC) {
-      endP2Wave();
+      beginP2ToP3Interlude(simElapsed);
       return;
     }
     p2Mode = "gap";
@@ -582,7 +783,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       clearBloomLiftPrepFields(bloom);
     }
     scheduleP2GapFromSpellEnd(simElapsed);
-    p2StrikeIndex = 1;
+    p2StrikeIndex = (p2StrikeIndex + 1) % 3;
   }
 
   function setupPostCageDashSegmentForRound(
@@ -1383,7 +1584,258 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       clearBloomLiftPrepFields(bloom);
     }
     scheduleP2GapFromSpellEnd(simElapsed);
-    p2StrikeIndex = 0;
+    p2StrikeIndex = (p2StrikeIndex + 1) % 3;
+  }
+
+  function triplicateCloneLayout(player, anchorX, anchorY) {
+    const mx = player.x - anchorX;
+    const my = player.y - anchorY;
+    const ml = Math.hypot(mx, my) || 1;
+    const fx = mx / ml;
+    const fy = my / ml;
+    const px = -fy;
+    const py = fx;
+    const R = P2_TRIPLICATE_SPLIT_RADIUS_PX;
+    return [
+      { x: anchorX + px * R - fx * 44, y: anchorY + py * R - fy * 44 },
+      { x: anchorX + fx * 72, y: anchorY + fy * 72 },
+      { x: anchorX - px * R - fx * 44, y: anchorY - py * R - fy * 44 },
+    ];
+  }
+
+  function beginP2TriplicateStrike(bloom) {
+    const sim = getSimElapsed();
+    const player = getPlayer();
+    clearBloomLiftPrepFields(bloom);
+    bloom.depthsEldritchLightningCastActive = false;
+    bloom.depthsEldritchBarrageAttackActive = false;
+    bloom.depthsCastLiftActive = true;
+    bloom.depthsEldritchOrbStrikeChanneling = true;
+    bloom.depthsEldritchTriplicateScripted = true;
+    bloom.depthsEldritchTelegraphHoldUntil =
+      sim +
+      P2_TRIPLICATE_GLOW_SEC +
+      P2_TRIPLICATE_SPLIT_SEC +
+      P2_TRIPLICATE_LIGHTNING_FORM_SEC +
+      P2_TRIPLICATE_ATTACK_WINDOW_SEC +
+      P2_TRIPLICATE_REVERT_SEC +
+      P2_TRIPLICATE_MERGE_SEC +
+      2;
+    p2Mode = "gap";
+    const ax = bloom.x;
+    const ay = bloom.y;
+    const c0 = { x: ax, y: ay };
+    p2TriplicateStrike = {
+      phase: "glow",
+      phaseStartSim: sim,
+      anchorX: ax,
+      anchorY: ay,
+      clones: [c0, { x: ax, y: ay }, { x: ax, y: ay }],
+      layout: triplicateCloneLayout(player, ax, ay),
+      attackWindowEndSim: 0,
+      cloneStates: [],
+      mergeTargetX: ax,
+      mergeTargetY: ay,
+    };
+  }
+
+  function finishP2TriplicateStrike(simElapsed) {
+    p2TriplicateStrike = null;
+    const bloom = getBloomHunter();
+    if (bloom) {
+      bloom.depthsEldritchTriplicateScripted = false;
+      bloom.depthsEldritchOrbStrikeChanneling = false;
+      bloom.depthsCastLiftActive = false;
+      bloom.depthsEldritchTelegraphHoldUntil = 0;
+      bloom.depthsEldritchPostCageLightningSprite = false;
+      bloom.depthsEldritchDashTrail = null;
+      bloom.depthsPostCageLightningContactUntil = 0;
+      clearBloomLiftPrepFields(bloom);
+    }
+    scheduleP2GapFromSpellEnd(simElapsed);
+    p2StrikeIndex = (p2StrikeIndex + 1) % 3;
+  }
+
+  function syncBloomToTriplicateCenter(bloom, T) {
+    const mid = T.clones[1];
+    if (mid && Number.isFinite(mid.x) && Number.isFinite(mid.y)) {
+      bloom.x = mid.x;
+      bloom.y = mid.y;
+    }
+  }
+
+  function tickP2TriplicateStrike(dt) {
+    const sim = getSimElapsed();
+    const bloom = getBloomHunter();
+    const player = getPlayer();
+    const T = p2TriplicateStrike;
+    if (!T) return;
+    if (!bloom) {
+      p2TriplicateStrike = null;
+      clearBloomScriptedTelegraph();
+      return;
+    }
+
+    const age = sim - T.phaseStartSim;
+
+    if (T.phase === "glow") {
+      if (age >= P2_TRIPLICATE_GLOW_SEC) {
+        T.phase = "split";
+        T.phaseStartSim = sim;
+        T.layout = triplicateCloneLayout(player, T.anchorX, T.anchorY);
+      }
+      syncBloomToTriplicateCenter(bloom, T);
+      return;
+    }
+
+    if (T.phase === "split") {
+      T.layout = triplicateCloneLayout(player, T.anchorX, T.anchorY);
+      const u = clamp(age / Math.max(1e-4, P2_TRIPLICATE_SPLIT_SEC), 0, 1);
+      const e = u * u * (3 - 2 * u);
+      const lay = T.layout;
+      if (lay && lay.length === 3) {
+        for (let i = 0; i < 3; i++) {
+          T.clones[i].x = T.anchorX + (lay[i].x - T.anchorX) * e;
+          T.clones[i].y = T.anchorY + (lay[i].y - T.anchorY) * e;
+        }
+      }
+      syncBloomToTriplicateCenter(bloom, T);
+      if (age >= P2_TRIPLICATE_SPLIT_SEC) {
+        T.phase = "lightningForm";
+        T.phaseStartSim = sim;
+      }
+      return;
+    }
+
+    if (T.phase === "lightningForm") {
+      bloom.depthsEldritchPostCageLightningSprite = true;
+      syncBloomToTriplicateCenter(bloom, T);
+      if (age >= P2_TRIPLICATE_LIGHTNING_FORM_SEC) {
+        T.phase = "attack";
+        T.phaseStartSim = sim;
+        T.attackWindowEndSim = sim + P2_TRIPLICATE_ATTACK_WINDOW_SEC;
+        T.cloneStates = [];
+        for (let i = 0; i < 3; i++) {
+          T.cloneStates.push({
+            mode: "cooldown",
+            cooldownUntilSim: sim + i * 0.14,
+            telegraphStartSim: 0,
+            aimPx: 0,
+            aimPy: 0,
+            dashT0: 0,
+            fx: 0,
+            fy: 0,
+            tx: 0,
+            ty: 0,
+            dashDealt: false,
+          });
+        }
+      }
+      return;
+    }
+
+    if (T.phase === "attack") {
+      bloom.depthsEldritchPostCageLightningSprite = true;
+      const pr = Number(player.r) || PLAYER_RADIUS;
+      const hardStop = T.attackWindowEndSim + P2_TRIPLICATE_DASH_SEC + 0.12;
+
+      for (let i = 0; i < 3; i++) {
+        const st = T.cloneStates[i];
+        const c = T.clones[i];
+        if (st.mode === "cooldown") {
+          if (sim >= st.cooldownUntilSim && sim < T.attackWindowEndSim) {
+            st.mode = "telegraph";
+            st.telegraphStartSim = sim;
+            st.aimPx = player.x;
+            st.aimPy = player.y;
+          }
+        } else if (st.mode === "telegraph") {
+          if (sim - st.telegraphStartSim >= P2_TRIPLICATE_TELEGRAPH_SEC) {
+            st.mode = "dash";
+            st.dashT0 = sim;
+            st.fx = c.x;
+            st.fy = c.y;
+            let dx = st.aimPx - st.fx;
+            let dy = st.aimPy - st.fy;
+            let len = Math.hypot(dx, dy);
+            if (len < 12) {
+              dx = player.x - st.fx;
+              dy = player.y - st.fy;
+              len = Math.hypot(dx, dy) || 1;
+            }
+            const travel = len + P2_TRIPLICATE_DASH_OVERSHOOT_PX;
+            st.tx = st.fx + (dx / len) * travel;
+            st.ty = st.fy + (dy / len) * travel;
+            st.dashDealt = false;
+          }
+        } else if (st.mode === "dash") {
+          const u = clamp((sim - st.dashT0) / Math.max(1e-4, P2_TRIPLICATE_DASH_SEC), 0, 1);
+          const ee = u * u * (3 - 2 * u);
+          c.x = st.fx + (st.tx - st.fx) * ee;
+          c.y = st.fy + (st.ty - st.fy) * ee;
+          if (!st.dashDealt && !getRunDead()) {
+            const dHit = pointToSegmentDistance(player.x, player.y, st.fx, st.fy, c.x, c.y);
+            if (dHit <= P2_TRIPLICATE_DASH_HIT_HW + pr * 0.95) {
+              st.dashDealt = true;
+              damagePlayerThroughPath(1, {
+                sourceX: c.x,
+                sourceY: c.y,
+                eldritchBloodAttack: "p2TriplicateDash",
+              });
+            }
+          }
+          if (sim - st.dashT0 >= P2_TRIPLICATE_DASH_SEC) {
+            st.mode = "cooldown";
+            st.cooldownUntilSim = sim + randRange(P2_TRIPLICATE_PAUSE_LO_SEC, P2_TRIPLICATE_PAUSE_HI_SEC + 1e-6);
+          }
+        }
+      }
+
+      syncBloomToTriplicateCenter(bloom, T);
+      const allBetweenCombos = T.cloneStates.every((s) => s.mode === "cooldown");
+      if ((sim >= T.attackWindowEndSim && allBetweenCombos) || sim >= hardStop) {
+        T.phase = "revert";
+        T.phaseStartSim = sim;
+        bloom.depthsEldritchPostCageLightningSprite = false;
+        bloom.depthsEldritchDashTrail = null;
+      }
+      return;
+    }
+
+    if (T.phase === "revert") {
+      syncBloomToTriplicateCenter(bloom, T);
+      if (age >= P2_TRIPLICATE_REVERT_SEC) {
+        T.phase = "merge";
+        T.phaseStartSim = sim;
+        T.mergeTargetX = T.clones[1].x;
+        T.mergeTargetY = T.clones[1].y;
+        T.mergeStart0 = { x: T.clones[0].x, y: T.clones[0].y };
+        T.mergeStart2 = { x: T.clones[2].x, y: T.clones[2].y };
+      }
+      return;
+    }
+
+    if (T.phase === "merge") {
+      const u = clamp(age / Math.max(1e-4, P2_TRIPLICATE_MERGE_SEC), 0, 1);
+      const e = u * u * (3 - 2 * u);
+      const mx = T.mergeTargetX;
+      const my = T.mergeTargetY;
+      const m0 = T.mergeStart0;
+      const m2 = T.mergeStart2;
+      if (m0 && m2) {
+        T.clones[0].x = m0.x + (mx - m0.x) * e;
+        T.clones[0].y = m0.y + (my - m0.y) * e;
+        T.clones[2].x = m2.x + (mx - m2.x) * e;
+        T.clones[2].y = m2.y + (my - m2.y) * e;
+      }
+      syncBloomToTriplicateCenter(bloom, T);
+      if (age >= P2_TRIPLICATE_MERGE_SEC) {
+        bloom.x = mx;
+        bloom.y = my;
+        finishP2TriplicateStrike(sim);
+      }
+      return;
+    }
   }
 
   function tickP2SwarmStrike(dt) {
@@ -1517,10 +1969,17 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       return;
     }
 
-    if (macroPhase >= 4) return;
+    if (macroPhase === 4) {
+      tickP2P3Interlude(dt);
+      return;
+    }
+
+    if (macroPhase === 5) {
+      return;
+    }
 
     if (macroPhase === 3 && simElapsed - p2PhaseEnterSim >= ELDRITCH_BLOOD_PHASE2_DURATION_SEC) {
-      endP2Wave();
+      beginP2ToP3Interlude(simElapsed);
       return;
     }
 
@@ -1529,6 +1988,10 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
     if (floatingCageStrike) {
       tickFloatingCageStrike(dt);
+      return;
+    }
+    if (p2TriplicateStrike) {
+      tickP2TriplicateStrike(dt);
       return;
     }
     if (p2SwarmStrike) {
@@ -1594,11 +2057,106 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
           bloom.depthsCastLiftActive = true;
         }
         if (simElapsed >= p2NextAttackSim && bloom) {
-          if (p2StrikeIndex % 2 === 0) beginFloatingCageStrike(bloom);
-          else beginP2SwarmStrike(bloom);
+          const k = p2StrikeIndex % 3;
+          if (k === 0) beginFloatingCageStrike(bloom);
+          else if (k === 1) beginP2SwarmStrike(bloom);
+          else beginP2TriplicateStrike(bloom);
         }
       }
       return;
+    }
+  }
+
+  function drawP2TriplicateUnder(ctx, bloom) {
+    const T = p2TriplicateStrike;
+    if (!T || !bloom) return;
+    const sim = getSimElapsed();
+    const player = getPlayer();
+    const pulse = 0.5 + 0.5 * Math.sin(sim * 17);
+
+    if (T.phase === "glow" || T.phase === "split") {
+      for (let i = 0; i < 3; i++) {
+        const c = T.clones[i];
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const grd = ctx.createRadialGradient(c.x, c.y, 8, c.x, c.y, 52 + pulse * 14);
+        grd.addColorStop(0, `rgba(255, 230, 255, ${0.32 + 0.22 * pulse})`);
+        grd.addColorStop(0.5, `rgba(160, 200, 255, ${0.2})`);
+        grd.addColorStop(1, "rgba(20, 40, 80, 0)");
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 48, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    if (T.phase === "attack" && T.cloneStates) {
+      for (let i = 0; i < 3; i++) {
+        const st = T.cloneStates[i];
+        if (st.mode !== "telegraph") continue;
+        const c = T.clones[i];
+        const u = clamp((sim - st.telegraphStartSim) / Math.max(1e-4, P2_TRIPLICATE_TELEGRAPH_SEC), 0, 1);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.strokeStyle = `rgba(255, 200, 255, ${0.22 + 0.52 * u})`;
+        ctx.lineWidth = 4 + 16 * u;
+        ctx.lineCap = "round";
+        ctx.shadowColor = "rgba(255, 220, 255, 0.55)";
+        ctx.shadowBlur = 12 + 14 * u;
+        const ax = Number.isFinite(st.aimPx) ? st.aimPx : player.x;
+        const ay = Number.isFinite(st.aimPy) ? st.aimPy : player.y;
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(ax, ay);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  function drawP2TriplicateOver(ctx, bloom) {
+    const T = p2TriplicateStrike;
+    if (!T || !bloom) return;
+    const sim = getSimElapsed();
+    const age = sim - T.phaseStartSim;
+    const flick = 0.55 + 0.45 * Math.sin(sim * 38);
+
+    const drawLightningOrb = (x, y) => {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const g = ctx.createRadialGradient(x, y, 4, x, y, 40);
+      g.addColorStop(0, `rgba(255, 252, 255, ${0.82 * flick})`);
+      g.addColorStop(0.35, `rgba(200, 230, 255, ${0.52 * flick})`);
+      g.addColorStop(0.7, `rgba(120, 180, 255, ${0.26 * flick})`);
+      g.addColorStop(1, "rgba(30, 60, 120, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, 36, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    };
+
+    if (T.phase === "lightningForm" || T.phase === "attack") {
+      for (let i = 0; i < 3; i++) {
+        const c = T.clones[i];
+        drawLightningOrb(c.x, c.y);
+      }
+    }
+
+    if (T.phase === "revert" || T.phase === "merge") {
+      const dark = T.phase === "revert" ? clamp(age / Math.max(1e-4, P2_TRIPLICATE_REVERT_SEC), 0, 1) : 1;
+      const mergeT = T.phase === "merge" ? clamp(age / Math.max(1e-4, P2_TRIPLICATE_MERGE_SEC), 0, 1) : 0;
+      const a = 0.18 + 0.42 * dark * (1 - mergeT * 0.88);
+      for (let i = 0; i < 3; i++) {
+        const c = T.clones[i];
+        ctx.save();
+        ctx.fillStyle = `rgba(4, 6, 18, ${a})`;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 56, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
   }
 
@@ -1606,6 +2164,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   function drawUnderHunters(ctx) {
     if (!isDepthsBossFightLevel()) return;
     const bloom = getBloomHunter();
+    drawP2TriplicateUnder(ctx, bloom);
     const fc = floatingCageStrike;
     const ctrCage = fc ? getFloatingCageCenterWorldXY() : null;
     if (fc && ctrCage && FLOATING_CAGE_INTERIOR_PHASES.has(fc.phase)) {
@@ -1782,6 +2341,8 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
   /** FX that should sit on top of hunter sprites (projectiles, bright cores, …). */
   function drawOverHunters(ctx) {
     if (!isDepthsBossFightLevel()) return;
+    const bloom = getBloomHunter();
+    drawP2TriplicateOver(ctx, bloom);
     const b = getWorldDrawBounds();
     const yTop = b.y0;
     const yBot = b.y1;
@@ -1802,36 +2363,37 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
         }
       }
     }
-    if (!homingOrbStrike) return;
-    const simElapsed = getSimElapsed();
-    const o = homingOrbStrike;
-    const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 18 + (o.phase === "charge" ? 0 : 2.1));
-    const cx = o.x;
-    const cy = o.y;
-    const r = ORB_RADIUS * (o.phase === "charge" ? 0.72 + 0.28 * pulse : 1);
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    const grd = ctx.createRadialGradient(cx, cy, r * 0.12, cx, cy, r * 2.15);
-    grd.addColorStop(0, `rgba(255, 252, 255, ${0.75 + 0.2 * pulse})`);
-    grd.addColorStop(0.4, `rgba(200, 170, 255, ${0.55})`);
-    grd.addColorStop(0.72, `rgba(120, 70, 190, ${0.38})`);
-    grd.addColorStop(1, "rgba(30, 10, 60, 0)");
-    ctx.fillStyle = grd;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r * 2.05, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalCompositeOperation = "source-over";
-    ctx.strokeStyle = `rgba(240, 220, 255, ${0.55 + 0.25 * pulse})`;
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
+    if (homingOrbStrike) {
+      const simElapsed = getSimElapsed();
+      const o = homingOrbStrike;
+      const pulse = 0.5 + 0.5 * Math.sin(simElapsed * 18 + (o.phase === "charge" ? 0 : 2.1));
+      const cx = o.x;
+      const cy = o.y;
+      const r = ORB_RADIUS * (o.phase === "charge" ? 0.72 + 0.28 * pulse : 1);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const grd = ctx.createRadialGradient(cx, cy, r * 0.12, cx, cy, r * 2.15);
+      grd.addColorStop(0, `rgba(255, 252, 255, ${0.75 + 0.2 * pulse})`);
+      grd.addColorStop(0.4, `rgba(200, 170, 255, ${0.55})`);
+      grd.addColorStop(0.72, `rgba(120, 70, 190, ${0.38})`);
+      grd.addColorStop(1, "rgba(30, 10, 60, 0)");
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 2.05, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = `rgba(240, 220, 255, ${0.55 + 0.25 * pulse})`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   /**
    * Dev-only: abort any scripted beat and start one immediately (Depths L5 boss chase).
-   * @param {string} spellId `p1_orb` | `p1_lightning` | `p1_barrage` | `p2_cage` | `p2_swarm`
+   * @param {string} spellId `p1_orb` | `p1_lightning` | `p1_barrage` | `p2_cage` | `p2_swarm` | `p2_triplicate` | `interlude_p1_p2` | `interlude_p2_p3`
    * @returns {{ ok: true } | { ok: false, reason: string }}
    */
   function debugForceEldritchSpell(spellId) {
@@ -1852,6 +2414,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     eldritchBarrageStrike = null;
     floatingCageStrike = null;
     p2SwarmStrike = null;
+    p2TriplicateStrike = null;
     tentacleHitSim = 0;
     tentacleLastK = -1;
     p1Mode = "gap";
@@ -1899,6 +2462,31 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
       p2StrikeIndex = 1;
       if (bloom) bloom.depthsEldritchPhase2Tone = true;
       beginP2SwarmStrike(bloom);
+      return { ok: true };
+    }
+    if (spellId === "p2_triplicate") {
+      macroPhase = 3;
+      p2PhaseEnterSim = sim;
+      p2Mode = "gap";
+      p2NextAttackSim = sim;
+      p2StrikeIndex = 2;
+      if (bloom) bloom.depthsEldritchPhase2Tone = true;
+      beginP2TriplicateStrike(bloom);
+      return { ok: true };
+    }
+    if (spellId === "interlude_p1_p2") {
+      macroPhase = 2;
+      p1Mode = "gap";
+      if (bloom) {
+        bloom.depthsBetweenPhasesStartSim = sim;
+        bloom.depthsBetweenPhasesUntil = sim + ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC;
+        bloom.depthsEldritchPhase2Tone = false;
+        bloom.depthsEldritchPhase3Tone = false;
+      }
+      return { ok: true };
+    }
+    if (spellId === "interlude_p2_p3") {
+      beginP2ToP3Interlude(sim);
       return { ok: true };
     }
     return { ok: false, reason: "unknown_spell" };

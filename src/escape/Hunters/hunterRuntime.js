@@ -1423,6 +1423,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
       if (h.type === "depthsEldritchBloom") {
         const waveY = getDepthsBossRisingWaveFrontY();
+        if (h.depthsEldritchTriplicateScripted) {
+          continue;
+        }
+        if (h.depthsEldritchP2P3InterludeScripted) {
+          continue;
+        }
         if (h.depthsEldritchPostCageScripted) {
           continue;
         }

@@ -120,7 +120,10 @@ import {
   getSwampBootlegSidebarRows,
 } from "./swamp/swampBootlegRuntime.js";
 import { createSafehouseHexFlow } from "./specials/safehouseHexFlow.js";
-import { createEldritchBloodFlow } from "./specials/EldritchBlood.js";
+import {
+  createEldritchBloodFlow,
+  ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC,
+} from "./specials/EldritchBlood.js";
 import { createEventHexController } from "./WorldGeneration/eventTiles/eventController.js";
 import { dropJokerRewardFromSpecialEvent } from "./items/jokerEventReward.js";
 import { createHunterRuntime } from "./Hunters/hunterRuntime.js";
@@ -2046,6 +2049,102 @@ function boot() {
       ctx.restore();
     }
 
+    const p2p3BloomFx = findDepthsEldritchBloomHunter();
+    if (p2p3BloomFx?.depthsEldritchP2P3StormAmbientActive && isDepthsBossFightLevel()) {
+      const t0s = Number(p2p3BloomFx.depthsEldritchP2P3StormBurstStartSim ?? 0);
+      const trs = simElapsed - t0s;
+      if (trs >= 0 && trs < ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC) {
+        const intv = 0.32;
+        const washD = 0.26;
+        const xMid = x0 + w * 0.5;
+        const yMid = y0 + h * 0.5;
+        const diagBase = Math.hypot(w, h) * 0.52;
+        for (let wi = 0; wi < 44; wi++) {
+          if (wi * intv > ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC + washD) break;
+          const lt = trs - wi * intv;
+          if (lt < 0 || lt >= washD) continue;
+          const progress = lt / washD;
+          const waveIdx = 95000 + wi;
+          const shell = Math.sin(Math.PI * progress);
+          const bandAngle = depthsStormHash01(waveIdx + 923) * Math.PI * 2;
+          const bandThickness = 58 + depthsStormHash01(waveIdx + 614) * 72;
+          const diag = diagBase + bandThickness;
+          const xPosBase = -diag + progress * (2 * diag);
+          const ripplePhase = simElapsed * 2.05 + wi * 2.71;
+          const kRipple = 0.0112;
+          const ampCrest = bandThickness * 0.42;
+          const ampChop = bandThickness * 0.13;
+
+          ctx.save();
+          ctx.translate(xMid, yMid);
+          ctx.rotate(bandAngle);
+          ctx.globalCompositeOperation = "screen";
+          const g = ctx.createLinearGradient(
+            xPosBase - bandThickness * 2.25,
+            0,
+            xPosBase + bandThickness * 2.25,
+            0,
+          );
+          const a0 = 0.07 + shell * 0.24;
+          g.addColorStop(0, "rgba(255, 255, 255, 0)");
+          g.addColorStop(0.25, `rgba(220, 238, 252, ${a0 * 0.48})`);
+          g.addColorStop(0.5, `rgba(248, 252, 255, ${a0 * 0.68})`);
+          g.addColorStop(0.72, `rgba(230, 244, 255, ${a0 * 0.5})`);
+          g.addColorStop(1, "rgba(255, 255, 255, 0)");
+          ctx.fillStyle = g;
+          ctx.fillRect(xPosBase - bandThickness * 2.5, -diag * 1.2, bandThickness * 5, diag * 2.4);
+
+          ctx.lineJoin = "round";
+          ctx.lineCap = "round";
+          for (let layer = 0; layer < 3; layer++) {
+            ctx.globalAlpha = (0.18 + shell * 0.32) * (1 - layer * 0.24);
+            ctx.strokeStyle = layer === 0 ? "rgba(255, 255, 255, 0.88)" : "rgba(210, 236, 255, 0.72)";
+            ctx.lineWidth = bandThickness * (0.46 - layer * 0.11);
+            if (layer === 0) {
+              ctx.shadowColor = "rgba(186, 230, 253, 0.5)";
+              ctx.shadowBlur = 12;
+            } else {
+              ctx.shadowBlur = 0;
+            }
+            ctx.beginPath();
+            let first = true;
+            for (let y = -diag * 1.18; y <= diag * 1.18; y += 5) {
+              const xc =
+                xPosBase +
+                ampCrest * Math.sin(y * kRipple + ripplePhase + layer * 1.05) +
+                ampChop * Math.sin(y * kRipple * 2.65 + ripplePhase * 1.3 + layer);
+              if (first) {
+                ctx.moveTo(xc, y);
+                first = false;
+              } else ctx.lineTo(xc, y);
+            }
+            ctx.stroke();
+          }
+          ctx.shadowBlur = 0;
+          ctx.globalAlpha = 0.09 + shell * 0.14;
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.52)";
+          ctx.lineWidth = 1.25;
+          for (let r = 0; r < 4; r++) {
+            const xOff = (r - 1.5) * bandThickness * 0.38;
+            ctx.beginPath();
+            let first2 = true;
+            for (let y = -diag * 1.12; y <= diag * 1.12; y += 9) {
+              const xc =
+                xPosBase +
+                xOff +
+                ampCrest * 0.55 * Math.sin(y * kRipple * 1.15 + ripplePhase + r * 0.7);
+              if (first2) {
+                ctx.moveTo(xc, y);
+                first2 = false;
+              } else ctx.lineTo(xc, y);
+            }
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+    }
+
     const strike01 = (n) => ((n * 134775813 + 1) & 0x7fffffff) / 0x7fffffff;
     const period = 3.6 + strike01(Math.floor(simElapsed * 0.12)) * 4.4;
     const cycle = simElapsed % period;
@@ -2095,6 +2194,22 @@ function boot() {
       const baseSeed = strikeIdx * 2654435761 + Math.floor(period * 1000);
       if (inStrike1) drawOneBolt(cycle / flashDur, baseSeed);
       if (inStrike2) drawOneBolt((cycle - t2) / flashDur2, baseSeed + 0x9e3779b9);
+    }
+
+    const p2p3BloomLt = findDepthsEldritchBloomHunter();
+    if (p2p3BloomLt?.depthsEldritchP2P3StormAmbientActive && isDepthsBossFightLevel()) {
+      const t0l = Number(p2p3BloomLt.depthsEldritchP2P3StormBurstStartSim ?? 0);
+      const trl = simElapsed - t0l;
+      if (trl >= 0 && trl < ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC) {
+        const every = 0.085;
+        const n = Math.floor(trl / every);
+        const loc = (trl % every) / every;
+        if (loc < 0.28) {
+          const uBolt = loc / 0.28;
+          drawOneBolt(uBolt, n * 199971 + 17000);
+          if (strike01(n + 501) < 0.58) drawOneBolt(uBolt * 0.85, n * 199971 + 444881);
+        }
+      }
     }
   }
 
@@ -4738,6 +4853,48 @@ function boot() {
           }
           depthsStormLastProgress = dw.progress;
         }
+
+        const p2p3BloomPush = findDepthsEldritchBloomHunter();
+        if (
+          p2p3BloomPush?.depthsEldritchP2P3StormPushBurstActive &&
+          isDepthsBossFightLevel() &&
+          !suppressStormForFloatingCage
+        ) {
+          const tStorm0 = Number(p2p3BloomPush.depthsEldritchP2P3StormBurstStartSim ?? 0);
+          const tr = simElapsed - tStorm0;
+          if (tr >= 0 && tr < ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC) {
+            const interval = 0.32;
+            const washDur = 0.26;
+            let wxAcc = 0;
+            let wyAcc = 0;
+            for (let wi = 0; wi < 40; wi++) {
+              if (wi * interval > ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC + washDur) break;
+              const lt = tr - wi * interval;
+              if (lt < 0 || lt >= washDur) continue;
+              const progress = lt / washDur;
+              const env = Math.sin(Math.PI * progress);
+              const bandAngle = depthsStormHash01(wi + 9923) * Math.PI * 2;
+              const pushSpeed =
+                PLAYER_SPEED *
+                (DEPTHS_STORM_WAVE_PUSH_PEAK_MULT * env + DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT);
+              wxAcc += Math.cos(bandAngle) * pushSpeed * dt;
+              wyAcc += Math.sin(bandAngle) * pushSpeed * dt;
+            }
+            if (wxAcc !== 0 || wyAcc !== 0) {
+              const obsForWave = obstaclesForPlayerCollision();
+              const waveDist = Math.hypot(wxAcc, wyAcc);
+              const waveSteps = Math.max(1, Math.ceil(waveDist / Math.max(3, player.r * 0.35)));
+              for (let wi = 0; wi < waveSteps; wi++) {
+                player.x += wxAcc / waveSteps;
+                player.y += wyAcc / waveSteps;
+                const wr = resolvePlayerAgainstRects(player.x, player.y, player.r, obsForWave);
+                player.x = wr.x;
+                player.y = wr.y;
+              }
+            }
+          }
+        }
+
         if (
           isWhirlpoolWave &&
           depthsWhirlpoolPhase === "idle" &&

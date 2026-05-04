@@ -74,6 +74,39 @@ function eldritchBossShadedCanvas(img, dw, dh, brightMul) {
   return canvas;
 }
 
+/**
+ * @param {CanvasImageSource} img
+ * @param {number} dw
+ * @param {number} dh
+ * @param {number} nonRedBrightMul — body / purple channel (0 = black)
+ * @param {number} redBrightMul — protected red accents (usually 1; below 1 fades reds last)
+ * @returns {HTMLCanvasElement | null}
+ */
+function eldritchBossShadedDualTone(img, dw, dh, nonRedBrightMul, redBrightMul) {
+  const { canvas, ctx } = ensureEldritchShadeCanvas(dw, dh);
+  if (!ctx || !canvas) return null;
+  ctx.clearRect(0, 0, dw, dh);
+  ctx.drawImage(img, 0, 0, dw, dh);
+  let imageData;
+  try {
+    imageData = ctx.getImageData(0, 0, dw, dh);
+  } catch {
+    return null;
+  }
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i];
+    const g = d[i + 1];
+    const b = d[i + 2];
+    const mul = eldritchProtectedRed(r, g, b) ? redBrightMul : nonRedBrightMul;
+    d[i] = clamp((r * mul) | 0, 0, 255);
+    d[i + 1] = clamp((g * mul) | 0, 0, 255);
+    d[i + 2] = clamp((b * mul) | 0, 0, 255);
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
 /** Frog detonation burst + mud pool grow-in duration (seconds); same easing for both. */
 export const FROG_SPLASH_GROW_SEC = 0.88;
 
@@ -450,13 +483,24 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
   const t = simElapsed;
   const phase = Number(h.bornAt ?? 0) * 0.09;
   const bob = Math.sin(t * 1.25 + phase) * 1.8;
-  const cy = y + bob;
+  const p2p3Until = Number(h.depthsEldritchP2P3InterludeUntil);
+  const p2p3Start = Number(h.depthsEldritchP2P3InterludeStartSim ?? 0);
+  const inP2P3Interlude = p2p3Until > t && p2p3Start > 0;
+  const cy = inP2P3Interlude ? y : y + bob;
   const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
+  const p2p3ScriptedOp = inP2P3Interlude
+    ? clamp(Number(h.depthsEldritchP2P3ScriptedOpacity ?? 1), 0, 1)
+    : 1;
   const maxSpan = r * 2.2 * 2.5;
 
   ctx.save();
-  ctx.globalAlpha = alpha;
+  ctx.globalAlpha = alpha * p2p3ScriptedOp;
   ctx.translate(x, cy);
+
+  if (inP2P3Interlude && p2p3ScriptedOp < 0.008) {
+    ctx.restore();
+    return;
+  }
 
   const bpUntil = Number(h.depthsBetweenPhasesUntil);
   const bpStart = Number(h.depthsBetweenPhasesStartSim ?? 0);
@@ -640,57 +684,151 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
   if (inInterlude) {
     const pull = inhaleEase;
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    const streamN = 17;
-    for (let i = 0; i < streamN; i++) {
-      const ang = (i / streamN) * TAU + t * (0.55 + pull * 2.1);
-      const rOut = maxSpan * (1.02 - 0.42 * pull);
-      const wob = Math.sin(t * 19 + i * 0.9) * maxSpan * 0.05 * pull;
-      const x0 = Math.cos(ang) * rOut + Math.cos(ang + 0.7) * wob;
-      const y0 = Math.sin(ang) * rOut + Math.sin(ang + 0.7) * wob;
-      const cxm = Math.cos(ang + 0.5) * rOut * 0.35 * pull;
-      const cym = Math.sin(ang + 0.5) * rOut * 0.35 * pull;
-      ctx.strokeStyle = `rgba(220, 50, 80, ${0.1 + 0.38 * pull})`;
-      ctx.lineWidth = 1.8 + pull * 2.4;
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.quadraticCurveTo(cxm, cym, 0, 0);
-      ctx.stroke();
-    }
     ctx.globalCompositeOperation = "source-over";
-    const grd = ctx.createRadialGradient(0, 0, maxSpan * 0.08, 0, 0, maxSpan * 1.15);
-    grd.addColorStop(0, `rgba(40, 6, 18, ${0.55 * pull})`);
-    grd.addColorStop(0.45, `rgba(12, 4, 22, ${0.35 * pull})`);
-    grd.addColorStop(0.78, `rgba(4, 2, 10, ${0.12 * pull})`);
-    grd.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = grd;
+    const grdV = ctx.createRadialGradient(0, 0, maxSpan * 0.08, 0, 0, maxSpan * 1.15);
+    grdV.addColorStop(0, `rgba(40, 6, 18, ${0.5 * pull})`);
+    grdV.addColorStop(0.45, `rgba(12, 4, 22, ${0.32 * pull})`);
+    grdV.addColorStop(0.78, `rgba(4, 2, 10, ${0.1 * pull})`);
+    grdV.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = grdV;
     ctx.beginPath();
     ctx.arc(0, 0, maxSpan * 1.12, 0, TAU);
     ctx.fill();
-    ctx.restore();
+
+    /** Deterministic 0..1 for interlude FX (no allocation). */
+    const ih01 = (n) => ((n * 134775813 + 1) >>> 0) / 4294967296;
+
+    {
+      /** Elder Futhark — just outside blob shell, thick ring; still darker than inner energy. */
+      const runeR = maxSpan * 1.042;
+      const runeSpin = t * 0.24;
+      const nRunes = 26;
+      const runeChars = "ᚠᚢᚦᚨᚱᚲᚷᚹᚺᚾᛁᛃᛇᛈᛉᛊᛏᛒᛖᛗᛚᛜᛝᛟᛞ";
+      const fontPx = clamp(maxSpan * 0.118, 13, 52);
+      const ringEnergy = inhaleSeg ? pull : 0.45 + 0.55 * (1 - burstU01);
+      const ringDim = 0.26 + 0.12 * ringEnergy * (1 - burstU01 * 0.45) + 0.05 * Math.sin(t * 1.55 + phase);
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = `rgba(42, 16, 38, ${0.52 + 0.28 * ringDim})`;
+      ctx.lineWidth = Math.max(2.5, maxSpan * 0.028);
+      ctx.setLineDash([5, 6]);
+      ctx.beginPath();
+      ctx.arc(0, 0, runeR, runeSpin * 0.15, TAU + runeSpin * 0.15);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(0, 0, runeR * 0.972, 0, TAU);
+      ctx.strokeStyle = `rgba(58, 22, 48, ${0.42 + 0.28 * ringDim})`;
+      ctx.lineWidth = Math.max(2, maxSpan * 0.02);
+      ctx.stroke();
+      ctx.font = `${fontPx}px "Times New Roman", "Noto Sans Runic", Tinos, serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (let i = 0; i < nRunes; i++) {
+        const ang = (i / nRunes) * TAU + runeSpin;
+        const ch = runeChars[i % runeChars.length];
+        ctx.save();
+        ctx.rotate(ang);
+        ctx.translate(runeR, 0);
+        ctx.rotate(Math.PI / 2);
+        ctx.fillStyle = `rgba(62, 28, 54, ${0.78 + 0.18 * ringDim})`;
+        ctx.fillText(ch, 0, 0);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    if (inhaleSeg) {
+      ctx.globalCompositeOperation = "lighter";
+      const rLim = maxSpan * 1.02;
+      const blobN = 72;
+      for (let i = 0; i < blobN; i++) {
+        const h0 = ih01(i * 17 + 3);
+        const h1 = ih01(i * 29 + 11);
+        const h2 = ih01(i * 41 + 7);
+        const ang = h0 * TAU + (h1 - 0.5) * 0.22;
+        const speed = 13.5 + h2 * 9;
+        const off = h1 * 2.17 + i * 0.019;
+        let u = (t * speed + off) % 1;
+        if (u < 0) u += 1;
+        const easeIn = u * u * u;
+        const r = rLim * (0.06 + (1 - easeIn) * (0.94 - 0.38 * pull));
+        const wobble = (h2 - 0.5) * maxSpan * 0.016 * (1 - easeIn);
+        const bx = Math.cos(ang) * r + wobble * Math.cos(ang * 2.1);
+        const by = Math.sin(ang) * r + wobble * Math.sin(ang * 2.1);
+        const br = maxSpan * (0.028 + h1 * 0.052) * (0.55 + 0.65 * pull);
+        const trail = 4 * u * (1 - u);
+        const aBlob = trail * trail * (0.26 + 0.48 * pull) * (0.52 + 0.48 * (1 - easeIn));
+        if (aBlob < 0.03) continue;
+        const mix = h2;
+        const cr = Math.floor(220 + mix * 35);
+        const cg = Math.floor(40 + mix * 90);
+        const cb = Math.floor(95 + mix * 120);
+        const g = ctx.createRadialGradient(bx, by, 0, bx, by, br * 1.35);
+        g.addColorStop(0, `rgba(255, 252, 255, ${aBlob * 0.95})`);
+        g.addColorStop(0.35, `rgba(${cr}, ${cg}, ${cb}, ${aBlob * 0.88})`);
+        g.addColorStop(0.72, `rgba(90, 20, 75, ${aBlob * 0.35})`);
+        g.addColorStop(1, "rgba(20, 4, 28, 0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(bx, by, br * 1.35, 0, TAU);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = "lighter";
+      const corePulse = 0.35 + 0.65 * pull;
+      const gCore = ctx.createRadialGradient(0, 0, 0, 0, 0, maxSpan * (0.22 + 0.2 * pull));
+      gCore.addColorStop(0, `rgba(255, 235, 245, ${0.35 * corePulse})`);
+      gCore.addColorStop(0.45, `rgba(200, 60, 110, ${0.28 * corePulse})`);
+      gCore.addColorStop(1, "rgba(40, 8, 30, 0)");
+      ctx.fillStyle = gCore;
+      ctx.beginPath();
+      ctx.arc(0, 0, maxSpan * (0.42 + 0.18 * pull), 0, TAU);
+      ctx.fill();
+    }
 
     if (burstU01 > 0.004) {
       const fade = (1 - burstU01) * (1 - burstU01);
-      const ringR = maxSpan * (0.32 + burstEase * 1.48);
+      const shockR = maxSpan * (0.18 + burstEase * 1.62);
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      ctx.strokeStyle = `rgba(255, 200, 220, ${0.62 * fade})`;
-      ctx.lineWidth = 5 + (1 - burstU01) * 10;
+      const gShock = ctx.createRadialGradient(0, 0, shockR * 0.12, 0, 0, shockR * 1.05);
+      gShock.addColorStop(0, `rgba(255, 248, 252, ${0.55 * fade})`);
+      gShock.addColorStop(0.25, `rgba(255, 190, 210, ${0.42 * fade})`);
+      gShock.addColorStop(0.55, `rgba(180, 40, 95, ${0.28 * fade * (1 - burstEase * 0.4)})`);
+      gShock.addColorStop(0.82, `rgba(70, 12, 60, ${0.12 * fade})`);
+      gShock.addColorStop(1, "rgba(8, 0, 12, 0)");
+      ctx.fillStyle = gShock;
       ctx.beginPath();
-      ctx.arc(0, 0, ringR, 0, TAU);
-      ctx.stroke();
-      ctx.strokeStyle = `rgba(160, 40, 100, ${0.45 * fade})`;
-      ctx.lineWidth = 2.2;
-      ctx.beginPath();
-      ctx.arc(0, 0, ringR * (0.88 - 0.1 * burstEase), 0, TAU);
-      ctx.stroke();
-      ctx.globalAlpha = 0.35 * fade;
-      ctx.fillStyle = "rgba(90, 20, 60, 0.25)";
-      ctx.beginPath();
-      ctx.arc(0, 0, ringR * 0.55, 0, TAU);
+      ctx.arc(0, 0, shockR * 1.05, 0, TAU);
       ctx.fill();
+
+      const outN = 48;
+      for (let i = 0; i < outN; i++) {
+        const h0 = ih01(i * 19 + 5);
+        const h1 = ih01(i * 31 + 13);
+        const h2 = ih01(i * 47 + 2);
+        const ang = h0 * TAU;
+        const lag = h1 * 0.22;
+        const e = clamp((burstEase - lag) / 0.78, 0, 1);
+        const ee = e * e * (3 - 2 * e);
+        const dist = maxSpan * (0.28 + ee * 1.45);
+        const ox = Math.cos(ang) * dist;
+        const oy = Math.sin(ang) * dist;
+        const obr = maxSpan * (0.05 + h2 * 0.09) * (1 - ee * 0.35);
+        const aOut = fade * (0.38 + 0.42 * (1 - ee)) * (0.55 + 0.45 * h1);
+        const g2 = ctx.createRadialGradient(ox, oy, 0, ox, oy, obr * 1.4);
+        g2.addColorStop(0, `rgba(255, 240, 248, ${aOut * 0.9})`);
+        g2.addColorStop(0.4, `rgba(255, 140, 170, ${aOut * 0.65})`);
+        g2.addColorStop(0.75, `rgba(120, 24, 70, ${aOut * 0.28})`);
+        g2.addColorStop(1, "rgba(12, 0, 14, 0)");
+        ctx.fillStyle = g2;
+        ctx.beginPath();
+        ctx.arc(ox, oy, obr * 1.4, 0, TAU);
+        ctx.fill();
+      }
       ctx.restore();
     }
+    ctx.restore();
   }
 
   const lightningSprite = !!h.depthsEldritchPostCageLightningSprite;
@@ -747,7 +885,9 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
             ? 0.54 + pulse * 0.42
             : h.depthsEldritchCageStrikeActive
               ? 0.52 + pulse * 0.4
-              : 0.32 + pulse * 0.78;
+              : h.depthsEldritchPhase3Tone
+                ? 0.34 + pulse * 0.62
+                : 0.32 + pulse * 0.78;
       const shaded = eldritchBossShadedCanvas(img, (dw + 0.5) | 0, (dh + 0.5) | 0, brightMul);
       if (shaded) {
         ctx.drawImage(shaded, -dw * 0.5, -dh * 0.5, dw, dh);
