@@ -36,7 +36,8 @@ export const ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC = 8;
 export const ELDRITCH_BLOOD_PHASE2_DURATION_SEC = ELDRITCH_BLOOD_BOSS_SCRIPTED_PHASE_DURATION_SEC;
 /** P2→P3: boss fades out, scripted storm washes + ambient lightning, then drifts back for phase 3. */
 export const ELDRITCH_BLOOD_P2P3_FADE_OUT_SEC = 1.15;
-export const ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC = 5;
+/** Scripted storm during P2→P3: longer window so slower washes + lightning reads clearly. */
+export const ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC = 7.75;
 export const ELDRITCH_BLOOD_P2P3_RETURN_DRIFT_SEC = 1.75;
 export const ELDRITCH_BLOOD_P2_TO_P3_INTERLUDE_SEC =
   ELDRITCH_BLOOD_P2P3_FADE_OUT_SEC + ELDRITCH_BLOOD_P2P3_STORM_AMBIENT_SEC + ELDRITCH_BLOOD_P2P3_RETURN_DRIFT_SEC;
@@ -55,8 +56,8 @@ const POST_CAGE_OUTSIDE_PAD_PX = 70;
 /** After float: lightning column on the boss, lightning sprite form, then three dashes aimed at the locked player position. */
 const POST_CAGE_FLOAT_SEC = 1.28;
 const POST_CAGE_LIGHTNING_FORM_SEC = 0.92;
-const POST_CAGE_DASH_TELEGRAPH_SEC = 0.62;
-const POST_CAGE_DASH_MOVE_SEC = 0.42;
+const POST_CAGE_DASH_TELEGRAPH_SEC = 0.22;
+const POST_CAGE_DASH_MOVE_SEC = 0.32;
 const POST_CAGE_DASH_PAUSE_SEC = 0.52;
 const POST_CAGE_DASH_HIT_HW_PX = 38;
 /** Lightning-ball boss: touch damage + shake (cooldown avoids per-frame hits). */
@@ -181,6 +182,7 @@ function stormHash01(n) {
  * @property {() => number} getSimElapsed
  * @property {() => { x: number; y: number; r: number }} getPlayer
  * @property {() => boolean} getRunDead
+ * @property {() => boolean} [getDepthsVictoryAscentActive] — post-P3: skip scripted boss tick (ascent / win UI handled in `entry.js`).
  * @property {() => boolean} isDepthsBossFightLevel
  * @property {() => boolean} isPlayerInSafehouse
  * @property {() => boolean} getHuntersEnabled
@@ -206,6 +208,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
     getSimElapsed,
     getPlayer,
     getRunDead,
+    getDepthsVictoryAscentActive,
     isDepthsBossFightLevel,
     isPlayerInSafehouse,
     getHuntersEnabled,
@@ -2038,6 +2041,7 @@ export function createEldritchBloodFlow(/** @type {EldritchBloodDeps} */ deps) {
 
   function tick(dt) {
     if (!isDepthsBossFightLevel() || !getHunterRuntime() || !getHuntersEnabled() || getRunDead()) return;
+    if (getDepthsVictoryAscentActive?.()) return;
     if (isPlayerInSafehouse()) return;
     if (fightStartSim <= 0) return;
 

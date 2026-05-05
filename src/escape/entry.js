@@ -128,6 +128,7 @@ import { createEventHexController } from "./WorldGeneration/eventTiles/eventCont
 import { dropJokerRewardFromSpecialEvent } from "./items/jokerEventReward.js";
 import { createHunterRuntime } from "./Hunters/hunterRuntime.js";
 import { clamp, pointToSegmentDistance } from "./Hunters/hunterGeometry.js";
+import creditsRaw from "../assets/credits.txt?raw";
 import { tickAttackRings, drawAttackRings, pushAttackRing } from "./fx/attackRings.js";
 import {
   tickLunaticSprintTierFx,
@@ -224,10 +225,11 @@ const DEPTHS_STORM_WAVE_PERIOD_SEC = 11;
 const DEPTHS_STORM_WAVE_PUSH_PEAK_MULT = 2.62;
 const DEPTHS_STORM_WAVE_PUSH_FLOOR_MULT = 0.34;
 /** P2→P3 scripted storm: horizontal push waves + lightning buckets (storm length from `EldritchBlood`). */
-const ELDRITCH_P2P3_PUSH_GAP_MIN_SEC = 0.4;
-const ELDRITCH_P2P3_PUSH_GAP_MAX_SEC = 0.9;
-const ELDRITCH_P2P3_PUSH_WASH_DUR_SEC = 0.52;
-const ELDRITCH_P2P3_LIGHTNING_BUCKET_SEC = 0.1;
+const ELDRITCH_P2P3_PUSH_GAP_MIN_SEC = 0.88;
+const ELDRITCH_P2P3_PUSH_GAP_MAX_SEC = 1.58;
+const ELDRITCH_P2P3_PUSH_WASH_DUR_SEC = 0.78;
+/** Slower lightning cadence than legacy 0.1s; pairs with larger “mega” strikes in draw. */
+const ELDRITCH_P2P3_LIGHTNING_BUCKET_SEC = 0.26;
 /** Storm progress at which we treat the wash as having “hit” the player (burst scheduling). */
 const DEPTHS_TENTACLE_HIT_PROGRESS = 0.5;
 const DEPTHS_TENTACLE_BURST_PAUSE_SEC = 0.3;
@@ -288,6 +290,86 @@ const DEPTHS_BOSS_SURF_SPIT_APPROACH_RATE = 16;
 const DEPTHS_BOSS_SPLASH_STUN_SEC = 0.1;
 const DEPTHS_BOSS_WAVE_START_BELOW_PLAYER_PX = 420;
 const DEPTHS_BOSS_WAVE_HIT_COOLDOWN_SEC = 0.72;
+/**
+ * Victory ascent (−Y): glow/rays/white saturate by `VISUAL`; player can keep moving fully white until `WIN`,
+ * then the victory panel fades in (beacon anchored at WIN).
+ */
+const DEPTHS_VICTORY_ASCENT_VISUAL_DISTANCE_PX = 1180;
+const DEPTHS_VICTORY_ASCENT_WIN_DISTANCE_PX = 1360;
+/** Normalized ascent (0..1) above which the white wash ramps in (later = more travel on glow/rays only). */
+const DEPTHS_VICTORY_ASCENT_WHITE_START_U = 0.77;
+const DEPTHS_VICTORY_ASCENT_WHITE_END_U = 0.995;
+const DEPTHS_VICTORY_BEACON_PULL_SPEED = 132;
+/** Screen-space rolling credits on full-white phase. */
+const DEPTHS_VICTORY_CREDITS_LINE_STEP_PX = 34;
+/** Delay after full-white where ascent still shows only the white wash. */
+const DEPTHS_VICTORY_CREDITS_START_AFTER_WHITE_PX = 120;
+/** First credit line starts below view and scrolls upward. */
+const DEPTHS_VICTORY_CREDITS_SCREEN_LEAD_PX = 96;
+/** Extra tail after the final line leaves the top edge. */
+const DEPTHS_VICTORY_CREDITS_SCREEN_TAIL_PX = 120;
+/** Keep walking after credits before "You win". */
+const DEPTHS_VICTORY_POST_CREDITS_EXTRA_PX = 500;
+const DEPTHS_VICTORY_CREDITS_EMPTY_LINE_FRAC = 0.52;
+const DEPTHS_VICTORY_CREDITS_WRAP_FRAC_OF_VIEW_W = 0.84;
+
+/**
+ * Wrap `src/assets/credits.txt` lines to fit the viewport width (world-drawn at ascent start).
+ * @param {string} raw
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} wrapWidthPx
+ */
+function buildDepthsVictoryCreditsDisplayLines(raw, ctx, wrapWidthPx) {
+  const linesOut = [];
+  const paras = raw.split(/\r?\n/);
+  const prevFont = ctx.font;
+  ctx.font =
+    '600 20px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+  for (const para of paras) {
+    let t = para
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/!([A-Za-z])/g, "! $1")
+      .replace(/:([A-Za-z])/g, ": $1");
+    if (!t) {
+      linesOut.push("");
+      continue;
+    }
+    const words = t.split(" ");
+    let cur = "";
+    for (const w of words) {
+      const trial = cur ? `${cur} ${w}` : w;
+      if (ctx.measureText(trial).width <= wrapWidthPx) cur = trial;
+      else {
+        if (cur) linesOut.push(cur);
+        cur = w;
+      }
+    }
+    if (cur) linesOut.push(cur);
+  }
+  ctx.font = prevFont;
+  return linesOut;
+}
+
+/**
+ * @param {string[]} displayLines
+ * @returns {{ offs: number[]; lastLineOff: number }}
+ */
+function depthsVictoryCreditsLineOffsets(displayLines) {
+  const offs = [];
+  let acc = 0;
+  for (let i = 0; i < displayLines.length; i++) {
+    offs.push(acc);
+    const step =
+      displayLines[i] === ""
+        ? DEPTHS_VICTORY_CREDITS_LINE_STEP_PX * DEPTHS_VICTORY_CREDITS_EMPTY_LINE_FRAC
+        : DEPTHS_VICTORY_CREDITS_LINE_STEP_PX;
+    acc += step;
+  }
+  const lastLineOff = displayLines.length ? offs[displayLines.length - 1] ?? 0 : 0;
+  return { offs, lastLineOff };
+}
+
 /** Tide sweep: skip obstacle resolution this long after touch / after final spit Y (then clamp once). */
 const DEPTHS_BOSS_SURF_IGNORE_TERRAIN_SEC = 0.2;
 /** After tide deposit: brief delay then dip + rise (sin), timed with splash rings. */
@@ -662,6 +744,13 @@ function boot() {
 
   function obstaclesForPlayerCollision() {
     if (
+      depthsVictoryAscentActive &&
+      depthsVictoryAscentAnchorY - player.y >= depthsVictoryCreditsStartUpPx
+    ) {
+      // Credits phase is drawn over full-white; ignore hidden world collision.
+      return [];
+    }
+    if (
       activeCharacterId === "rogue" &&
       rogueWorld.clubsPhaseThroughObstacles(inventory, player.x, player.y, simElapsed)
     ) {
@@ -873,6 +962,29 @@ function boot() {
 
   /** When true, movement, pickups, specials, and hunters stop (REFERENCE `state.running === false`). */
   let runDead = false;
+  /** Win overlay after Depths L5 P3 beacon; freezes sim like death (separate UI). */
+  let runVictory = false;
+  /** Post–P3 vanish: viewport-top light ascend (~1000px −Y); win at apex / beacon overlap. */
+  let depthsVictoryAscentActive = false;
+  /** Player world Y when ascent began; glow progress uses upward distance from here. */
+  let depthsVictoryAscentAnchorY = 0;
+  /** World target for the victory ascent pull (above anchor, same X as start). */
+  let depthsVictoryBeaconX = 0;
+  let depthsVictoryBeaconY = 0;
+  /** Wrapped lines from `credits.txt`; rebuilt when ascent begins. */
+  let depthsVictoryAscentCreditsDisplayLines = /** @type {string[]} */ ([]);
+  /** Per-line scroll offsets (indexes match `depthsVictoryAscentCreditsDisplayLines`). */
+  let depthsVictoryCreditsOffsPx = /** @type {number[]} */ ([]);
+  /** World X where credits were spawned (player can strafe away from this). */
+  let depthsVictoryCreditsWorldX = 0;
+  /** Upward ascent distance where black-on-white credits begin. */
+  let depthsVictoryCreditsStartUpPx = 0;
+  /** Minimum `anchorY − player.y` before win activates (credits done + post-credits walk). */
+  let depthsVictoryAscentCreditsMinUpPx = 0;
+  /** Path ids visited this run (L2+), for end stats. */
+  const pathsVisitedThisRun = /** @type {Set<string>} */ (new Set());
+  /** Heal crystals actually picked up this run (world collectibles `kind === "heal"`). */
+  let runHealCrystalsCollected = 0;
 
   /** REFERENCE `state.manualPause` — Space toggles; sim halts until movement or Q/W/E/R (Space alone does not resume). */
   let manualPause = false;
@@ -893,6 +1005,12 @@ function boot() {
   const deathStatWaveEl = document.getElementById("death-stat-wave");
   const deathStatHuntersEl = document.getElementById("death-stat-hunters");
   const deathScreenChooseHeroBtn = document.getElementById("death-screen-choose-hero-btn");
+  const victoryScreenEl = document.getElementById("victory-screen");
+  const victoryStatPathsEl = document.getElementById("victory-stat-paths");
+  const victoryStatTimeEl = document.getElementById("victory-stat-time");
+  const victoryStatWavesEl = document.getElementById("victory-stat-waves");
+  const victoryStatHealsEl = document.getElementById("victory-stat-heals");
+  const victoryScreenChooseHeroBtn = document.getElementById("victory-screen-choose-hero-btn");
 
   function hideDeathScreen() {
     if (!deathScreenEl) return;
@@ -910,6 +1028,35 @@ function boot() {
       deathScreenEl.hidden = false;
       deathScreenEl.setAttribute("aria-hidden", "false");
     }
+  }
+
+  function hideVictoryScreen() {
+    if (!victoryScreenEl) return;
+    victoryScreenEl.hidden = true;
+    victoryScreenEl.setAttribute("aria-hidden", "true");
+  }
+
+  function formatPathsVisitedForVictoryStats() {
+    const defs = pathRuntime.getPathDefs();
+    const labels = [...pathsVisitedThisRun]
+      .map((id) => defs.find((d) => d.id === id)?.label ?? id)
+      .sort();
+    return labels.length ? labels.join(", ") : "—";
+  }
+
+  /**
+   * @param {{ pathsLabel: string; timeSec: number; totalWaves: number; healCrystals: number }} stats
+   */
+  function showVictoryScreen(stats) {
+    if (victoryStatPathsEl) victoryStatPathsEl.textContent = stats.pathsLabel;
+    if (victoryStatTimeEl) victoryStatTimeEl.textContent = `${stats.timeSec.toFixed(1)}s`;
+    if (victoryStatWavesEl) victoryStatWavesEl.textContent = String(stats.totalWaves);
+    if (victoryStatHealsEl) victoryStatHealsEl.textContent = String(stats.healCrystals);
+    if (victoryScreenEl) {
+      victoryScreenEl.hidden = false;
+      victoryScreenEl.setAttribute("aria-hidden", "false");
+    }
+    runVictory = true;
   }
 
   /** @type {ReturnType<typeof createPlayerDamage>} */
@@ -1130,12 +1277,23 @@ function boot() {
     wasFloatingCageCagedLastFrame = false;
     eldritchPostCageLightningUiUntil = 0;
     depthsBossSurfSpellsLocked = false;
+    depthsVictoryAscentActive = false;
+    depthsVictoryAscentCreditsDisplayLines.length = 0;
+    depthsVictoryCreditsOffsPx.length = 0;
+    depthsVictoryCreditsWorldX = 0;
+    depthsVictoryCreditsStartUpPx = 0;
+    depthsVictoryAscentCreditsMinUpPx = 0;
     eldritchBlood?.reset();
   }
 
   /** Depths display L5 — boss tide tier; arena/surge/roulette/forge event ticks are skipped (safehouse still runs). */
   function isDepthsBossFightLevel() {
     return pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL;
+  }
+
+  function notePathVisitedForRun() {
+    const id = pathRuntime.getCurrentPathId();
+    if (id) pathsVisitedThisRun.add(id);
   }
 
   /** P2 floating cage `caged`: storm wash, boss surf / tide catch-up, rewind telegraph, and post-land bob must not move the player. */
@@ -1335,7 +1493,7 @@ function boot() {
       }
       const glowBloom = bossForGlow ?? findDepthsEldritchBloomHunter();
       if (glowBloom) glowBloom.depthsRewindGlowUntil = simElapsed + DEPTHS_ELDRITCH_REWIND_GLOW_SEC;
-      if (!runDead) {
+      if (!runDead && !runVictory) {
         const sx = glowBloom ? glowBloom.x : player.x;
         const sy = glowBloom ? glowBloom.y : player.y;
         damagePlayerThroughPath(1, {
@@ -1629,7 +1787,7 @@ function boot() {
 
         playerTimelockUntil = Math.max(playerTimelockUntil, t0 + DEPTHS_BOSS_SPLASH_STUN_SEC);
         playerDamage.bumpScreenShake(21, 0.36);
-        if (!runDead) {
+        if (!runDead && !runVictory) {
           damagePlayerThroughPath(1, {
             sourceX: landX,
             sourceY: landY,
@@ -2201,7 +2359,7 @@ function boot() {
     const inStrike2 = wantDouble && cycle >= t2 && cycle < t2 + flashDur2;
     const strike = inStrike1 || inStrike2;
 
-    const drawOneBolt = (u, seed, salt = 0) => {
+    const drawOneBolt = (u, seed, salt = 0, mega = false) => {
       const alpha = Math.max(0, Math.min(1, u)) * 0.92;
       /** P2→P3 passes `salt` so bolts spread on X; normal strikes keep the original `strike01` placement. */
       const mix = (Math.imul(seed, 0x9e3779b9) + (salt >>> 0)) >>> 0;
@@ -2209,31 +2367,42 @@ function boot() {
         salt === 0
           ? x0 + w * (0.1 + strike01(seed) * 0.8)
           : x0 + w * (0.02 + depthsStormHash01(mix + 1) * 0.96);
-      const segN = 11 + (seed % 6);
+      const segN = (11 + (seed % 6)) + (mega ? 5 : 0);
       ctx.save();
       ctx.globalCompositeOperation = "screen";
-      ctx.globalAlpha = alpha * 0.14;
-      ctx.fillStyle = "rgba(220, 245, 255, 1)";
+      ctx.globalAlpha = alpha * (mega ? 0.28 : 0.14);
+      ctx.fillStyle = "rgba(228, 248, 255, 1)";
       ctx.fillRect(x0, y0, w, h);
 
-      ctx.globalAlpha = alpha * 0.88;
-      ctx.strokeStyle = "rgba(248, 252, 255, 0.95)";
-      ctx.lineWidth = 2.2;
-      ctx.shadowColor = "rgba(186, 230, 253, 0.9)";
-      ctx.shadowBlur = 18;
+      ctx.globalAlpha = alpha * (mega ? 0.97 : 0.88);
+      ctx.strokeStyle = mega ? "rgba(255, 255, 255, 0.98)" : "rgba(248, 252, 255, 0.95)";
+      ctx.lineWidth = mega ? 5.2 + strike01(seed + 9) * 5.5 : 2.2;
+      ctx.shadowColor = mega ? "rgba(210, 245, 255, 0.95)" : "rgba(186, 230, 253, 0.9)";
+      ctx.shadowBlur = mega ? 52 : 18;
       ctx.beginPath();
       let x = sx;
-      let y = y0 + 12 + strike01(seed + 3) * 56;
+      const yStartBias = mega ? 96 : 56;
+      let y = y0 + 12 + strike01(seed + 3) * yStartBias;
       ctx.moveTo(x, y);
+      const jxMul = mega ? 1.42 : 1;
+      const jyMul = mega ? 1.52 : 1;
       for (let s = 0; s < segN; s++) {
         const jx =
-          Math.sin(seed * 0.02 + s * 2.1) * (14 + strike01(seed + s) * 10) + Math.cos(simElapsed * 22 + s) * 5;
-        const jy = 18 + ((s * s * 7 + (seed >>> 3)) % 20);
+          (Math.sin(seed * 0.02 + s * 2.1) * (14 + strike01(seed + s) * 10) + Math.cos(simElapsed * 22 + s) * 5) *
+          jxMul;
+        const jy = (18 + ((s * s * 7 + (seed >>> 3)) % 20)) * jyMul;
         x += jx;
         y += jy;
         ctx.lineTo(x, y);
       }
       ctx.stroke();
+      if (mega) {
+        ctx.globalAlpha = alpha * 0.72;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+        ctx.lineWidth = Math.max(1.2, ctx.lineWidth * 0.22);
+        ctx.shadowBlur = 14;
+        ctx.stroke();
+      }
       ctx.shadowBlur = 0;
       ctx.restore();
     };
@@ -2257,8 +2426,12 @@ function boot() {
         const u2 = Math.sin(Math.PI * clamp((intra - half) / half, 0, 1));
         const saltA = (b * 2654435761) ^ (Math.floor(intra * 100000) + 11);
         const saltB = (b * 1597334677) ^ (Math.floor(intra * 97777) + 9331);
-        if (u1 > 0.04) drawOneBolt(u1, b * 7919 + 11, saltA);
-        if (u2 > 0.04) drawOneBolt(u2, b * 7919 + 9331, saltB);
+        const megaA =
+          depthsStormHash01(Math.floor(b * 7937 + intra * 1000 + Math.floor((t0l % 97) * 1000))) > 0.42;
+        const megaB =
+          !megaA && depthsStormHash01(Math.floor(b * 5821 + intra * 1313 + Math.floor((t0l % 53) * 1000))) > 0.55;
+        if (u1 > 0.04) drawOneBolt(u1, b * 7919 + 11, saltA, megaA);
+        if (u2 > 0.04) drawOneBolt(u2, b * 7919 + 9331, saltB, megaB);
       }
     }
   }
@@ -2346,6 +2519,177 @@ function boot() {
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  function beginDepthsVictoryAscent(/** @type {{ debug?: boolean }} */ opts = {}) {
+    if (runVictory || runDead || depthsVictoryAscentActive) return;
+    if (!opts.debug) {
+      const bloom = findDepthsEldritchBloomHunter();
+      if (!bloom?.depthsEldritchP3BossHidden) return;
+    } else if (!isDepthsBossFightLevel()) {
+      return;
+    }
+    depthsVictoryAscentActive = true;
+    depthsVictoryAscentAnchorY = player.y;
+    depthsVictoryBeaconX = player.x;
+    depthsVictoryBeaconY = depthsVictoryAscentAnchorY - DEPTHS_VICTORY_ASCENT_WIN_DISTANCE_PX;
+    depthsVictoryAscentCreditsDisplayLines = buildDepthsVictoryCreditsDisplayLines(
+      creditsRaw,
+      ctx,
+      canvas.width * DEPTHS_VICTORY_CREDITS_WRAP_FRAC_OF_VIEW_W,
+    );
+    depthsVictoryCreditsWorldX = player.x;
+    const { offs, lastLineOff } = depthsVictoryCreditsLineOffsets(depthsVictoryAscentCreditsDisplayLines);
+    depthsVictoryCreditsOffsPx = offs;
+    depthsVictoryCreditsStartUpPx =
+      DEPTHS_VICTORY_ASCENT_VISUAL_DISTANCE_PX + DEPTHS_VICTORY_CREDITS_START_AFTER_WHITE_PX;
+    const creditsTravelPx =
+      canvas.height +
+      DEPTHS_VICTORY_CREDITS_SCREEN_LEAD_PX +
+      lastLineOff +
+      DEPTHS_VICTORY_CREDITS_SCREEN_TAIL_PX;
+    depthsVictoryAscentCreditsMinUpPx = Math.ceil(
+      depthsVictoryCreditsStartUpPx + creditsTravelPx + DEPTHS_VICTORY_POST_CREDITS_EXTRA_PX,
+    );
+    hunterRuntime?.clearHunterSwarmEntities?.();
+  }
+
+  function maybeCompleteDepthsVictoryAscent() {
+    if (!depthsVictoryAscentActive || runVictory || runDead) return;
+    const upPx = depthsVictoryAscentAnchorY - player.y;
+    const winSlack = Math.max(28, player.r * 2.1);
+    const heightDone =
+      upPx >=
+      Math.max(
+        DEPTHS_VICTORY_ASCENT_WIN_DISTANCE_PX - winSlack,
+        depthsVictoryAscentCreditsMinUpPx,
+      );
+    if (!heightDone) return;
+    depthsVictoryAscentActive = false;
+    const totalWaves = hunterRuntime?.spawnState?.wave ?? 0;
+    showVictoryScreen({
+      pathsLabel: formatPathsVisitedForVictoryStats(),
+      timeSec: simElapsed,
+      totalWaves,
+      healCrystals: runHealCrystalsCollected,
+    });
+  }
+
+  /**
+   * Post–P3 victory: entire viewport top glows, god-rays reach downward, then white takes the screen.
+   * Glow/rays/white saturate by `DEPTHS_VICTORY_ASCENT_VISUAL_DISTANCE_PX`; coast at full white until win distance.
+   */
+  function drawDepthsVictoryAscentCreditsWorld(ctx, viewW, viewH, upPx) {
+    const lines = depthsVictoryAscentCreditsDisplayLines;
+    const offs = depthsVictoryCreditsOffsPx;
+    if (!lines.length || offs.length !== lines.length) return;
+    const scrollPx = upPx - depthsVictoryCreditsStartUpPx;
+    if (scrollPx <= 0) return;
+    const x = depthsVictoryCreditsWorldX;
+    const yStart = cameraY - DEPTHS_VICTORY_CREDITS_SCREEN_LEAD_PX + scrollPx;
+    ctx.save();
+    ctx.font =
+      '600 20px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(15, 23, 42, 0.94)";
+    const clipPad = 80;
+    const yMin = cameraY - clipPad;
+    const yMax = cameraY + viewH + clipPad;
+    for (let i = 0; i < lines.length; i++) {
+      const text = lines[i];
+      if (!text) continue;
+      const y = yStart - (offs[i] ?? 0);
+      if (y < yMin || y > yMax) continue;
+      ctx.fillText(text, x, y);
+    }
+    ctx.restore();
+  }
+
+  function drawDepthsVictoryAscentWorld(ctx, viewW, viewH) {
+    if (!depthsVictoryAscentActive && !runVictory) return;
+    const vx0 = cameraX;
+    const vyTop = cameraY;
+    const vw = viewW;
+    const vh = viewH;
+    const pad = 120;
+    /** 0..1 from ascent-only travel; holds at 1 while still ascending toward win distance. */
+    let u = 0;
+    const upPx = depthsVictoryAscentAnchorY - player.y;
+    if (runVictory) u = 1;
+    else if (depthsVictoryAscentActive) u = clamp(upPx / DEPTHS_VICTORY_ASCENT_VISUAL_DISTANCE_PX, 0, 1);
+    const uSoft = u * u;
+    const rayAgg = smoothstep(0.08, 0.94, u) * smoothstep(0.08, 0.94, u);
+    const whiteAgg = smoothstep(DEPTHS_VICTORY_ASCENT_WHITE_START_U, DEPTHS_VICTORY_ASCENT_WHITE_END_U, u);
+    const whiteAlpha = Math.pow(whiteAgg, 1.12) * 0.94;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+
+    const topBandH = vh * (0.22 + u * 0.62);
+    const gTop = ctx.createLinearGradient(0, vyTop - 30, 0, vyTop + topBandH);
+    const g0 = 0.05 + uSoft * 0.62;
+    gTop.addColorStop(0, `rgba(255, 255, 252, ${g0})`);
+    gTop.addColorStop(0.35, `rgba(255, 248, 235, ${0.04 + u * 0.38})`);
+    gTop.addColorStop(0.65, `rgba(240, 245, 255, ${0.03 + u * 0.22})`);
+    gTop.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = gTop;
+    ctx.fillRect(vx0 - pad, vyTop - 50, vw + pad * 2, topBandH + 120);
+
+    const cx = vx0 + vw * 0.5;
+    const nRay = 15;
+    const spanTopPx = vw * (0.88 + rayAgg * 0.06);
+    const widen = 1.35 + rayAgg * 7.8;
+    const rayAlphaCore = (0.055 + rayAgg * 0.52) * (0.55 + u * 0.45);
+
+    for (let r = 0; r < nRay; r++) {
+      const t0 = r / nRay - 0.5;
+      const t1 = (r + 1) / nRay - 0.5;
+      const x0Top = cx + t0 * spanTopPx * 0.35;
+      const x1Top = cx + t1 * spanTopPx * 0.35;
+      const x0Bot = cx + t0 * spanTopPx * widen;
+      const x1Bot = cx + t1 * spanTopPx * widen;
+
+      const gy = ctx.createLinearGradient(cx, vyTop - 12, cx, vyTop + vh + 120);
+      const tip = rayAlphaCore * (0.75 + ((r + simElapsed * 1.8) % 3) * 0.06);
+      gy.addColorStop(0, `rgba(255, 255, 255, ${tip * (0.9 + u * 0.08)})`);
+      gy.addColorStop(0.18, `rgba(253, 250, 240, ${tip * 0.82})`);
+      gy.addColorStop(0.45, `rgba(248, 244, 255, ${tip * 0.45})`);
+      gy.addColorStop(0.78, `rgba(255, 255, 255, ${tip * 0.16})`);
+      gy.addColorStop(1, "rgba(255, 255, 255, 0)");
+
+      ctx.beginPath();
+      ctx.moveTo(x0Top, vyTop - 8);
+      ctx.lineTo(x1Top, vyTop - 8);
+      ctx.lineTo(x1Bot, vyTop + vh + 40);
+      ctx.lineTo(x0Bot, vyTop + vh + 40);
+      ctx.closePath();
+      ctx.fillStyle = gy;
+      ctx.globalAlpha = 1;
+      ctx.fill();
+    }
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = whiteAlpha * 0.92;
+    ctx.fillStyle = "rgb(255, 255, 255)";
+    ctx.fillRect(vx0 - pad, vyTop - pad, vw + pad * 2, vh + pad * 2);
+    if (!runVictory && depthsVictoryAscentActive && upPx >= depthsVictoryCreditsStartUpPx) {
+      // Once the white phase has fully settled, switch to black text over pure white.
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "rgb(255, 255, 255)";
+      ctx.fillRect(vx0 - pad, vyTop - pad, vw + pad * 2, vh + pad * 2);
+      drawDepthsVictoryAscentCreditsWorld(ctx, viewW, viewH, upPx);
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  /** Smoothstep helper for ascend FX (ease at ends). */
+  function smoothstep(edge0, edge1, x) {
+    const t = clamp((x - edge0) / Math.max(1e-6, edge1 - edge0), 0, 1);
+    return t * t * (3 - 2 * t);
   }
 
   /** Halls path: soft warm marble sheen over the floor (call after terrain blocks). */
@@ -3228,6 +3572,7 @@ function boot() {
     const forceReselect = !!(opts && opts.forceReselect);
     if (!forceReselect && id === activeCharacterId) return;
     hideDeathScreen();
+    hideVictoryScreen();
     activeCharacterId = id;
     if (id === "lunatic") {
       for (let r = 1; r <= 13; r++) {
@@ -3246,6 +3591,13 @@ function boot() {
     applyShellUiFromCharacter(document, character);
     applyCombatFromCharacter();
     runDead = false;
+    runVictory = false;
+    depthsVictoryAscentActive = false;
+    depthsVictoryAscentCreditsDisplayLines.length = 0;
+    depthsVictoryCreditsOffsPx.length = 0;
+    depthsVictoryCreditsWorldX = 0;
+    depthsVictoryCreditsStartUpPx = 0;
+    depthsVictoryAscentCreditsMinUpPx = 0;
     manualPause = false;
     handsResetPause = false;
     playerDamage.resetCombatState();
@@ -3288,6 +3640,8 @@ function boot() {
     safehouseHexFlow.resetSession();
     runLevel = 0;
     pathRuntime.resetRun();
+    pathsVisitedThisRun.clear();
+    runHealCrystalsCollected = 0;
     refreshDebugRunProgressUi();
     if (specialTestWestEl && "value" in specialTestWestEl) {
       specials.setTestWestKind(specialTestWestEl.value);
@@ -3427,6 +3781,7 @@ function boot() {
         onRunLevelIncrement: () => {
           runLevel += 1;
           pathRuntime.ensurePathAssignedForLevel(runLevel);
+          notePathVisitedForRun();
           resetSwampInfection();
           refreshDebugRunProgressUi();
           if (pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL) {
@@ -3530,6 +3885,7 @@ function boot() {
   function specialsSimUnpaused() {
     return (
       !runDead &&
+      !runVictory &&
       !(cardPickup?.isPaused() ?? false) &&
       !(rouletteModal?.isPaused() ?? false) &&
       !(forgeWorldModal?.isForgePaused() ?? false)
@@ -3630,6 +3986,7 @@ function boot() {
     getDifficultyClockSec: () => safehouseHexFlow.getDifficultyClockSec(simElapsed),
     getRunLevel: () => runLevel,
     getSuppressDepthsBossNormalSpawns: () => isDepthsBossFightLevel(),
+    getSuppressDepthsBossBloomRespawn: () => depthsVictoryAscentActive || runVictory,
     getDepthsBossRisingWaveFrontY: () => depthsBossRisingWaveFrontY,
     isWorldPointOnSafehouseBarrierDisk,
     clampHunterOutsideSafehouseDisk,
@@ -3654,7 +4011,8 @@ function boot() {
   eldritchBlood = createEldritchBloodFlow({
     getSimElapsed: () => simElapsed,
     getPlayer: () => player,
-    getRunDead: () => runDead,
+    getRunDead: () => runDead || runVictory,
+    getDepthsVictoryAscentActive: () => depthsVictoryAscentActive,
     isDepthsBossFightLevel: () => isDepthsBossFightLevel(),
     isPlayerInSafehouse: () => {
       const ph = worldToHex(player.x, player.y);
@@ -3714,6 +4072,14 @@ function boot() {
   document.getElementById("debug-depths-boss-spell-trigger")?.addEventListener("click", () => {
     const select = /** @type {HTMLSelectElement | null} */ (document.getElementById("debug-depths-boss-spell-select"));
     const spellId = select?.value ?? "";
+    if (spellId === "victory_ascent") {
+      const ok = !!(isDepthsBossFightLevel() && huntersEnabled && !runDead && !runVictory);
+      if (ok) {
+        beginDepthsVictoryAscent({ debug: true });
+        runLogger.log("debug", "forced victory ascent");
+      } else runLogger.log("debug", "victory ascent not started", "boss_chase_only");
+      return;
+    }
     const res = eldritchBlood?.debugForceEldritchSpell?.(spellId);
     if (res?.ok) runLogger.log("debug", "forced boss spell", spellId);
     else runLogger.log("debug", "boss spell not applied", spellId, res?.reason ?? "no_flow");
@@ -3725,7 +4091,7 @@ function boot() {
     worldToHex,
     hexToWorld,
     specialsUnpaused: specialsSimUnpaused,
-    getRunDead: () => runDead,
+    getRunDead: () => runDead || runVictory,
     isArenaHexTile: (q, r) => specials.isArenaHexTile(q, r),
     isArenaHexInteractive: (q, r) => specials.isArenaHexInteractive(q, r),
     markProceduralArenaHexSpent: (q, r) => specials.markProceduralArenaHexSpent(q, r),
@@ -3750,10 +4116,18 @@ function boot() {
     isCardPickupPaused: () => cardPickup?.isPaused() ?? false,
   }), "events", runLogger, { skip: ["tick", "postHunterTick", "getArenaDrawState", "getSurgeDrawState"] });
 
-  function performFullRunResetAfterDeath() {
-    if (!runDead || !hunterRuntime) return;
+  function performFullRunResetFromGameOverOverlay() {
+    if ((!runDead && !runVictory) || !hunterRuntime) return;
     hideDeathScreen();
+    hideVictoryScreen();
     runDead = false;
+    runVictory = false;
+    depthsVictoryAscentActive = false;
+    depthsVictoryAscentCreditsDisplayLines.length = 0;
+    depthsVictoryCreditsOffsPx.length = 0;
+    depthsVictoryCreditsWorldX = 0;
+    depthsVictoryCreditsStartUpPx = 0;
+    depthsVictoryAscentCreditsMinUpPx = 0;
     manualPause = false;
     handsResetPause = false;
     simElapsed = 0;
@@ -3868,6 +4242,18 @@ function boot() {
     prevKnightBurstTerrainPhase = false;
     syncDeckHud();
     snapCameraToPlayer();
+    pathsVisitedThisRun.clear();
+    runHealCrystalsCollected = 0;
+  }
+
+  function performFullRunResetAfterDeath() {
+    if (!runDead || !hunterRuntime) return;
+    performFullRunResetFromGameOverOverlay();
+  }
+
+  function performFullRunResetAfterVictory() {
+    if (!runVictory || !hunterRuntime) return;
+    performFullRunResetFromGameOverOverlay();
   }
 
   function goToCharacterSelectAfterDeath() {
@@ -3879,13 +4265,28 @@ function boot() {
     characterSelectModalEl?.classList.add("open");
   }
 
+  function goToCharacterSelectAfterVictory() {
+    if (!runVictory || !hunterRuntime) return;
+    performFullRunResetAfterVictory();
+    manualPause = true;
+    clearMovementKeys();
+    expectingCharacterPickAfterDeath = true;
+    characterSelectModalEl?.classList.add("open");
+  }
+
   /** @param {KeyboardEvent} e */
   function onDeathRetryKeydown(e) {
-    if (!runDead) return;
     if (e.key !== "Enter") return;
     if (e.repeat) return;
-    e.preventDefault();
-    goToCharacterSelectAfterDeath();
+    if (runDead) {
+      e.preventDefault();
+      goToCharacterSelectAfterDeath();
+      return;
+    }
+    if (runVictory) {
+      e.preventDefault();
+      goToCharacterSelectAfterVictory();
+    }
   }
   window.addEventListener("keydown", onDeathRetryKeydown);
 
@@ -3895,6 +4296,15 @@ function boot() {
   }
   deathScreenChooseHeroBtn?.addEventListener("click", onDeathScreenChooseHeroClick);
   mobileControlDisposers.push(() => deathScreenChooseHeroBtn?.removeEventListener("click", onDeathScreenChooseHeroClick));
+
+  function onVictoryScreenChooseHeroClick() {
+    if (!runVictory) return;
+    goToCharacterSelectAfterVictory();
+  }
+  victoryScreenChooseHeroBtn?.addEventListener("click", onVictoryScreenChooseHeroClick);
+  mobileControlDisposers.push(() =>
+    victoryScreenChooseHeroBtn?.removeEventListener("click", onVictoryScreenChooseHeroClick),
+  );
 
   /** Single handler for `#character-select-pick` (touch + desktop / post-death). */
   function onHeroPickFromModal(ev) {
@@ -3945,7 +4355,7 @@ function boot() {
       return;
     }
 
-    if (key === " " && !runDead && !modalChromePausesWorld()) {
+    if (key === " " && !runDead && !runVictory && !modalChromePausesWorld()) {
       manualPause = true;
       clearMovementKeys();
       ev.preventDefault();
@@ -4056,6 +4466,7 @@ function boot() {
     } else {
       pathRuntime.ensurePathAssignedForLevel(runLevel);
     }
+    notePathVisitedForRun();
     const eff = safehouseHexFlow.getDifficultyClockSec(simElapsed);
     hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
     resetDepthsBossRisingWaveChase();
@@ -4079,6 +4490,7 @@ function boot() {
       } else {
         pathRuntime.setForcedPathId(selected);
       }
+      notePathVisitedForRun();
       refreshDebugRunProgressUi();
     });
   }
@@ -4573,7 +4985,10 @@ function boot() {
 
     if (mobileUiEnabled && mobileUnpauseBtn) {
       const showMbUnpause =
-        (manualPause || handsResetPause) && !runDead && !(characterSelectModalEl?.classList.contains("open") ?? false);
+        (manualPause || handsResetPause) &&
+        !runDead &&
+        !runVictory &&
+        !(characterSelectModalEl?.classList.contains("open") ?? false);
       mobileUnpauseBtn.hidden = !showMbUnpause;
     }
 
@@ -4581,7 +4996,7 @@ function boot() {
       playerDamage.tickCombatPresentation(rawDt);
     }
 
-    if (!simPaused && !runDead) {
+    if (!simPaused && !runDead && !runVictory) {
       simElapsed += rawDt;
       if (swampInfectionChainLockUntil > 0 && simElapsed >= swampInfectionChainLockUntil) {
         swampInfectionChainLockUntil = 0;
@@ -4665,7 +5080,7 @@ function boot() {
       }
     }
 
-    if (!paused && !runDead) {
+    if (!paused && !runDead && !runVictory) {
       if (
         specialsSimUnpaused() &&
         isDepthsBossFightLevel() &&
@@ -4843,11 +5258,11 @@ function boot() {
         });
       }
 
-      if (!runDead && specialsSimUnpaused() && !isDepthsBossFightLevel()) {
+      if (!runDead && !runVictory && specialsSimUnpaused() && !isDepthsBossFightLevel()) {
         hexEventRuntime?.clampPlayer(player);
       }
 
-      if (!runDead && specialsSimUnpaused() && pathRuntime.getCurrentPathId() === "depths") {
+      if (!runDead && !runVictory && specialsSimUnpaused() && pathRuntime.getCurrentPathId() === "depths") {
         const waveIdx = Math.floor(simElapsed / DEPTHS_STORM_WAVE_PERIOD_SEC);
         const waveT = waveIdx * DEPTHS_STORM_WAVE_PERIOD_SEC;
         const tInWave = simElapsed - waveT;
@@ -4867,12 +5282,14 @@ function boot() {
         const suppressStormForFloatingCage = isFloatingCageBossWaveRewindPlayerSuppressed();
 
         if (isDepthsBossFightLevel()) {
-          tickDepthsBossRisingWaveChase(dt);
+          if (!depthsVictoryAscentActive && !runVictory) {
+            tickDepthsBossRisingWaveChase(dt);
+          }
         } else {
           resetDepthsBossRisingWaveChase();
         }
 
-        if (wavePushActive && !suppressStormForFloatingCage) {
+        if (wavePushActive && !suppressStormForFloatingCage && !depthsVictoryAscentActive) {
           const env = Math.sin(Math.PI * dw.progress);
           const pushSpeed =
             PLAYER_SPEED *
@@ -4908,7 +5325,8 @@ function boot() {
         if (
           p2p3BloomPush?.depthsEldritchP2P3StormPushBurstActive &&
           isDepthsBossFightLevel() &&
-          !suppressStormForFloatingCage
+          !suppressStormForFloatingCage &&
+          !depthsVictoryAscentActive
         ) {
           const tStorm0 = Number(p2p3BloomPush.depthsEldritchP2P3StormBurstStartSim ?? 0);
           const tr = simElapsed - tStorm0;
@@ -4997,13 +5415,30 @@ function boot() {
         }
       }
 
+      if (depthsVictoryAscentActive && !runVictory) {
+        const upPx = depthsVictoryAscentAnchorY - player.y;
+        if (upPx < Math.min(DEPTHS_VICTORY_ASCENT_WIN_DISTANCE_PX, depthsVictoryCreditsStartUpPx)) {
+          const dx = depthsVictoryBeaconX - player.x;
+          const dy = depthsVictoryBeaconY - player.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const step = DEPTHS_VICTORY_BEACON_PULL_SPEED * dt;
+          player.x += (dx / len) * step;
+          player.y += (dy / len) * step;
+          const obsBeacon = obstaclesForPlayerCollision();
+          const wrb = resolvePlayerAgainstRects(player.x, player.y, player.r, obsBeacon);
+          player.x = wrb.x;
+          player.y = wrb.y;
+        }
+        maybeCompleteDepthsVictoryAscent();
+      }
+
       const pdt = Math.max(dt, 1e-5);
       player.velX = (player.x - player._px) / pdt;
       player.velY = (player.y - player._py) / pdt;
       player._px = player.x;
       player._py = player.y;
 
-      if (!paused && isDepthsBossFightLevel() && specialsSimUnpaused()) {
+      if (!paused && isDepthsBossFightLevel() && specialsSimUnpaused() && !depthsVictoryAscentActive && !runVictory) {
         pushDepthsPlayerPosTrailSample();
       }
 
@@ -5076,27 +5511,37 @@ function boot() {
       }
       }
 
-      if (!runDead && specialsSimUnpaused() && isDepthsBossFightLevel()) {
-        const pyBeforeBob = player.y;
-        tickDepthsBossPostLandBob();
-        if (Math.abs(player.y - pyBeforeBob) > 1e-4) {
-          player._py = player.y;
-          player._px = player.x;
+      if (!runDead && !runVictory && specialsSimUnpaused() && isDepthsBossFightLevel()) {
+        if (!depthsVictoryAscentActive) {
+          const pyBeforeBob = player.y;
+          tickDepthsBossPostLandBob();
+          if (Math.abs(player.y - pyBeforeBob) > 1e-4) {
+            player._py = player.y;
+            player._px = player.x;
+          }
         }
         if (!paused) {
-          eldritchBlood?.tick(dt);
-          eldritchBlood?.clampPlayerToFloatingCage?.();
-          const cagedNow = eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.() ?? false;
-          if (wasFloatingCageCagedLastFrame && !cagedNow) {
-            maybeDepthsBossCatchUpWaveAfterCageRelease();
+          if (!depthsVictoryAscentActive) {
+            eldritchBlood?.tick(dt);
+            eldritchBlood?.clampPlayerToFloatingCage?.();
+            const cagedNow = eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.() ?? false;
+            if (wasFloatingCageCagedLastFrame && !cagedNow) {
+              maybeDepthsBossCatchUpWaveAfterCageRelease();
+            }
+            wasFloatingCageCagedLastFrame = cagedNow;
+            tickDepthsEldritchRewindAttack();
           }
-          wasFloatingCageCagedLastFrame = cagedNow;
-          tickDepthsEldritchRewindAttack();
+          if (
+            !depthsVictoryAscentActive &&
+            findDepthsEldritchBloomHunter()?.depthsEldritchP3BossHidden
+          ) {
+            beginDepthsVictoryAscent();
+          }
         }
       }
     }
 
-    if (!paused) {
+    if (!paused && !runVictory) {
       const lootPlacementOpts = () => ({
         player,
         obstacles,
@@ -5114,7 +5559,7 @@ function boot() {
       const reserved = collectReservedDeckKeys(inventory, cardPickup?.getPendingCard() ?? null, worldCardPickups);
 
       if (simElapsed >= nextHealSpawnAt) {
-        if (!runDead) {
+        if (!runDead && !runVictory) {
           if (collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS) {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
             if (pt) {
@@ -5140,6 +5585,7 @@ function boot() {
       if (simElapsed >= nextCardSpawnAt) {
         if (
           !runDead &&
+          !runVictory &&
           activeCharacterId !== "lunatic" &&
           runLevel !== DISPLAY_LEVEL_FIVE_RUN_LEVEL
         ) {
@@ -5164,7 +5610,7 @@ function boot() {
         nextCardSpawnAt = simElapsed + (CARD_SPAWN_INTERVAL + randRange(-1.6, 3.4));
       }
 
-      if (!runDead) {
+      if (!runDead && !runVictory) {
         for (let i = collectibles.length - 1; i >= 0; i--) {
           const c = collectibles[i];
           if (simElapsed >= c.expiresAt) {
@@ -5177,6 +5623,7 @@ function boot() {
           const dy = player.y - c.y;
           if (dx * dx + dy * dy > rr * rr) continue;
           if (c.kind === "heal") {
+            runHealCrystalsCollected += 1;
             if (pathRuntime.getCurrentPathId() === "swamp" && swampBootlegCrystalModal) {
               collectibles.splice(i, 1);
               const bundle = rollTwoBootlegOffers(() => Math.random(), simElapsed);
@@ -5207,6 +5654,7 @@ function boot() {
 
       const hexFlowsUnpaused =
         !runDead &&
+        !runVictory &&
         !(cardPickup?.isPaused() ?? false) &&
         !(rouletteModal?.isPaused() ?? false) &&
         !(forgeWorldModal?.isForgePaused() ?? false) &&
@@ -5398,7 +5846,7 @@ function boot() {
       });
       worldTimeScale = enemyHook?.worldTimeScale ?? worldTimeScale;
 
-      if (huntersEnabled && !runDead) {
+      if (huntersEnabled && !runDead && !runVictory) {
         hunterRuntime.tick(dt * worldTimeScale, { suppressRangedAttacks: timelockFrozen });
         registerDepthsSniperPoolAbilitySpeedSuppress();
         if (pathRuntime.getCurrentPathId() === "swamp") {
@@ -5411,7 +5859,7 @@ function boot() {
       if (hunterRuntime && pathRuntime.getCurrentPathId() !== "swamp") {
         clearSwampHunterMudTrails();
       }
-      if (!runDead && !isDepthsBossFightLevel()) {
+      if (!runDead && !runVictory && !isDepthsBossFightLevel()) {
         hexEventRuntime?.postHunterTick();
       }
 
@@ -5448,9 +5896,9 @@ function boot() {
 
     safehouseHexFlow.tick({
       dt: rawDt,
-      runDead: () => runDead,
+      runDead: () => runDead || runVictory,
       innerGameplayFrozen: () => paused,
-      advanceFreezeClock: !simClockPaused() && !runDead,
+      advanceFreezeClock: !simClockPaused() && !runDead && !runVictory,
       getIsLunatic: () => activeCharacterId === "lunatic",
       getPlayer: () => player,
       worldToHex,
@@ -5515,7 +5963,7 @@ function boot() {
 
     const viewW = canvas.width;
     const viewH = canvas.height;
-    if (!paused) {
+    if (!paused && !runVictory) {
       const targetCameraX = player.x - viewW / 2;
       const targetCameraY = player.y - viewH / 2;
       const cameraBlend = 1 - Math.pow(1 - CAMERA_FOLLOW_LERP, dt * 60);
@@ -5683,7 +6131,10 @@ function boot() {
       hexEventRuntime?.getSurgeDrawState() ?? null,
     );
     if (depthsPathActive && isDepthsBossFightLevel()) {
-      drawDepthsBossRisingChaseWaveWorld(ctx, viewW, viewH);
+      if (!depthsVictoryAscentActive && !runVictory) {
+        drawDepthsBossRisingChaseWaveWorld(ctx, viewW, viewH);
+      }
+      drawDepthsVictoryAscentWorld(ctx, viewW, viewH);
       eldritchBlood?.drawUnderHunters(ctx);
     }
     if (huntersEnabled) {
@@ -6033,7 +6484,7 @@ function boot() {
       drawSwampBootlegCursesHud(ctx, viewW, viewH, getSwampBootlegSidebarRows(inventory, simElapsed));
     }
 
-    if (activeCharacterId === "valiant" && !runDead) {
+    if (activeCharacterId === "valiant" && !runDead && !runVictory) {
       drawValiantScreenHud(ctx, {
         will01: valiantWorld.getWill(),
         occupiedRabbitCount: valiantWorld.occupiedRabbitCount(),
@@ -6042,7 +6493,7 @@ function boot() {
       });
     }
 
-    if (activeCharacterId === "rogue" && !runDead) {
+    if (activeCharacterId === "rogue" && !runDead && !runVictory) {
       rogueWorld.drawScreenHud(ctx, simElapsed, viewW, viewH);
     }
 
@@ -6116,7 +6567,7 @@ function boot() {
       ctx.restore();
     }
 
-    if ((manualPause || handsResetPause) && !runDead) {
+    if ((manualPause || handsResetPause) && !runDead && !runVictory) {
       ctx.save();
       ctx.fillStyle = "rgba(2, 6, 23, 0.45)";
       ctx.fillRect(0, 0, viewW, viewH);

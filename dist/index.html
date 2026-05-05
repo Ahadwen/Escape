@@ -1108,6 +1108,112 @@
         color: #f8fafc;
       }
 
+      .victory-screen {
+        position: absolute;
+        inset: 0;
+        z-index: 9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: #fafafa;
+        border-radius: 10px;
+      }
+
+      .victory-screen[hidden] {
+        display: none !important;
+      }
+
+      .victory-screen:not([hidden]) {
+        animation: victory-screen-in 0.72s ease-out both;
+      }
+
+      @keyframes victory-screen-in {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      .victory-screen-inner {
+        max-width: 440px;
+        text-align: center;
+      }
+
+      .victory-screen-title {
+        margin: 0 0 18px;
+        font-size: 32px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: #0f172a;
+      }
+
+      .victory-screen-stats {
+        margin: 0 0 22px;
+        padding: 14px 18px;
+        border-radius: 10px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        background: rgba(255, 255, 255, 0.96);
+        display: grid;
+        gap: 10px 16px;
+        text-align: left;
+        font-size: 15px;
+        line-height: 1.35;
+        color: #1e293b;
+      }
+
+      .victory-screen-stats dt {
+        margin: 0;
+        font-weight: 600;
+        color: #64748b;
+      }
+
+      .victory-screen-stats dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .victory-screen-stats > div {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 8px 12px;
+        align-items: baseline;
+      }
+
+      .victory-screen-choose-hero-btn {
+        appearance: none;
+        border-radius: 12px;
+        border: 1px solid rgba(59, 130, 246, 0.45);
+        background: linear-gradient(165deg, rgba(59, 130, 246, 0.18), rgba(241, 245, 249, 0.98));
+        color: #0f172a;
+        font-weight: 700;
+        font-size: 16px;
+        padding: 12px 18px;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+
+      .victory-screen-choose-hero-btn:active {
+        transform: translateY(1px);
+      }
+
+      .victory-screen-retry-lines {
+        margin: 14px 0 0;
+        font-size: 14px;
+        line-height: 1.45;
+        color: #475569;
+      }
+
+      body.is-mobile-ui .victory-screen-retry-desktop {
+        display: none;
+      }
+
+      body:not(.is-mobile-ui) .victory-screen-retry-mobile {
+        display: none;
+      }
+
       .sim-panel {
         flex: 0 0 148px;
         padding: 12px 14px;
@@ -2669,11 +2775,13 @@
               <option value="p2_triplicate">P2 · Triplicate lightning dashes</option>
               <option value="interlude_p1_p2">Interlude · P1→P2 (gather / burst)</option>
               <option value="interlude_p2_p3">Interlude · P2→P3 (dark / under player / surface)</option>
+              <option value="victory_ascent">Victory · dawn ascent + beacon (debug)</option>
             </select>
             <button id="debug-depths-boss-spell-trigger" type="button">Cast</button>
           </div>
           <p class="special-test-west-hint">
-            Boss chase only; hunters must be on. Clears the current scripted spell then starts one beat.
+            Boss chase only; hunters must be on. Clears the current scripted spell then starts one beat (except
+            “Victory ascent”, which skips spells and starts the post-boss dawn / beacon sequence).
           </p>
         </div>
       </div>
@@ -2770,6 +2878,41 @@
                   <span class="death-screen-retry-tail">then pick a hero to start fresh.</span>
                 </p>
               </div>
+            </div>
+          </div>
+          <div id="victory-screen" class="victory-screen" hidden aria-hidden="true" role="dialog" aria-labelledby="victory-screen-title">
+            <div class="victory-screen-inner">
+              <h2 id="victory-screen-title" class="victory-screen-title">You win!</h2>
+              <dl class="victory-screen-stats">
+                <div>
+                  <dt>Paths</dt>
+                  <dd id="victory-stat-paths">—</dd>
+                </div>
+                <div>
+                  <dt>Time</dt>
+                  <dd id="victory-stat-time">—</dd>
+                </div>
+                <div>
+                  <dt>Waves</dt>
+                  <dd id="victory-stat-waves">—</dd>
+                </div>
+                <div>
+                  <dt>Heal crystals</dt>
+                  <dd id="victory-stat-heals">—</dd>
+                </div>
+              </dl>
+              <button
+                id="victory-screen-choose-hero-btn"
+                class="victory-screen-choose-hero-btn"
+                type="button"
+              >
+                Choose hero · new run
+              </button>
+              <p class="victory-screen-retry-lines">
+                <span class="victory-screen-retry-desktop">Press <kbd>Enter</kbd> for character select,</span>
+                <span class="victory-screen-retry-mobile"> Tap the button,</span>
+                <span class="death-screen-retry-tail">then pick a hero to start fresh.</span>
+              </p>
             </div>
           </div>
         </div>
@@ -3149,6 +3292,6 @@
       </div>
     </div>
 
-      <script type="module" crossorigin src="./assets/main-DcL6Iw8o.js"></script>
+      <script type="module" crossorigin src="./assets/main-CjxEg2nk.js"></script>
   </body>
 </html>

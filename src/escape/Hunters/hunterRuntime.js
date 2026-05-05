@@ -93,6 +93,7 @@ const SWAMP_FROG_LAND_EXPLODE_DIST = SWAMP_FROG_BLAST_R + 24;
  * @property {() => string | null} [getDebugHunterTypeFilter] — debug-only forced wave spawn type (null = normal mix)
  * @property {() => boolean} [getSwampBootlegColourblind] — swamp crystal curse: uniform grey-green hunter bodies
  * @property {() => boolean} [getSuppressDepthsBossNormalSpawns] — Depths display L5: no wave spawns / scheduled jobs
+ * @property {() => boolean} [getSuppressDepthsBossBloomRespawn] — When true with boss spawns suppressed, do not auto-respawn `depthsEldritchBloom` (e.g. post-P3 victory ascent).
  * @property {() => number | null} [getDepthsBossRisingWaveFrontY] — Depths L5: world Y of rising tide front (+Y down); null when inactive
  */
 
@@ -128,6 +129,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     getDebugHunterTypeFilter: getDebugHunterTypeFilterDep,
     getSwampBootlegColourblind: getSwampBootlegColourblindDep,
     getSuppressDepthsBossNormalSpawns: getSuppressDepthsBossNormalSpawnsDep,
+    getSuppressDepthsBossBloomRespawn: getSuppressDepthsBossBloomRespawnDep,
     getDepthsBossRisingWaveFrontY: getDepthsBossRisingWaveFrontYDep,
   } = deps;
 
@@ -149,6 +151,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const getBulwarkPlantedFlag = getBulwarkPlantedFlagDep ?? (() => null);
   const getDebugHunterTypeFilter = getDebugHunterTypeFilterDep ?? (() => null);
   const getSwampBootlegColourblind = getSwampBootlegColourblindDep ?? (() => false);
+  const suppressDepthsBossBloomRespawn = () => getSuppressDepthsBossBloomRespawnDep?.() === true;
   const getDepthsBossRisingWaveFrontY = getDepthsBossRisingWaveFrontYDep ?? (() => null);
 
   /** Half flat-to-flat span of one hex (pointy hex, `HEX_SIZE` = circumradius). */
@@ -2362,7 +2365,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           break;
         }
       }
-      if (!hasEldritch) {
+      if (!hasEldritch && !suppressDepthsBossBloomRespawn()) {
         const p = getPlayer();
         const er = hunterRadiusForType("depthsEldritchBloom");
         for (let attempt = 0; attempt < 56; attempt++) {
