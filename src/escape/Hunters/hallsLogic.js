@@ -93,15 +93,15 @@ export const HALLS_BISHOP_STRIKE_MAX_T_PX = 2200;
 export const HALLS_ROOK_APPROACH_CAP_PX = 2400;
 export const HALLS_ROOK_LINEUP_MIN_PX = 180;
 export const HALLS_ROOK_LINEUP_MAX_PX = 820;
-export const HALLS_ROOK_LINEUP_FRAC = 0.38;
-export const HALLS_ROOK_ALIGN_CROSS_WEIGHT = 3.0;
-export const HALLS_ROOK_ALIGN_DIST_WEIGHT = 0.00011;
-export const HALLS_ROOK_PAUSE_SEC = 0.3;
-export const HALLS_ROOK_TURN_PAUSE_SEC = 0.52;
+export const HALLS_ROOK_LINEUP_FRAC = 0.54;
+export const HALLS_ROOK_ALIGN_CROSS_WEIGHT = 4.2;
+export const HALLS_ROOK_ALIGN_DIST_WEIGHT = 0.00007;
+export const HALLS_ROOK_PAUSE_SEC = 0.18;
+export const HALLS_ROOK_TURN_PAUSE_SEC = 0.2;
 /** |Δx| or |Δy| to ray (same file / same rank) must be below this to commit a strike. */
-export const HALLS_ROOK_LINE_CROSS_EPS = 44;
-export const HALLS_ROOK_STRIKE_COMMIT_MAX_T_PX = 560;
-export const HALLS_ROOK_STRIKE_PAST_PLAYER_PX = 105;
+export const HALLS_ROOK_LINE_CROSS_EPS = 56;
+export const HALLS_ROOK_STRIKE_COMMIT_MAX_T_PX = 760;
+export const HALLS_ROOK_STRIKE_PAST_PLAYER_PX = 140;
 export const HALLS_ROOK_STRIKE_MAX_T_PX = 2200;
 
 /** Queen ray slide cap per impulse (still “freedom”, just not absurd single ticks). King uses the same mechanics with a modest cap. */

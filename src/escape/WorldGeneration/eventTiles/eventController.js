@@ -32,6 +32,7 @@ import { HALLS_PIECE_IDS } from "../../Hunters/hallsLogic.js";
  * @property {(lockQ: number, lockR: number) => void} [ejectHuntersFromHallsLockHex]
  * @property {() => string | null} [getDebugHallsPieceType]
  * @property {() => boolean} [isCardPickupPaused]
+ * @property {() => boolean} [allowProceduralHallsEvents]
  */
 
 /**
@@ -51,6 +52,7 @@ export function createEventHexController(deps) {
   ];
   const HALLS_EVENT_DURATION_SEC = 30;
   const cardPaused = deps.isCardPickupPaused ?? (() => false);
+  const allowProceduralHallsEvents = deps.allowProceduralHallsEvents ?? (() => true);
 
   const arena = createArenaHexEvent({
     getSimElapsed: deps.getSimElapsed,
@@ -83,7 +85,7 @@ export function createEventHexController(deps) {
     isCardPickupPaused: cardPaused,
   });
 
-  /** @type {null | { lockQ: number; lockR: number; pieceType: string; startedAt: number; endsAt: number; spawned: boolean; finished: boolean }} */
+  /** @type {null | { lockQ: number; lockR: number; pieceType: string; startedAt: number; endsAt: number; spawned: boolean; finished: boolean; source: "tile" | "trigger" }} */
   let hallsActive = null;
   let hallsEventIndex = 0;
 
@@ -103,21 +105,26 @@ export function createEventHexController(deps) {
     player.y = c.y + (dy / d) * maxD;
   }
 
-  function beginHallsEncounter(q, r) {
+  function beginHallsEncounter(q, r, opts = {}) {
     if (hallsActive) return;
-    if (hallsEventIndex >= HALLS_EVENT_ORDER.length) return;
-    const forced = String(deps.getDebugHallsPieceType?.() ?? "");
+    const source = opts.source === "trigger" ? "trigger" : "tile";
+    if (source === "tile" && hallsEventIndex >= HALLS_EVENT_ORDER.length) return;
+    const forced = String(opts.pieceType ?? deps.getDebugHallsPieceType?.() ?? "");
     const forcedPiece = HALLS_EVENT_ORDER.includes(forced) ? forced : null;
+    const pieceType = forcedPiece ?? HALLS_EVENT_ORDER[hallsEventIndex % HALLS_EVENT_ORDER.length];
     hallsActive = {
       lockQ: q,
       lockR: r,
-      pieceType: forcedPiece ?? HALLS_EVENT_ORDER[hallsEventIndex],
+      pieceType,
       startedAt: deps.getSimElapsed(),
       endsAt: deps.getSimElapsed() + HALLS_EVENT_DURATION_SEC,
       spawned: false,
       finished: false,
+      source,
     };
-    hallsEventIndex += 1;
+    // Preserve sequence progression for both tile and trigger encounters.
+    // If debug forces a specific piece, do not advance sequence state.
+    if (!forcedPiece) hallsEventIndex += 1;
     deps.killHuntersOnHex?.(q, r);
     const player = deps.getPlayer();
     clampPlayerToHallsLock(player);
@@ -125,7 +132,9 @@ export function createEventHexController(deps) {
 
   function finishHallsEncounter() {
     if (!hallsActive || hallsActive.finished) return;
-    deps.markProceduralHallsEventHexSpent?.(hallsActive.lockQ, hallsActive.lockR);
+    if (hallsActive.source === "tile") {
+      deps.markProceduralHallsEventHexSpent?.(hallsActive.lockQ, hallsActive.lockR);
+    }
     hallsActive.finished = true;
     deps.spawnHallsHealCrystal?.(hallsActive.lockQ, hallsActive.lockR);
     hallsActive = null;
@@ -136,7 +145,7 @@ export function createEventHexController(deps) {
     const player = deps.getPlayer();
     const ph = deps.worldToHex(player.x, player.y);
 
-    if (!hallsActive && deps.isHallsEventHexInteractive?.(ph.q, ph.r)) {
+    if (!hallsActive && allowProceduralHallsEvents() && deps.isHallsEventHexInteractive?.(ph.q, ph.r)) {
       beginHallsEncounter(ph.q, ph.r);
     }
     if (!hallsActive) return;
@@ -148,6 +157,9 @@ export function createEventHexController(deps) {
         dieAtOverride: hallsActive.endsAt,
         allowInsideSpecialTile: true,
         hallsEventSpawn: true,
+        forceExactPosition: true,
+        hallsLockCenterX: c.x,
+        hallsLockCenterY: c.y,
       });
     }
     clampPlayerToHallsLock(player);
@@ -199,6 +211,12 @@ export function createEventHexController(deps) {
       };
     },
     getSurgeScreenFlashUntil: () => gauntlet.getScreenFlashUntil(),
+    startHallsTriggerEncounterAt: (q, r, pieceType = null) => {
+      if (hallsActive) return false;
+      beginHallsEncounter(q, r, { source: "trigger", pieceType });
+      return !!hallsActive;
+    },
+    isHallsEncounterActive: () => !!hallsActive,
     isHallsLockBarrierWorldPoint: (x, y) => {
       if (!hallsActive) return false;
       const h = deps.worldToHex(x, y);

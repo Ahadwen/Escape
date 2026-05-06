@@ -72,6 +72,7 @@ import {
   drawDecoy,
   drawHealPickup,
   drawCardPickupWorld,
+  drawChessTriggerWorld,
 } from "./draw.js";
 import {
   drawValiantShockFields,
@@ -961,8 +962,17 @@ function boot() {
   }>} */ ([]);
   let nextHealSpawnAt = 3.5;
   let nextCardSpawnAt = 10;
+  let nextChessTriggerSpawnAt = 12;
   const MAX_HEAL_CRYSTALS = 6;
   const MAX_CARD_PICKUPS = 4;
+  const MAX_CHESS_TRIGGERS = 1;
+  const CHESS_TRIGGER_HIT_R = 15;
+  const CHESS_TRIGGER_LIFETIME_SEC = 28;
+  const CHESS_TRIGGER_SPAWN_INTERVAL_MIN = 5;
+  const CHESS_TRIGGER_SPAWN_INTERVAL_MAX = 5;
+  const USE_HALLS_CHESS_TRIGGERS = true;
+  /** Tiles already used for chess-trigger encounters this run. */
+  const hallsChessTriggerSpentTiles = new Set();
 
   /** When true, movement, pickups, specials, and hunters stop (REFERENCE `state.running === false`). */
   let runDead = false;
@@ -1089,11 +1099,12 @@ function boot() {
         grantInvulnerabilityUntil: (until) => playerDamage.grantInvulnerabilityUntil(until),
         stunNearbyEnemies: (secs) => {
           if (!hunterRuntime) return;
+          const stunSecs = pathRuntime.getCurrentPathId() === "halls" ? secs * 0.1 : secs;
           for (const h of hunterRuntime.entities.hunters) {
             if (h.type === "depthsEldritchBarrageBolt") continue;
             const dx = h.x - player.x;
             const dy = h.y - player.y;
-            if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + secs);
+            if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + stunSecs);
           }
         },
         onWillDeath: () => playerDamage.killPlayerImmediate(),
@@ -1108,11 +1119,12 @@ function boot() {
       activeCharacterId === "bulwark" ? BULWARK_POST_HIT_INVULN_SEC : null,
     stunNearbyEnemies: (secs) => {
       if (!hunterRuntime) return;
+      const stunSecs = pathRuntime.getCurrentPathId() === "halls" ? secs * 0.1 : secs;
       for (const h of hunterRuntime.entities.hunters) {
         if (h.type === "depthsEldritchBarrageBolt") continue;
         const dx = h.x - player.x;
         const dy = h.y - player.y;
-        if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + secs);
+        if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + stunSecs);
       }
     },
     onPlayerDeath: () => {
@@ -3730,6 +3742,8 @@ function boot() {
     lunaticSprintTierFx.length = 0;
     nextHealSpawnAt = simElapsed + 2;
     nextCardSpawnAt = simElapsed + 4;
+    nextChessTriggerSpawnAt = simElapsed + 5;
+    hallsChessTriggerSpentTiles.clear();
     cardPickup?.resetAll();
     rouletteHexFlow.resetSession();
     forgeHexFlow.resetSession();
@@ -4201,6 +4215,7 @@ function boot() {
     },
     spawnHunter: (type, x, y, opts) => hunterRuntime.spawnHunter(type, x, y, opts),
     getDebugHallsPieceType: () => debugHallsPieceType,
+    allowProceduralHallsEvents: () => !USE_HALLS_CHESS_TRIGGERS,
     isHallsEventHexInteractive: (q, r) => specials.isHallsEventHexInteractive(q, r),
     markProceduralHallsEventHexSpent: (q, r) => specials.markProceduralHallsEventHexSpent(q, r),
     spawnHallsHealCrystal: (q, r) => spawnHallsHealCrystal(q, r),
@@ -4326,6 +4341,8 @@ function boot() {
     lunaticSprintTierFx.length = 0;
     nextHealSpawnAt = simElapsed + 2;
     nextCardSpawnAt = simElapsed + 4;
+    nextChessTriggerSpawnAt = simElapsed + 5;
+    hallsChessTriggerSpentTiles.clear();
     cardPickup?.resetAll();
     rouletteHexFlow.resetSession();
     forgeHexFlow.resetSession();
@@ -5792,6 +5809,37 @@ function boot() {
         nextCardSpawnAt = simElapsed + (CARD_SPAWN_INTERVAL + randRange(-1.6, 3.4));
       }
 
+      if (USE_HALLS_CHESS_TRIGGERS && simElapsed >= nextChessTriggerSpawnAt) {
+        const onHalls = pathRuntime.getCurrentPathId() === "halls";
+        if (!runDead && !runVictory && onHalls && !hexEventRuntime?.isHallsEncounterActive?.()) {
+          const ph = worldToHex(player.x, player.y);
+          const candidates = activeHexes.filter((h) => !hallsChessTriggerSpentTiles.has(hexKey(h.q, h.r)));
+          const pick =
+            candidates.find((h) => h.q === ph.q && h.r === ph.r) ??
+            (candidates.length ? candidates[(Math.random() * candidates.length) | 0] : null);
+          const center = pick ? hexToWorld(pick.q, pick.r) : null;
+          const existing = collectibles.find((c) => c.kind === "chessTrigger");
+          if (existing && center) {
+            // Keep one trigger alive and visible: pin it to current tile center.
+            existing.x = center.x;
+            existing.y = center.y;
+            existing.r = CHESS_TRIGGER_HIT_R;
+            existing.bornAt = simElapsed;
+            existing.expiresAt = simElapsed + CHESS_TRIGGER_LIFETIME_SEC;
+          } else if (center && collectibles.filter((c) => c.kind === "chessTrigger").length < MAX_CHESS_TRIGGERS) {
+            collectibles.push({
+              kind: "chessTrigger",
+              x: center.x,
+              y: center.y,
+              r: CHESS_TRIGGER_HIT_R,
+              bornAt: simElapsed,
+              expiresAt: simElapsed + CHESS_TRIGGER_LIFETIME_SEC,
+            });
+          }
+        }
+        nextChessTriggerSpawnAt = simElapsed + randRange(CHESS_TRIGGER_SPAWN_INTERVAL_MIN, CHESS_TRIGGER_SPAWN_INTERVAL_MAX);
+      }
+
       if (!runDead && !runVictory) {
         for (let i = collectibles.length - 1; i >= 0; i--) {
           const c = collectibles[i];
@@ -5836,6 +5884,11 @@ function boot() {
             fireIgniteTickStep = 1;
           } else if (c.kind === "card" && cardPickup) {
             cardPickup.openCardPickup(c.card);
+          } else if (c.kind === "chessTrigger") {
+            const h = worldToHex(player.x, player.y);
+            if (hexEventRuntime?.startHallsTriggerEncounterAt?.(h.q, h.r, debugHallsPieceType)) {
+              hallsChessTriggerSpentTiles.add(hexKey(h.q, h.r));
+            }
           }
           collectibles.splice(i, 1);
         }
@@ -6324,8 +6377,8 @@ function boot() {
       activeHexes,
       hexToWorld,
       hexEventRuntime?.getHallsDrawState?.() ?? null,
-      (q, r) => specials.isHallsEventHexTile(q, r),
-      (q, r) => specials.isHallsEventSpent(q, r),
+      USE_HALLS_CHESS_TRIGGERS ? () => false : (q, r) => specials.isHallsEventHexTile(q, r),
+      USE_HALLS_CHESS_TRIGGERS ? () => false : (q, r) => specials.isHallsEventSpent(q, r),
     );
     if (depthsPathActive && isDepthsBossFightLevel()) {
       if (!depthsVictoryAscentActive && !runVictory) {
@@ -6355,6 +6408,8 @@ function boot() {
         });
       } else if (c.kind === "card") {
         drawCardPickupWorld(ctx, c, simElapsed);
+      } else if (c.kind === "chessTrigger") {
+        drawChessTriggerWorld(ctx, c, simElapsed);
       }
     }
     drawDamagePopups(ctx);

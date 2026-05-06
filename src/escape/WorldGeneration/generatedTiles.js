@@ -34,7 +34,8 @@ export function createGeneratedTilesManager({
     for (const h of needed) {
       const key = hexKey(h.q, h.r);
       if (!tileCache.has(key)) {
-        tryProceduralRareSpecialHex(h.q, h.r);
+        // Roll as tiles are generated, but never on the player's current center tile (keeps warning visible before entry).
+        if (h.q !== center.q || h.r !== center.r) tryProceduralRareSpecialHex(h.q, h.r);
         const c = hexToWorld(h.q, h.r);
         const emptyTerrain = isSpecialTile(h.q, h.r);
         tileCache.set(
@@ -69,7 +70,6 @@ export function createGeneratedTilesManager({
   function voidHexTerrain(q, r) {
     const key = hexKey(q, r);
     const c = hexToWorld(q, r);
-    tryProceduralRareSpecialHex(q, r);
     tileCache.set(
       key,
       generateHexTileObstacles(q, r, {

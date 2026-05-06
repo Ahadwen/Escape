@@ -1163,7 +1163,167 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
  * @param {{ colourblind?: boolean; simElapsed?: number; depthsPath?: boolean }} [opts]
  */
 export function drawHunterBody(ctx, h, opts = {}) {
+  const tNow = Number.isFinite(Number(opts.simElapsed)) ? Number(opts.simElapsed) : 0;
   if (h.hallsPieceType && HALLS_COIN_PIECE_TYPES.has(String(h.hallsPieceType))) {
+    const x = Number(h.x ?? 0);
+    const y = Number(h.y ?? 0);
+    const r = Number(h.r ?? HALLS_COIN_RADIUS_PX);
+    if (h.type === "hallsBishop") {
+      const prayer = h.hallsBishopHeavenState === "praying";
+      const activeHeaven = h.hallsBishopHeavenState === "active";
+      if (prayer || activeHeaven) {
+        const holyPulse = 0.5 + 0.5 * Math.sin(tNow * 7.8 + Number(h.bornAt ?? 0) * 0.13);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const aura = ctx.createRadialGradient(x, y, r * 0.2, x, y, r + 34);
+        const auraMul = prayer ? 1 : 0.72;
+        aura.addColorStop(0, `rgba(255,255,255,${(0.2 + 0.22 * holyPulse) * auraMul})`);
+        aura.addColorStop(0.45, `rgba(186, 230, 253, ${(0.14 + 0.16 * holyPulse) * auraMul})`);
+        aura.addColorStop(1, "rgba(59, 130, 246, 0)");
+        ctx.fillStyle = aura;
+        ctx.beginPath();
+        ctx.arc(x, y, r + 34, 0, TAU);
+        ctx.fill();
+        ctx.restore();
+      }
+      if (prayer) {
+        // Prayer phase: light from heaven shines on the bishop itself.
+        const pulse = 0.5 + 0.5 * Math.sin(tNow * 10.5);
+        ctx.save();
+        const cone = ctx.createRadialGradient(x, y - 22, 8, x, y, 130);
+        cone.addColorStop(0, `rgba(255,255,255,${0.24 + 0.18 * pulse})`);
+        cone.addColorStop(0.5, "rgba(250, 250, 255, 0.2)");
+        cone.addColorStop(1, "rgba(200, 210, 255, 0)");
+        ctx.fillStyle = cone;
+        ctx.beginPath();
+        ctx.ellipse(x, y + 6, 84, 40, 0, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = `rgba(255,255,255,${0.3 + 0.28 * pulse})`;
+        ctx.lineWidth = 5 + pulse * 2.6;
+        ctx.shadowColor = "rgba(255,255,255,0.75)";
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.moveTo(x, y - 480);
+        ctx.lineTo(x, y + 4);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+      if (activeHeaven) {
+        // Active phase: a separate heaven beam chases the player.
+        const beamX = Number(h.hallsBishopHeavenX ?? x);
+        const beamY = Number(h.hallsBishopHeavenY ?? y);
+        const pulse = 0.5 + 0.5 * Math.sin(tNow * 9.2);
+        const drift = Math.sin(tNow * 8.5 + beamX * 0.02) * 1.8;
+        const shaftTopY = beamY - 460;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const pool = ctx.createRadialGradient(beamX, beamY - 8, 6, beamX, beamY, 108);
+        pool.addColorStop(0, `rgba(255,255,255,${0.34 + 0.2 * pulse})`);
+        pool.addColorStop(0.35, "rgba(219, 234, 254, 0.24)");
+        pool.addColorStop(1, "rgba(147, 197, 253, 0)");
+        ctx.fillStyle = pool;
+        ctx.beginPath();
+        ctx.ellipse(beamX, beamY + 5, 72 + pulse * 6, 34 + pulse * 3, 0, 0, TAU);
+        ctx.fill();
+
+        // Soft atmospheric column that clearly fades from the sky downward.
+        const skyMist = ctx.createLinearGradient(beamX, shaftTopY - 30, beamX, beamY + 8);
+        skyMist.addColorStop(0, "rgba(219, 234, 254, 0)");
+        skyMist.addColorStop(0.2, "rgba(219, 234, 254, 0.08)");
+        skyMist.addColorStop(0.68, "rgba(191, 219, 254, 0.2)");
+        skyMist.addColorStop(1, `rgba(255,255,255,${0.24 + 0.16 * pulse})`);
+        ctx.strokeStyle = skyMist;
+        ctx.lineWidth = 20 + pulse * 4;
+        ctx.shadowColor = "rgba(191, 219, 254, 0.38)";
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.moveTo(beamX + drift * 0.2, shaftTopY - 18);
+        ctx.lineTo(beamX, beamY + 4);
+        ctx.stroke();
+
+        const outer = ctx.createLinearGradient(beamX, shaftTopY, beamX, beamY + 6);
+        outer.addColorStop(0, "rgba(191, 219, 254, 0)");
+        outer.addColorStop(0.12, `rgba(219, 234, 254, ${0.1 + 0.06 * pulse})`);
+        outer.addColorStop(0.64, `rgba(147, 197, 253, ${0.4 + 0.15 * pulse})`);
+        outer.addColorStop(1, `rgba(255,255,255, ${0.34 + 0.2 * pulse})`);
+        ctx.strokeStyle = outer;
+        ctx.lineWidth = 13 + pulse * 2.8;
+        ctx.shadowColor = "rgba(191, 219, 254, 0.65)";
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.moveTo(beamX + drift * 0.35, shaftTopY);
+        ctx.lineTo(beamX, beamY + 3);
+        ctx.stroke();
+
+        const core = ctx.createLinearGradient(beamX, shaftTopY, beamX, beamY + 6);
+        core.addColorStop(0, "rgba(255,255,255,0)");
+        core.addColorStop(0.2, `rgba(255,255,255,${0.55 + 0.16 * pulse})`);
+        core.addColorStop(0.8, `rgba(255,255,255,${0.9 + 0.1 * pulse})`);
+        core.addColorStop(1, `rgba(255,255,255,${0.96})`);
+        ctx.strokeStyle = core;
+        ctx.lineWidth = 3.8 + pulse * 1.1;
+        ctx.shadowColor = "rgba(255,255,255,0.8)";
+        ctx.shadowBlur = 16;
+        ctx.beginPath();
+        ctx.moveTo(beamX + drift, shaftTopY + 8);
+        ctx.lineTo(beamX, beamY + 3);
+        ctx.stroke();
+
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = `rgba(255,255,255,${0.3 + 0.28 * pulse})`;
+        ctx.beginPath();
+        ctx.ellipse(beamX, beamY + 5, 26 + pulse * 6, 11 + pulse * 2.5, 0, 0, TAU);
+        ctx.stroke();
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = `rgba(186, 230, 253,${0.2 + 0.18 * pulse})`;
+        ctx.beginPath();
+        ctx.ellipse(beamX, beamY + 5, 38 + pulse * 8, 16 + pulse * 3, 0, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    if (h.type === "hallsRook") {
+      const pulse = 0.5 + 0.5 * Math.sin(tNow * 7.1 + Number(h.bornAt ?? 0) * 0.3);
+      const auraR = r + 92 + pulse * 10;
+      const ring1 = auraR;
+      const ring2 = auraR * (0.78 + 0.04 * Math.sin(tNow * 5.4));
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const g = ctx.createRadialGradient(x, y, r * 0.3, x, y, auraR + 28);
+      g.addColorStop(0, `rgba(224, 242, 254, ${0.08 + 0.07 * pulse})`);
+      g.addColorStop(0.48, `rgba(56, 189, 248, ${0.12 + 0.08 * pulse})`);
+      g.addColorStop(1, "rgba(30, 64, 175, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, auraR + 28, 0, TAU);
+      ctx.fill();
+
+      ctx.setLineDash([10, 9]);
+      ctx.lineDashOffset = -tNow * 58;
+      ctx.strokeStyle = `rgba(147, 197, 253, ${0.42 + 0.24 * pulse})`;
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.arc(x, y, ring1, 0, TAU);
+      ctx.stroke();
+
+      ctx.setLineDash([6, 12]);
+      ctx.lineDashOffset = tNow * 44;
+      ctx.strokeStyle = `rgba(191, 219, 254, ${0.32 + 0.2 * pulse})`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(x, y, ring2, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+    }
+    if (h.hallsHolyGlow) {
+      const holyPulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + x * 0.005 + y * 0.004) * 7.2);
+      drawCircle(ctx, x, y, r + 12 + holyPulse * 3.5, "#f8fafc", 0.14 + holyPulse * 0.12);
+      drawCircle(ctx, x, y, r + 7 + holyPulse * 2.2, "#ddd6fe", 0.12 + holyPulse * 0.1);
+    }
     drawHallsChessCoin(ctx, h, opts);
     return;
   }
@@ -1323,6 +1483,42 @@ function drawCircle(ctx, x, y, r, color, alpha = 1) {
 }
 
 export function drawProjectileBody(ctx, p) {
+  if (p.hallsQueenArcBolt) {
+    const ang = Math.atan2(Number(p.vy ?? 0), Number(p.vx ?? 1));
+    const len = (p.r ?? 8) * 2.35;
+    const halfW = (p.r ?? 8) * 0.62;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(ang);
+    const g = ctx.createLinearGradient(-len * 0.5, 0, len * 0.55, 0);
+    g.addColorStop(0, "rgba(69, 10, 10, 0.85)");
+    g.addColorStop(0.38, "rgba(127, 29, 29, 0.95)");
+    g.addColorStop(0.72, "rgba(185, 28, 28, 0.95)");
+    g.addColorStop(1, "rgba(254, 202, 202, 0.88)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    // Glass shard silhouette (sharp spear).
+    ctx.moveTo(len * 0.58, 0);
+    ctx.lineTo(-len * 0.18, halfW * 0.95);
+    ctx.lineTo(-len * 0.56, halfW * 0.44);
+    ctx.lineTo(-len * 0.48, 0);
+    ctx.lineTo(-len * 0.56, -halfW * 0.44);
+    ctx.lineTo(-len * 0.18, -halfW * 0.95);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "rgba(254, 226, 226, 0.84)";
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(248, 113, 113, 0.62)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-len * 0.3, -halfW * 0.22);
+    ctx.lineTo(len * 0.38, 0);
+    ctx.lineTo(-len * 0.3, halfW * 0.22);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   if (p.fireCone) {
     const gFire = ctx.createRadialGradient(p.x - p.r * 0.32, p.y - p.r * 0.32, 0.5, p.x, p.y, p.r);
     gFire.addColorStop(0, "#fee2e2");

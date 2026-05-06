@@ -63,6 +63,7 @@ import {
   HALLS_PIECE_IDS,
   HALLS_ENEMY_LIFETIME_SEC,
   HALLS_COIN_HIT_RADIUS_PX,
+  HALLS_COIN_DIAMETER_PX,
   HALLS_PAWN_DASH_PX,
   HALLS_KNIGHT_LONG_LEG_PX,
   HALLS_KNIGHT_SHORT_LEG_PX,
@@ -215,6 +216,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_BISHOP_HOLY_TICK_SEC = 0.2;
   const HALLS_BISHOP_HOLY_AHEAD_FACING_PX = 220;
   const HALLS_BISHOP_HOLY_LEAD_SEC = 0.7;
+  const HALLS_BISHOP_HEAVEN_TRIGGER_SEC = 15;
+  const HALLS_BISHOP_HEAVEN_PRAY_SEC = 2;
+  const HALLS_BISHOP_HEAVEN_CHASE_R = 56;
+  const HALLS_BISHOP_HEAVEN_TICK_SEC = 0.2;
+  const HALLS_BISHOP_HEAVEN_CHASE_SPEED = 240;
   const HALLS_PAWN_DIAG_VOLLEY_COOLDOWN_SEC = 1.35;
   const HALLS_PAWN_DIAG_VOLLEY_MATCH_EPS_PX = 110;
   const HALLS_PAWN_DIAG_VOLLEY_MIN_DIST_PX = 120;
@@ -224,6 +230,19 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_KNIGHT_LAND_BARRAGE_SPEED = 520;
   const HALLS_KNIGHT_LAND_BARRAGE_LIFE_SEC = 1.55;
   const HALLS_KNIGHT_LAND_BARRAGE_BOLT_R = 7.5;
+  const HALLS_QUEEN_ORBIT_R = HEX_SIZE * 1.06;
+  const HALLS_QUEEN_ORBIT_SPEED = 380;
+  const HALLS_QUEEN_CHARGE_SPEED_MUL = 1.8;
+  const HALLS_QUEEN_CHARGE_MIN_SEC = 0.4;
+  const HALLS_QUEEN_CHARGE_MAX_SEC = 0.9;
+  const HALLS_QUEEN_BOUNDARY_R = HEX_SIZE * 0.94;
+  const HALLS_QUEEN_ARC_BOLTS = 12;
+  const HALLS_QUEEN_ARC_SPREAD_RAD = Math.PI * 1.15;
+  const HALLS_QUEEN_ARC_BOLT_SPEED = 880;
+  const HALLS_QUEEN_ARC_BOLT_LIFE = 0.9;
+  const HALLS_QUEEN_ARC_BOLT_R = 9;
+  const HALLS_ROOK_AURA_R = 142;
+  const HALLS_ROOK_AURA_TICK_SEC = 0.26;
   const DEPTHS_SHARD_SPREAD_RAD = (20 * Math.PI) / 180;
   const DEPTHS_SHARD_DASH_MULT = 3;
   const DEPTHS_SHARD_BASE_DASH = 124;
@@ -888,6 +907,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsBishopPendingDestY = 0;
         h.hallsHolyGlow = true;
         h.hallsBishopHolyNextAt = elapsed + rand(0.65, 1.3);
+        h.hallsBishopHeavenState = "idle";
+        h.hallsBishopHeavenStartAt = elapsed + HALLS_BISHOP_HEAVEN_TRIGGER_SEC;
+        h.hallsBishopHeavenPrayUntil = 0;
+        h.hallsBishopHeavenX = h.x;
+        h.hallsBishopHeavenY = h.y;
+        h.hallsBishopHeavenTargetX = h.x;
+        h.hallsBishopHeavenTargetY = h.y;
+        h.hallsBishopHeavenNextTickAt = 0;
       }
       if (type === HALLS_PIECE_IDS.ROOK) {
         h.hallsRookPhase = "approach";
@@ -900,7 +927,21 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsRookPendingDestX = 0;
         h.hallsRookPendingDestY = 0;
         h.hallsRookGlideAxis = "x";
+        h.hallsRookAuraNextAt = elapsed + 0.12;
       }
+      if (type === HALLS_PIECE_IDS.QUEEN) {
+        h.hallsQueenState = "orbit";
+        h.hallsQueenOrbitAng = Math.random() * Math.PI * 2;
+        h.hallsQueenOrbitDir = Math.random() < 0.5 ? -1 : 1;
+        h.hallsQueenChargeNextAt = elapsed + rand(HALLS_QUEEN_CHARGE_MIN_SEC, HALLS_QUEEN_CHARGE_MAX_SEC);
+        h.hallsQueenChargeUx = 1;
+        h.hallsQueenChargeUy = 0;
+        h.hallsQueenWasInside = false;
+      }
+    }
+    if (Number.isFinite(Number(opts?.hallsLockCenterX)) && Number.isFinite(Number(opts?.hallsLockCenterY))) {
+      h.hallsLockCenterX = Number(opts.hallsLockCenterX);
+      h.hallsLockCenterY = Number(opts.hallsLockCenterY);
     }
     h.r = r;
     h.life = life;
@@ -946,6 +987,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         }
       }
       relocateIfForbidden();
+      if (opts?.forceExactPosition) {
+        h.x = customX;
+        h.y = customY;
+      }
       pushHunter(h);
       return;
     }
@@ -1181,6 +1226,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const { w: VIEW_W, h: VIEW_H } = getViewSize();
     for (const h of entities.hunters) {
       if (h.type !== HALLS_PIECE_IDS.BISHOP) continue;
+      if (h.hallsBishopHeavenState === "praying" || h.hallsBishopHeavenState === "active") continue;
       if (elapsed < Number(h.hallsBishopHolyNextAt ?? 0)) continue;
       h.hallsBishopHolyNextAt = elapsed + HALLS_BISHOP_HOLY_CAST_COOLDOWN_SEC + rand(-0.2, 0.35);
 
@@ -1440,7 +1486,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
   /** @param {any} h @param {{ x: number; y: number; r?: number }} target @param {{ x: number; y: number; r?: number }} player */
   function hallsTickRookChess(h, elapsed, spDt, target, player, glide) {
-    const aimAt = () => hallsChessFaceToward(h, target.x, target.y);
+    const minMovePx = HALLS_COIN_DIAMETER_PX;
+    const leadX = Number(target.x ?? player.x) + Number(target.velX ?? 0) * 0.34;
+    const leadY = Number(target.y ?? player.y) + Number(target.velY ?? 0) * 0.34;
+    const aimAt = () => hallsChessFaceToward(h, leadX, leadY);
 
     if (h.hallsGliding && h.hallsDestX != null && h.hallsDestY != null) {
       aimAt();
@@ -1460,10 +1509,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         const miss = distSq(h, player) > Rr * Rr;
         if (miss) {
           h.hallsRookPhase = "approach";
-          h.hallsNextThinkAt = elapsed + 0.18;
+          h.hallsNextThinkAt = elapsed + 0.08;
         } else {
           h.hallsRookPhase = "approach";
-          h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(HALLS_PIECE_IDS.ROOK) * 0.55;
+          h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(HALLS_PIECE_IDS.ROOK) * 0.22;
         }
         return;
       }
@@ -1474,7 +1523,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsRookHasLastDir = true;
       }
 
-      h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(HALLS_PIECE_IDS.ROOK) * 0.52;
+      h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(HALLS_PIECE_IDS.ROOK) * 0.16;
       return;
     }
 
@@ -1491,7 +1540,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         return;
       }
       const tStrike = hallsRookStrikeGlideT(h, ux, uy, player);
-      if (tStrike < 12) {
+      if (tStrike < minMovePx) {
         h.hallsRookPhase = "approach";
         h.hallsNextThinkAt = elapsed;
         return;
@@ -1528,8 +1577,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       return;
     }
 
-    const wpx = player.x - h.x;
-    const wpy = player.y - h.y;
+    const wpx = leadX - h.x;
+    const wpy = leadY - h.y;
     const distTo = Math.hypot(wpx, wpy) || 1;
     const lineWant = clamp(
       HALLS_ROOK_LINEUP_FRAC * distTo,
@@ -1552,7 +1601,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     for (const [oux, ouy] of orthos) {
       const tObs = hallsChessMaxSlideDist(h.x, h.y, h, oux, ouy, cap);
       const t = Math.min(lineWant, tObs);
-      if (t < 22) continue;
+      if (t < minMovePx) continue;
       const px = h.x + oux * t;
       const py = h.y + ouy * t;
       let strikeUx = 0;
@@ -1567,7 +1616,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const crossEnd = hallsRookLineCrossAt(px, py, player, strikeUx, strikeUy);
       const score =
         HALLS_ROOK_ALIGN_CROSS_WEIGHT * crossEnd +
-        HALLS_ROOK_ALIGN_DIST_WEIGHT * distSq({ x: px, y: py }, target);
+        HALLS_ROOK_ALIGN_DIST_WEIGHT * distSq({ x: px, y: py }, { x: leadX, y: leadY });
       if (score < bestScore) {
         bestScore = score;
         bestUx = oux;
@@ -1603,7 +1652,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
     }
 
-    if (bestT < 22 || !Number.isFinite(bestScore)) {
+    if (bestT < minMovePx || !Number.isFinite(bestScore)) {
       h.hallsNextThinkAt = elapsed + 0.2;
       aimAt();
       return;
@@ -1614,9 +1663,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const strikeReady =
       threatHit < Infinity &&
       aheadThreat &&
-      crossNow < HALLS_ROOK_LINE_CROSS_EPS &&
-      threatHit > 22 &&
-      threatHit < HALLS_ROOK_STRIKE_COMMIT_MAX_T_PX;
+      crossNow < HALLS_ROOK_LINE_CROSS_EPS * 1.15 &&
+      threatHit > minMovePx &&
+      threatHit < HALLS_ROOK_STRIKE_COMMIT_MAX_T_PX * 1.2;
 
     if (strikeReady) {
       h.hallsRookPhase = "pause";
@@ -1652,6 +1701,75 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     h.hallsGliding = true;
     h.hallsRookPhase = "approach";
     aimAt();
+  }
+
+  function hallsEmitQueenBoundaryArc(h, elapsed, targetX, targetY) {
+    const dx = Number(targetX ?? h.x) - h.x;
+    const dy = Number(targetY ?? h.y) - h.y;
+    const a0 = Math.atan2(dy, dx);
+    for (let i = 0; i < HALLS_QUEEN_ARC_BOLTS; i++) {
+      const t = HALLS_QUEEN_ARC_BOLTS <= 1 ? 0.5 : i / (HALLS_QUEEN_ARC_BOLTS - 1);
+      const sprayJitter = rand(-0.12, 0.12);
+      const speedJitter = rand(0.84, 1.18);
+      const a = a0 - HALLS_QUEEN_ARC_SPREAD_RAD * 0.5 + HALLS_QUEEN_ARC_SPREAD_RAD * t + sprayJitter;
+      entities.projectiles.push({
+        x: h.x,
+        y: h.y,
+        vx: Math.cos(a) * HALLS_QUEEN_ARC_BOLT_SPEED * speedJitter,
+        vy: Math.sin(a) * HALLS_QUEEN_ARC_BOLT_SPEED * speedJitter,
+        r: HALLS_QUEEN_ARC_BOLT_R,
+        bornAt: elapsed,
+        life: HALLS_QUEEN_ARC_BOLT_LIFE,
+        damage: 1,
+        hallsQueenArcBolt: true,
+      });
+    }
+  }
+
+  function hallsTickQueenChess(h, elapsed, spDt, target, glide) {
+    const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
+    const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
+    const faceTargetX = Number(target.x ?? cx);
+    const faceTargetY = Number(target.y ?? cy);
+    hallsChessFaceToward(h, faceTargetX, faceTargetY);
+
+    if ((h.hallsQueenState ?? "orbit") === "charge") {
+      const st = hallsChessGlideToward(h, Number(h.hallsDestX), Number(h.hallsDestY), glide * HALLS_QUEEN_CHARGE_SPEED_MUL, spDt);
+      const insideNow = distSq(h, { x: cx, y: cy }) <= HALLS_QUEEN_BOUNDARY_R * HALLS_QUEEN_BOUNDARY_R;
+      if (insideNow !== !!h.hallsQueenWasInside) {
+        hallsEmitQueenBoundaryArc(h, elapsed, faceTargetX, faceTargetY);
+      }
+      h.hallsQueenWasInside = insideNow;
+      if (st === "arrived" || st === "stuck") {
+        h.hallsQueenState = "orbit";
+        h.hallsQueenChargeNextAt = elapsed + rand(HALLS_QUEEN_CHARGE_MIN_SEC, HALLS_QUEEN_CHARGE_MAX_SEC);
+        h.hallsDestX = null;
+        h.hallsDestY = null;
+        const ang = Math.atan2(h.y - cy, h.x - cx);
+        if (Number.isFinite(ang)) h.hallsQueenOrbitAng = ang;
+      }
+      return;
+    }
+
+    const orbitDir = Number(h.hallsQueenOrbitDir ?? 1) >= 0 ? 1 : -1;
+    const orbitAng = Number(h.hallsQueenOrbitAng ?? 0) + (orbitDir * HALLS_QUEEN_ORBIT_SPEED * spDt) / Math.max(1, HALLS_QUEEN_ORBIT_R);
+    h.hallsQueenOrbitAng = orbitAng;
+    h.x = cx + Math.cos(orbitAng) * HALLS_QUEEN_ORBIT_R;
+    h.y = cy + Math.sin(orbitAng) * HALLS_QUEEN_ORBIT_R;
+
+    if (elapsed < Number(h.hallsQueenChargeNextAt ?? 0)) return;
+    const dx = faceTargetX - h.x;
+    const dy = faceTargetY - h.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const ux = dx / d;
+    const uy = dy / d;
+    const chargeDist = HALLS_QUEEN_BOUNDARY_R * 2.7;
+    h.hallsDestX = h.x + ux * chargeDist;
+    h.hallsDestY = h.y + uy * chargeDist;
+    h.hallsQueenChargeUx = ux;
+    h.hallsQueenChargeUy = uy;
+    h.hallsQueenWasInside = distSq(h, { x: cx, y: cy }) <= HALLS_QUEEN_BOUNDARY_R * HALLS_QUEEN_BOUNDARY_R;
+    h.hallsQueenState = "charge";
   }
 
   function hallsBishopPlayerHitRadius(h, player) {
@@ -1703,10 +1821,55 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
   /** @param {any} h @param {{ x: number; y: number; r?: number }} target @param {{ x: number; y: number; r?: number }} player */
   function hallsTickBishopChess(h, elapsed, spDt, target, player, glide) {
-    const aimAt = () => hallsChessFaceToward(h, target.x, target.y);
+    let chaseTarget = target;
+    if (h.hallsBishopHeavenState === "idle" && elapsed >= Number(h.hallsBishopHeavenStartAt ?? Infinity)) {
+      h.hallsBishopHeavenState = "praying";
+      h.hallsBishopHeavenPrayUntil = elapsed + HALLS_BISHOP_HEAVEN_PRAY_SEC;
+      h.hallsBishopHeavenX = h.x;
+      h.hallsBishopHeavenY = h.y;
+      h.hallsBishopHeavenTargetX = player.x;
+      h.hallsBishopHeavenTargetY = player.y;
+      h.hallsBishopHeavenNextTickAt = h.hallsBishopHeavenPrayUntil;
+      h.hallsGliding = false;
+      h.hallsDestX = null;
+      h.hallsDestY = null;
+    }
+    h.hallsHolyGlow = false;
+    if (h.hallsBishopHeavenState === "praying") {
+      h.hallsHolyGlow = true;
+      hallsChessFaceToward(h, player.x, player.y);
+      if (elapsed < Number(h.hallsBishopHeavenPrayUntil ?? 0)) return;
+      h.hallsBishopHeavenState = "active";
+    }
+    if (h.hallsBishopHeavenState === "active") {
+      // Prayer spotlight ends, but the bishop remains holy-lit while resuming movement/chase.
+      h.hallsHolyGlow = true;
+      const leadX = player.x + Number(player.velX ?? 0) * 0.42;
+      const leadY = player.y + Number(player.velY ?? 0) * 0.42;
+      const targetSteer = 0.22;
+      h.hallsBishopHeavenTargetX =
+        Number(h.hallsBishopHeavenTargetX ?? h.x) + (leadX - Number(h.hallsBishopHeavenTargetX ?? h.x)) * targetSteer;
+      h.hallsBishopHeavenTargetY =
+        Number(h.hallsBishopHeavenTargetY ?? h.y) + (leadY - Number(h.hallsBishopHeavenTargetY ?? h.y)) * targetSteer;
+      const tx = Number(h.hallsBishopHeavenTargetX ?? h.x) - Number(h.hallsBishopHeavenX ?? h.x);
+      const ty = Number(h.hallsBishopHeavenTargetY ?? h.y) - Number(h.hallsBishopHeavenY ?? h.y);
+      const d = Math.hypot(tx, ty) || 1;
+      const step = Math.min(d, HALLS_BISHOP_HEAVEN_CHASE_SPEED * Math.max(spDt, 1 / 120));
+      h.hallsBishopHeavenX = Number(h.hallsBishopHeavenX ?? h.x) + (tx / d) * step;
+      h.hallsBishopHeavenY = Number(h.hallsBishopHeavenY ?? h.y) + (ty / d) * step;
+      if (elapsed >= Number(h.hallsBishopHeavenNextTickAt ?? 0)) {
+        h.hallsBishopHeavenNextTickAt = elapsed + HALLS_BISHOP_HEAVEN_TICK_SEC;
+        if (distSq({ x: h.hallsBishopHeavenX, y: h.hallsBishopHeavenY }, player) <= (HALLS_BISHOP_HEAVEN_CHASE_R + player.r) ** 2) {
+          damagePlayer(1, { sourceX: h.hallsBishopHeavenX, sourceY: h.hallsBishopHeavenY, hallsBishopHeavenLaser: true });
+        }
+      }
+      chaseTarget = { x: h.hallsBishopHeavenX, y: h.hallsBishopHeavenY };
+    }
+
+    const aimAt = () => hallsChessFaceToward(h, chaseTarget.x, chaseTarget.y);
     const diagEqualized = () => Math.abs(Math.abs(player.x - h.x) - Math.abs(player.y - h.y)) <= HALLS_BISHOP_LINE_CROSS_EPS;
-    const leadX = player.x + Number(player.velX ?? 0) * 0.44;
-    const leadY = player.y + Number(player.velY ?? 0) * 0.44;
+    const leadX = chaseTarget.x;
+    const leadY = chaseTarget.y;
     const aggressiveLineWant = (distTo) =>
       clamp(
         HALLS_BISHOP_LINEUP_FRAC * distTo * 1.45,
@@ -1970,6 +2133,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
     if (piece === HALLS_PIECE_IDS.ROOK) {
       hallsTickRookChess(h, elapsed, spDt, target, getPlayer(), glide);
+      return;
+    }
+    if (piece === HALLS_PIECE_IDS.QUEEN) {
+      hallsTickQueenChess(h, elapsed, spDt, target, glide);
       return;
     }
 
@@ -3056,7 +3223,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         p.r = 4 + (p.rEnd - 4) * ageU;
       }
       let hitBarrier = false;
-      const ignoreArenaBarriers = !!p.hallsKnightLandBolt;
+      const ignoreArenaBarriers = !!p.hallsKnightLandBolt || !!p.hallsQueenArcBolt;
       for (let s = 0; s <= 5; s++) {
         const u = s / 5;
         const sx = prevX + (p.x - prevX) * u;
@@ -3084,7 +3251,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
 
       const circle = { x: p.x, y: p.y, r: p.r };
-      if (elapsed - p.bornAt > p.life || outOfBoundsCircle(circle) || collidesAnyObstacle(circle)) {
+      const hitObstacle = !p.hallsQueenArcBolt && collidesAnyObstacle(circle);
+      if (elapsed - p.bornAt > p.life || outOfBoundsCircle(circle) || hitObstacle) {
         entities.projectiles.splice(i, 1);
         continue;
       }
@@ -3369,6 +3537,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           ...(h.depthsEldritchCageLunge ? { eldritchBloodAttack: "eldritchCageLunge" } : {}),
         });
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
+      }
+      if (h.type === HALLS_PIECE_IDS.ROOK && elapsed >= Number(h.hallsRookAuraNextAt ?? 0)) {
+        h.hallsRookAuraNextAt = elapsed + HALLS_ROOK_AURA_TICK_SEC;
+        const auraR = HALLS_ROOK_AURA_R + player.r;
+        if (distSq(h, player) <= auraR * auraR) {
+          damagePlayer(1, { sourceX: h.x, sourceY: h.y, hallsRookAura: true });
+        }
       }
     }
   }

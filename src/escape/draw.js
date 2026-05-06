@@ -1177,3 +1177,18 @@ export function drawCardPickupWorld(ctx, pickup, elapsed) {
   ctx.lineWidth = 1;
   ctx.strokeRect(cx - barW / 2, stableBarY, barW, barH);
 }
+
+/** Small black hex pickup for triggering a halls encounter on demand. */
+export function drawChessTriggerWorld(ctx, pickup, elapsed) {
+  const born = pickup.bornAt ?? elapsed;
+  const bob = Math.sin((elapsed - born) * 3.6) * 1.8;
+  const pulse = 0.5 + 0.5 * Math.sin((elapsed - born) * 4.3);
+  const cx = pickup.x;
+  const cy = pickup.y + bob;
+  const r = Math.max(8, (pickup.r ?? 14) * 0.7);
+
+  drawCircle(ctx, cx, cy, r + 9 + pulse * 2.5, "#0b1220", 0.22 + pulse * 0.16);
+  drawCircle(ctx, cx, cy, r + 3 + pulse * 1.5, "#111827", 0.5);
+  strokePointyHexOutline(ctx, cx, cy, r, "rgba(2, 6, 23, 0.98)", 2.8, 0);
+  strokePointyHexOutline(ctx, cx, cy, r * 0.72, "rgba(148, 163, 184, 0.34)", 1.2, 0);
+}
