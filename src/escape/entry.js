@@ -156,6 +156,12 @@ import { applyPathShellTheme } from "./hud/pathShellTheme.js";
 /** Procedural hex floor — near REFERENCE slate fill (`rgba(15,23,42,…)` family). */
 const FLOOR_HEX_FILL = "#0f172a";
 
+/**
+ * Temporary: Knight only, no character modal, death/victory → immediate new run (Enter / tap).
+ * Flip to `false` to restore roster + character select.
+ */
+const KNIGHT_ONLY_MODE = true;
+
 /** Until character select exists, default active hero id. */
 let activeCharacterId = "knight";
 
@@ -572,7 +578,7 @@ function boot() {
   const mobileUnpauseBtn = document.getElementById("mobile-unpause-btn");
 
   /** Until the modal confirms a hero, picking the defaulted id must still refresh (often knight on touch). */
-  let hasLockedInitialHeroFromModal = !mobileUiEnabled;
+  let hasLockedInitialHeroFromModal = !mobileUiEnabled || KNIGHT_ONLY_MODE;
   /** After death, next pick must re-apply loadout even if the same hero stays selected. */
   let expectingCharacterPickAfterDeath = false;
 
@@ -745,7 +751,7 @@ function boot() {
     lastPlayerHexKey,
   }));
 
-  activeCharacterId = resolveImplementedHeroId(activeCharacterId);
+  activeCharacterId = KNIGHT_ONLY_MODE ? "knight" : resolveImplementedHeroId(activeCharacterId);
 
   const inventory = createEmptyInventory();
   inventory.clubsInvisUntil = 0;
@@ -3671,6 +3677,7 @@ function boot() {
    *  @property {boolean} [forceReselect] — allow re-applying loadout while id matches (first modal confirm, retry same hero).
    */
   function switchActiveCharacter(id, opts = {}) {
+    if (KNIGHT_ONLY_MODE) id = "knight";
     const forceReselect = !!(opts && opts.forceReselect);
     if (!forceReselect && id === activeCharacterId) return;
     hideDeathScreen();
@@ -4419,32 +4426,44 @@ function boot() {
     characterSelectModalEl?.classList.add("open");
   }
 
+  /** Knight-only: same world reset as post-modal confirm, without opening character select. */
+  function restartRunFromGameOverOverlay() {
+    if ((!runDead && !runVictory) || !hunterRuntime) return;
+    activeCharacterId = "knight";
+    performFullRunResetFromGameOverOverlay();
+    clearMovementKeys();
+  }
+
   /** @param {KeyboardEvent} e */
   function onDeathRetryKeydown(e) {
     if (e.key !== "Enter") return;
     if (e.repeat) return;
     if (runDead) {
       e.preventDefault();
-      goToCharacterSelectAfterDeath();
+      if (KNIGHT_ONLY_MODE) restartRunFromGameOverOverlay();
+      else goToCharacterSelectAfterDeath();
       return;
     }
     if (runVictory) {
       e.preventDefault();
-      goToCharacterSelectAfterVictory();
+      if (KNIGHT_ONLY_MODE) restartRunFromGameOverOverlay();
+      else goToCharacterSelectAfterVictory();
     }
   }
   window.addEventListener("keydown", onDeathRetryKeydown);
 
   function onDeathScreenChooseHeroClick() {
     if (!runDead) return;
-    goToCharacterSelectAfterDeath();
+    if (KNIGHT_ONLY_MODE) restartRunFromGameOverOverlay();
+    else goToCharacterSelectAfterDeath();
   }
   deathScreenChooseHeroBtn?.addEventListener("click", onDeathScreenChooseHeroClick);
   mobileControlDisposers.push(() => deathScreenChooseHeroBtn?.removeEventListener("click", onDeathScreenChooseHeroClick));
 
   function onVictoryScreenChooseHeroClick() {
     if (!runVictory) return;
-    goToCharacterSelectAfterVictory();
+    if (KNIGHT_ONLY_MODE) restartRunFromGameOverOverlay();
+    else goToCharacterSelectAfterVictory();
   }
   victoryScreenChooseHeroBtn?.addEventListener("click", onVictoryScreenChooseHeroClick);
   mobileControlDisposers.push(() =>
@@ -5032,7 +5051,7 @@ function boot() {
   const abilityKeys = attachAbilityKeyPresses(window, handleAbilityPress, undefined, handleAbilityRelease);
 
   if (mobileUiEnabled) {
-    if (characterSelectModalEl) {
+    if (!KNIGHT_ONLY_MODE && characterSelectModalEl) {
       characterSelectModalEl.classList.add("open");
       manualPause = true;
       clearMovementKeys();

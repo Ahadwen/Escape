@@ -244,7 +244,7 @@ export function createKnight() {
 
     getShellUi() {
       return {
-        controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q), ${LABEL_W} (W), ${LABEL_E} (E), ${LABEL_R} (R — item deck can override R) | Pause: Space | After death: Enter or Choose hero → character select`,
+        controlsHintLine: `Move: Arrows | ${LABEL_Q} (Q), ${LABEL_W} (W), ${LABEL_E} (E), ${LABEL_R} (R — item deck can override R) | Pause: Space | After death: Enter or tap Retry for a new run`,
       };
     },
 
