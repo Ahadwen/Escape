@@ -13,8 +13,6 @@ import {
   SWAMP_BOOTLEG_CRYSTAL_HP,
   HALLS_MARBLE_CRYSTAL_TEMP_HP,
   HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT,
-  HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MIN,
-  HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MAX,
   ROULETTE_OUTER_PENALTY_HP,
   FORGE_OUTER_PENALTY_HP,
   SURGE_TILE_FLASH_SEC,
@@ -67,6 +65,7 @@ import {
   drawFrontShieldArc,
   drawArenaNexusHexWorld,
   drawSurgeHexWorld,
+  drawHallsEventHexWorld,
   drawSafehouseHexWorld,
   drawRunStatsHud,
   drawSwampBootlegCursesHud,
@@ -568,6 +567,7 @@ function boot() {
     getIsLunatic: () => activeCharacterId === "lunatic",
     getSimElapsed: () => simElapsed,
     getRunLevel: () => runLevel,
+    getActivePathId: () => pathRuntime.getCurrentPathId(),
     getShouldSuppressProceduralEventHexSpawns: () =>
       pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL,
   }), "specials", runLogger);
@@ -3900,9 +3900,35 @@ function boot() {
       if (Math.hypot(x - fc.x, y - fc.y) <= HEX_SIZE + 4) return true;
     }
     const h = worldToHex(x, y);
-    if (!specials.isArenaHexTile(h.q, h.r) && !specials.isSurgeHexTile(h.q, h.r)) return false;
+    if (
+      !specials.isArenaHexTile(h.q, h.r) &&
+      !specials.isSurgeHexTile(h.q, h.r) &&
+      !(hexEventRuntime?.isHallsLockBarrierWorldPoint?.(x, y) ?? false)
+    )
+      return false;
     const c = hexToWorld(h.q, h.r);
     return Math.hypot(x - c.x, y - c.y) <= HEX_SIZE + 4;
+  }
+
+  function spawnHallsHealCrystal(q, r) {
+    const c = hexToWorld(q, r);
+    for (let i = collectibles.length - 1; i >= 0; i--) {
+      const it = collectibles[i];
+      if (it.kind !== "heal") continue;
+      if (Math.hypot(it.x - c.x, it.y - c.y) <= HEX_SIZE * 0.42) collectibles.splice(i, 1);
+    }
+    collectibles.push({
+      kind: "heal",
+      x: c.x,
+      y: c.y,
+      r: HEAL_PICKUP_HIT_R,
+      plusHalf: HEAL_PICKUP_PLUS_HALF,
+      plusThick: HEAL_PICKUP_ARM_THICK,
+      heal: HEAL_CRYSTAL_HP,
+      hallsMarbleCrystal: true,
+      bornAt: simElapsed,
+      expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
+    });
   }
 
   function ejectSpawnerHunterFromSpecialHexFootprint(h) {
@@ -4045,7 +4071,8 @@ function boot() {
     hexToWorld,
     isArenaHexTile: (q, r) => specials.isArenaHexTile(q, r),
     isWorldPointOnSurgeLockBarrierTile: (x, y) =>
-      hexEventRuntime?.isSurgeLockBarrierWorldPoint?.(x, y) ?? false,
+      (hexEventRuntime?.isSurgeLockBarrierWorldPoint?.(x, y) ?? false) ||
+      (hexEventRuntime?.isHallsLockBarrierWorldPoint?.(x, y) ?? false),
     isWorldPointOnSpecialSpawnerForbiddenHex,
     ejectSpawnerHunterFromSpecialHexFootprint,
     getDifficultyClockSec: () => safehouseHexFlow.getDifficultyClockSec(simElapsed),
@@ -4173,6 +4200,12 @@ function boot() {
       });
     },
     spawnHunter: (type, x, y, opts) => hunterRuntime.spawnHunter(type, x, y, opts),
+    getDebugHallsPieceType: () => debugHallsPieceType,
+    isHallsEventHexInteractive: (q, r) => specials.isHallsEventHexInteractive(q, r),
+    markProceduralHallsEventHexSpent: (q, r) => specials.markProceduralHallsEventHexSpent(q, r),
+    spawnHallsHealCrystal: (q, r) => spawnHallsHealCrystal(q, r),
+    killHuntersOnHex: (q, r) => hunterRuntime.killHuntersStandingOnSurgeHex(q, r),
+    ejectHuntersFromHallsLockHex: (lq, lr) => hunterRuntime.ejectHuntersFromSurgeLockHex(lq, lr, 2),
     killHuntersOnSurgeHex: (q, r) => hunterRuntime.killHuntersStandingOnSurgeHex(q, r),
     cleanupArenaNexusSiegeCombat: () => hunterRuntime.cleanupArenaNexusSiegeCombat(),
     clampArenaNexusDefendersOnRing: (cx, cy) => hunterRuntime.clampArenaNexusDefendersOnRing(cx, cy),
@@ -4442,11 +4475,15 @@ function boot() {
 
   const devHuntersEl = document.getElementById("dev-hunters-enabled");
   const devHunterTypeFilterEl = document.getElementById("dev-hunter-type-filter");
+  const debugHallsPieceSelectEl = document.getElementById("debug-halls-piece-select");
   var huntersEnabled = true;
   const HUNTERS_LS_KEY = "escape-dev-hunters-enabled";
   const HUNTER_TYPE_FILTER_LS_KEY = "escape-dev-hunter-type-filter";
+  const HALLS_DEBUG_PIECE_LS_KEY = "escape-dev-halls-piece";
   /** @type {string | null} */
   var debugHunterTypeFilter = null;
+  /** @type {string | null} */
+  var debugHallsPieceType = null;
   function normalizeDebugHunterTypeFilter(value) {
     if (typeof value !== "string") return null;
     const v = value.trim();
@@ -4472,6 +4509,22 @@ function boot() {
       v === "hallsRook" ||
       v === "hallsKnight" ||
       v === "hallsBishop" ||
+      v === "hallsQueen" ||
+      v === "hallsKing"
+    ) {
+      return v;
+    }
+    return null;
+  }
+  function normalizeDebugHallsPieceType(value) {
+    if (typeof value !== "string") return null;
+    const v = value.trim();
+    if (!v || v === "__auto__") return null;
+    if (
+      v === "hallsPawn" ||
+      v === "hallsKnight" ||
+      v === "hallsBishop" ||
+      v === "hallsRook" ||
       v === "hallsQueen" ||
       v === "hallsKing"
     ) {
@@ -4511,6 +4564,18 @@ function boot() {
       depthsTentacleBurstLastSpawnK = -1;
       resetDepthsWhirlpoolForRun();
       resetDepthsBossRisingWaveChase();
+    });
+  }
+  if (debugHallsPieceSelectEl && "value" in debugHallsPieceSelectEl) {
+    const saved = localStorage.getItem(HALLS_DEBUG_PIECE_LS_KEY);
+    const normalized = normalizeDebugHallsPieceType(saved);
+    debugHallsPieceType = normalized;
+    debugHallsPieceSelectEl.value = normalized ?? "__auto__";
+    debugHallsPieceSelectEl.addEventListener("change", () => {
+      const normalizedNext = normalizeDebugHallsPieceType(String(debugHallsPieceSelectEl.value || "__auto__"));
+      debugHallsPieceType = normalizedNext;
+      localStorage.setItem(HALLS_DEBUG_PIECE_LS_KEY, normalizedNext ?? "__auto__");
+      hexEventRuntime?.reset();
     });
   }
 
@@ -5111,6 +5176,11 @@ function boot() {
         }),
       );
       character.tick(buildAbilityContext(dt));
+      if (!runDead && !runVictory && specialsSimUnpaused() && !isDepthsBossFightLevel()) {
+        // Ability movement (dash/blink style) can move the player before normal walk/collision.
+        // Clamp immediately so event locks cannot be bypassed for even a single frame.
+        hexEventRuntime?.clampPlayer(player);
+      }
       pathRuntime.applyDebuffHooks({ dt, simElapsed, runLevel, player, inventory, activeCharacterId });
       const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
       const firePathActive = pathRuntime.getCurrentPathId() === "fire";
@@ -5531,6 +5601,11 @@ function boot() {
         maybeCompleteDepthsVictoryAscent();
       }
 
+      if (!runDead && !runVictory && specialsSimUnpaused() && !isDepthsBossFightLevel()) {
+        // Final authority clamp after all movement sources in this frame.
+        hexEventRuntime?.clampPlayer(player);
+      }
+
       const pdt = Math.max(dt, 1e-5);
       player.velX = (player.x - player._px) / pdt;
       player.velY = (player.y - player._py) / pdt;
@@ -5658,12 +5733,12 @@ function boot() {
       const reserved = collectReservedDeckKeys(inventory, cardPickup?.getPendingCard() ?? null, worldCardPickups);
 
       if (simElapsed >= nextHealSpawnAt) {
+        const onHalls = pathRuntime.getCurrentPathId() === "halls";
         if (!runDead && !runVictory) {
-          if (collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS) {
+          if (!onHalls && collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS) {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
             if (pt) {
               const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
-              const onHalls = pathRuntime.getCurrentPathId() === "halls";
               collectibles.push({
                 kind: "heal",
                 x: pt.x,
@@ -5686,10 +5761,7 @@ function boot() {
         nextHealSpawnAt = simElapsed + (PICKUP_SPAWN_INTERVAL * healSpawnMult + randRange(-0.45, 0.85));
       }
 
-      const hallsCardItemsDisabled =
-        pathRuntime.getCurrentPathId() === "halls" &&
-        runLevel >= HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MIN &&
-        runLevel <= HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MAX;
+      const hallsCardItemsDisabled = pathRuntime.getCurrentPathId() === "halls";
 
       if (simElapsed >= nextCardSpawnAt) {
         if (
@@ -6246,6 +6318,14 @@ function boot() {
       specials.isSurgeHexTile,
       specials.isSurgeSpent,
       hexEventRuntime?.getSurgeDrawState() ?? null,
+    );
+    drawHallsEventHexWorld(
+      ctx,
+      activeHexes,
+      hexToWorld,
+      hexEventRuntime?.getHallsDrawState?.() ?? null,
+      (q, r) => specials.isHallsEventHexTile(q, r),
+      (q, r) => specials.isHallsEventSpent(q, r),
     );
     if (depthsPathActive && isDepthsBossFightLevel()) {
       if (!depthsVictoryAscentActive && !runVictory) {

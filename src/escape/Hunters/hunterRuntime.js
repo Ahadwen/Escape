@@ -49,6 +49,7 @@ import {
   drawSniperFireArcs,
   drawSwampPools,
   drawSwampBlastBursts,
+  drawHallsPawnImpactBursts,
   drawSpawnerChargeClocks,
   drawHunterLifeBars,
   frogMudPoolGrowScale,
@@ -214,6 +215,15 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_BISHOP_HOLY_TICK_SEC = 0.2;
   const HALLS_BISHOP_HOLY_AHEAD_FACING_PX = 220;
   const HALLS_BISHOP_HOLY_LEAD_SEC = 0.7;
+  const HALLS_PAWN_DIAG_VOLLEY_COOLDOWN_SEC = 1.35;
+  const HALLS_PAWN_DIAG_VOLLEY_MATCH_EPS_PX = 110;
+  const HALLS_PAWN_DIAG_VOLLEY_MIN_DIST_PX = 120;
+  const HALLS_PAWN_DIAG_VOLLEY_MAX_DIST_PX = HALLS_PAWN_DASH_PX * 2.75;
+  const HALLS_PAWN_DIAG_LEAP_MUL = 1.4;
+  const HALLS_KNIGHT_LAND_BARRAGE_COUNT = 14;
+  const HALLS_KNIGHT_LAND_BARRAGE_SPEED = 520;
+  const HALLS_KNIGHT_LAND_BARRAGE_LIFE_SEC = 1.55;
+  const HALLS_KNIGHT_LAND_BARRAGE_BOLT_R = 7.5;
   const DEPTHS_SHARD_SPREAD_RAD = (20 * Math.PI) / 180;
   const DEPTHS_SHARD_DASH_MULT = 3;
   const DEPTHS_SHARD_BASE_DASH = 124;
@@ -245,6 +255,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     swampPools: [],
     /** @type {any[]} */
     swampBursts: [],
+    /** @type {any[]} */
+    hallsPawnImpacts: [],
   };
   let suppressRangedAttacksNow = false;
   /** Unique id per damaging laser beam — Bulwark flag takes at most 1 HP per beam from the segment. */
@@ -652,6 +664,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     };
     if (isHallsChessPieceType(type)) h.hallsPieceType = type;
     else if (opts?.hallsPieceType) h.hallsPieceType = opts.hallsPieceType;
+    if (opts?.hallsEventSpawn) h.hallsEventSpawn = true;
 
     if (type === "sniper") {
       r = 12;
@@ -861,6 +874,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsGliding = false;
       h.hallsKnightStage = null;
       h.hallsNextThinkAt = elapsed;
+      h.hallsPawnVolleyNextAt = elapsed + rand(0.25, 0.9);
+      h.hallsPawnDiagImpactPending = false;
       if (type === HALLS_PIECE_IDS.BISHOP) {
         h.hallsBishopPhase = "approach";
         h.hallsBishopUntil = 0;
@@ -898,6 +913,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
 
     const relocateIfForbidden = () => {
+      if (opts?.allowInsideSpecialTile) return;
       if (!isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y)) return;
       for (let attempt = 0; attempt < 40; attempt++) {
         const a = Math.random() * Math.PI * 2;
@@ -1368,7 +1384,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function hallsChessCooldownFor(pieceType) {
-    if (pieceType === HALLS_PIECE_IDS.PAWN) return 0.46;
+    if (pieceType === HALLS_PIECE_IDS.PAWN) return 0.62;
     if (pieceType === HALLS_PIECE_IDS.ROOK) return 0.58;
     if (pieceType === HALLS_PIECE_IDS.KNIGHT) return 0.52;
     if (pieceType === HALLS_PIECE_IDS.BISHOP) return 0.52;
@@ -1396,58 +1412,16 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       return { x: h.x + ux * d, y: h.y + uy * d, score: distSq({ x: h.x + ux * d, y: h.y + uy * d }, target) };
     };
 
-    /** @param {number} sx @param {number} sy */
-    const diagDash = (sx, sy) => {
-      const ux = sx * Math.SQRT1_2;
-      const uy = sy * Math.SQRT1_2;
-      const d = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, HALLS_PAWN_DASH_PX);
-      if (d < 0.05) return null;
-      const x = h.x + ux * d;
-      const y = h.y + uy * d;
-      return { x, y, score: distSq({ x, y }, target) };
-    };
+    const wantX = Math.abs(dx) >= Math.abs(dy);
+    const primaryUx = wantX ? (dx >= 0 ? 1 : -1) : 0;
+    const primaryUy = wantX ? 0 : dy >= 0 ? 1 : -1;
+    const primary = orthoDash(primaryUx, primaryUy);
+    if (primary) return { x: primary.x, y: primary.y };
 
-    const orthoCand = [-1, 0, 1, 0, 0, -1, 0, 1];
-    /** @type {{ x: number; y: number; score: number }[]} */
-    const orthos = [];
-    for (let i = 0; i < orthoCand.length; i += 2) {
-      const o = orthoDash(orthoCand[i], orthoCand[i + 1]);
-      if (o) orthos.push(o);
-    }
-
-    const inSlashBand = Math.abs(dx) > 22 && Math.abs(dy) > 22;
-    const t = getSimElapsed();
-    const slashPulse =
-      Math.sin(Number(h.bornAt ?? 0) * 2.61 + t * 6.2 + h.y * 0.002) > 0.82;
-
-    if (inSlashBand && slashPulse) {
-      /** @type {{ x: number; y: number; score: number }[]} */
-      const diags = [];
-      for (const sx of [-1, 1]) {
-        for (const sy of [-1, 1]) {
-          const d = diagDash(sx, sy);
-          if (d) diags.push(d);
-        }
-      }
-      if (diags.length) {
-        let best = diags[0];
-        for (const d of diags) if (d.score < best.score) best = d;
-        return { x: best.x, y: best.y };
-      }
-    }
-
-    if (orthos.length) {
-      let best = orthos[0];
-      for (const o of orthos) if (o.score < best.score) best = o;
-      return { x: best.x, y: best.y };
-    }
-
-    for (const sx of [-1, 1]) {
-      for (const sy of [-1, 1]) {
-        const d = diagDash(sx, sy);
-        if (d) return { x: d.x, y: d.y };
-      }
-    }
+    const secondaryUx = wantX ? 0 : dx >= 0 ? 1 : -1;
+    const secondaryUy = wantX ? (dy >= 0 ? 1 : -1) : 0;
+    const secondary = orthoDash(secondaryUx, secondaryUy);
+    if (secondary) return { x: secondary.x, y: secondary.y };
     return null;
   }
 
@@ -2001,7 +1975,56 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
     const aimAt = () => hallsChessFaceToward(h, target.x, target.y);
 
+    if (piece === HALLS_PIECE_IDS.PAWN) {
+      const player = getPlayer();
+      const dx = player.x - h.x;
+      const dy = player.y - h.y;
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
+      const dist = Math.hypot(dx, dy);
+      const diagRatio = Math.min(adx, ady) / Math.max(1, Math.max(adx, ady));
+      const diagBand =
+        adx >= HALLS_PAWN_DIAG_VOLLEY_MIN_DIST_PX * 0.75 &&
+        ady >= HALLS_PAWN_DIAG_VOLLEY_MIN_DIST_PX * 0.75 &&
+        Math.abs(adx - HALLS_PAWN_DASH_PX) <= HALLS_PAWN_DIAG_VOLLEY_MATCH_EPS_PX * 1.35 &&
+        Math.abs(ady - HALLS_PAWN_DASH_PX) <= HALLS_PAWN_DIAG_VOLLEY_MATCH_EPS_PX * 1.35 &&
+        diagRatio >= 0.58 &&
+        dist >= HALLS_PAWN_DIAG_VOLLEY_MIN_DIST_PX &&
+        dist <= HALLS_PAWN_DIAG_VOLLEY_MAX_DIST_PX;
+      if (diagBand && elapsed >= Number(h.hallsPawnVolleyNextAt ?? 0)) {
+        const sx = dx >= 0 ? 1 : -1;
+        const sy = dy >= 0 ? 1 : -1;
+        const ux = sx * Math.SQRT1_2;
+        const uy = sy * Math.SQRT1_2;
+        const leapMax = HALLS_PAWN_DASH_PX * HALLS_PAWN_DIAG_LEAP_MUL;
+        const d = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, leapMax);
+        if (d > 10) {
+          h.hallsDestX = h.x + ux * d;
+          h.hallsDestY = h.y + uy * d;
+          h.hallsGliding = true;
+          h.hallsPawnDiagImpactPending = true;
+        }
+        h.hallsPawnVolleyNextAt = elapsed + HALLS_PAWN_DIAG_VOLLEY_COOLDOWN_SEC;
+      }
+    }
+
     const finishDash = () => {
+      if (piece === HALLS_PIECE_IDS.KNIGHT) {
+        for (let i = 0; i < HALLS_KNIGHT_LAND_BARRAGE_COUNT; i++) {
+          const a = (i / HALLS_KNIGHT_LAND_BARRAGE_COUNT) * Math.PI * 2;
+          entities.projectiles.push({
+            x: h.x,
+            y: h.y,
+            vx: Math.cos(a) * HALLS_KNIGHT_LAND_BARRAGE_SPEED,
+            vy: Math.sin(a) * HALLS_KNIGHT_LAND_BARRAGE_SPEED,
+            r: HALLS_KNIGHT_LAND_BARRAGE_BOLT_R,
+            bornAt: elapsed,
+            life: HALLS_KNIGHT_LAND_BARRAGE_LIFE_SEC,
+            damage: 2,
+            hallsKnightLandBolt: true,
+          });
+        }
+      }
       h.hallsGliding = false;
       h.hallsKnightStage = null;
       h.hallsDestX = null;
@@ -2043,6 +2066,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         }
         finishDash();
         return;
+      }
+
+      if (piece === HALLS_PIECE_IDS.PAWN && h.hallsPawnDiagImpactPending) {
+        h.hallsPawnDiagImpactPending = false;
+        entities.hallsPawnImpacts.push({ x: h.x, y: h.y, bornAt: elapsed, life: 0.96 });
       }
 
       finishDash();
@@ -3028,19 +3056,20 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         p.r = 4 + (p.rEnd - 4) * ageU;
       }
       let hitBarrier = false;
+      const ignoreArenaBarriers = !!p.hallsKnightLandBolt;
       for (let s = 0; s <= 5; s++) {
         const u = s / 5;
         const sx = prevX + (p.x - prevX) * u;
         const sy = prevY + (p.y - prevY) * u;
-        if (isWorldPointOnSurgeLockBarrierTile(sx, sy)) {
+        if (!ignoreArenaBarriers && isWorldPointOnSurgeLockBarrierTile(sx, sy)) {
           hitBarrier = true;
           break;
         }
-        if (isWorldPointOnSafehouseBarrierDisk(sx, sy)) {
+        if (!ignoreArenaBarriers && isWorldPointOnSafehouseBarrierDisk(sx, sy)) {
           hitBarrier = true;
           break;
         }
-        if (isWorldPointOnForgeRouletteBarrierTile(sx, sy)) {
+        if (!ignoreArenaBarriers && isWorldPointOnForgeRouletteBarrierTile(sx, sy)) {
           hitBarrier = true;
           break;
         }
@@ -3155,6 +3184,15 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     for (let i = entities.swampBursts.length - 1; i >= 0; i--) {
       const b = entities.swampBursts[i];
       if (elapsed - b.bornAt > b.life) entities.swampBursts.splice(i, 1);
+    }
+  }
+
+  function updateHallsPawnImpacts() {
+    if (!entities.hallsPawnImpacts.length) return;
+    const elapsed = getSimElapsed();
+    for (let i = entities.hallsPawnImpacts.length - 1; i >= 0; i--) {
+      const b = entities.hallsPawnImpacts[i];
+      if (elapsed - b.bornAt > b.life) entities.hallsPawnImpacts.splice(i, 1);
     }
   }
 
@@ -3286,13 +3324,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const player = getPlayer();
     for (const beam of entities.laserBeams) {
       if (beam.warning || !beam.active) continue;
+      const hitExtra = beam.hallsPawnGamma ? 12 : 5;
       const laserOpts =
-        typeof beam.damageId === "number" ? { laserOneShotId: beam.damageId, damage: 1 } : { damage: 1 };
-      if (!hitDecoyAlongSegment(beam.x1, beam.y1, beam.x2, beam.y2, 5, laserOpts)) {
+        typeof beam.damageId === "number" ? { laserOneShotId: beam.damageId, damage: beam.hallsPawnGamma ? 2 : 1 } : { damage: 1 };
+      if (!hitDecoyAlongSegment(beam.x1, beam.y1, beam.x2, beam.y2, hitExtra, laserOpts)) {
         const hitDist = pointToSegmentDistance(player.x, player.y, beam.x1, beam.y1, beam.x2, beam.y2);
-        if (hitDist <= player.r + 5) {
+        if (hitDist <= player.r + hitExtra) {
           damagePlayer(
-            2,
+            beam.hallsPawnGamma ? 3 : 2,
             beam.blueLaser
               ? {
                   laserBlueSlow: true,
@@ -3349,7 +3388,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function tickSpawnWavesAndLifetime() {
     const elapsed = getSimElapsed();
     const bossNoSpawn = depthsBossSuppressNormalSpawns();
+    const hallsNoPassiveSpawn = hallsPathActive();
     if (bossNoSpawn) {
+      spawnState.spawnScheduled.length = 0;
+      if (spawnState.nextSpawnAt < elapsed + 1e6) spawnState.nextSpawnAt = elapsed + 1e6;
+    }
+    if (hallsNoPassiveSpawn) {
       spawnState.spawnScheduled.length = 0;
       if (spawnState.nextSpawnAt < elapsed + 1e6) spawnState.nextSpawnAt = elapsed + 1e6;
     }
@@ -3366,10 +3410,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
     }
     while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {
-      if (bossNoSpawn) spawnState.spawnScheduled.shift();
+      if (bossNoSpawn || hallsNoPassiveSpawn) spawnState.spawnScheduled.shift();
       else spawnState.spawnScheduled.shift()?.fn();
     }
-    if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn) advanceSpawnWave();
+    if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn && !hallsNoPassiveSpawn) advanceSpawnWave();
 
     if (bossNoSpawn && depthsPathActive()) {
       let hasEldritch = false;
@@ -3446,6 +3490,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     updateSniperFireArcs(dt);
     updateSwampPools();
     updateSwampBursts();
+    updateHallsPawnImpacts();
     updateSpawners();
     updateLaserHazards();
     updateCollisions();
@@ -3510,6 +3555,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const edgeR = HEX_SIZE + 14;
     for (const h of entities.hunters) {
       if (h.arenaNexusSpawn) continue;
+      if (h.hallsEventSpawn) continue;
       const hq = worldToHex(h.x, h.y);
       if (hq.q !== lockQ || hq.r !== lockR) continue;
       const dx = h.x - cx;
@@ -3529,6 +3575,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     entities.fireArcs.length = 0;
     entities.swampPools.length = 0;
     entities.swampBursts.length = 0;
+    entities.hallsPawnImpacts.length = 0;
     boneGhostNextSpawnAt = null;
     nextHunterUid = 0;
     spawnState.wave = 0;
@@ -3549,6 +3596,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     entities.laserBeams.length = 0;
     entities.swampPools.length = 0;
     entities.swampBursts.length = 0;
+    entities.hallsPawnImpacts.length = 0;
   }
 
   /** REFERENCE `applySafehouseLevelUp` spawn pacing reset. */
@@ -3575,6 +3623,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);
     drawSwampPools(ctx, entities.swampPools, now);
     drawSwampBlastBursts(ctx, entities.swampBursts, now);
+    drawHallsPawnImpactBursts(ctx, entities.hallsPawnImpacts, now);
     drawSniperBullets(ctx, entities.bullets, now);
     drawSniperFireArcs(ctx, entities.fireArcs, now);
     for (const p of entities.projectiles) {

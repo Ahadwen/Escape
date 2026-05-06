@@ -1372,6 +1372,59 @@ export function drawLaserBeamFancy(ctx, beam, now) {
   ctx.rotate(ang);
   ctx.lineCap = "round";
 
+  if (beam.hallsPawnGamma) {
+    const t = beam.warning
+      ? clamp((now - beam.bornAt) / Math.max(0.001, beam.expiresAt - beam.bornAt), 0, 1)
+      : 0;
+    const fade = beam.warning ? 0.42 + 0.58 * (1 - t) : 1;
+    ctx.shadowBlur = beam.warning ? 24 : 30;
+    ctx.shadowColor = "rgba(168, 85, 247, 0.82)";
+    const gWide = ctx.createLinearGradient(0, 0, len, 0);
+    gWide.addColorStop(0, `rgba(233, 213, 255, ${0.34 * fade})`);
+    gWide.addColorStop(0.3, `rgba(147, 51, 234, ${0.84 * fade})`);
+    gWide.addColorStop(0.7, `rgba(56, 189, 248, ${0.78 * fade})`);
+    gWide.addColorStop(1, `rgba(30, 27, 75, ${0.72 * fade})`);
+    ctx.strokeStyle = gWide;
+    ctx.lineWidth = (beam.warning ? 18 : 22) + pulse * 7;
+    if (beam.warning) {
+      ctx.setLineDash([20, 10]);
+      ctx.lineDashOffset = -now * 180;
+    }
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(len, 0);
+    ctx.stroke();
+    ctx.strokeStyle = `rgba(245, 208, 254, ${0.6 + 0.35 * pulse})`;
+    ctx.lineWidth = (beam.warning ? 6 : 8) + pulse * 2.4;
+    if (beam.warning) {
+      ctx.setLineDash([10, 12]);
+      ctx.lineDashOffset = now * 130;
+    } else {
+      ctx.setLineDash([]);
+    }
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(len, 0);
+    ctx.stroke();
+    if (!beam.warning) {
+      const wiggle = 1.8 + Math.sin(now * 18 + len * 0.003) * 1.2;
+      ctx.strokeStyle = `rgba(186, 230, 253, ${0.42 + 0.26 * pulse})`;
+      ctx.lineWidth = 3.2 + pulse * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(0, wiggle);
+      ctx.lineTo(len, wiggle * 0.8);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -wiggle);
+      ctx.lineTo(len, -wiggle * 0.8);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+    return;
+  }
+
   if (beam.depthsPurpleLaser) {
     const t = beam.warning
       ? clamp((now - beam.bornAt) / Math.max(0.001, beam.expiresAt - beam.bornAt), 0, 1)
@@ -1896,6 +1949,76 @@ export function drawSwampBlastBursts(ctx, bursts, now) {
       ctx.arc(b.x, b.y, rr * (0.72 + 0.15 * (1 - t)), 0, TAU);
       ctx.stroke();
     }
+  }
+}
+
+/** High-fidelity pawn diagonal strike landing burst. */
+export function drawHallsPawnImpactBursts(ctx, bursts, now) {
+  for (const b of bursts) {
+    const life = Math.max(0.001, Number(b.life ?? 0.95));
+    const u = clamp((now - b.bornAt) / life, 0, 1);
+    if (u >= 1) continue;
+    const easeOut = 1 - Math.pow(1 - u, 2.2);
+    const fade = Math.pow(1 - u, 1.25);
+    const x = b.x;
+    const y = b.y;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+
+    const shockR = 22 + easeOut * 150;
+    ctx.strokeStyle = `rgba(254, 240, 138, ${0.55 * fade})`;
+    ctx.lineWidth = 10 * (1 - u * 0.55);
+    ctx.beginPath();
+    ctx.arc(x, y, shockR, 0, TAU);
+    ctx.stroke();
+
+    const heat = ctx.createRadialGradient(x, y, 0, x, y, 96 + easeOut * 52);
+    heat.addColorStop(0, `rgba(255, 255, 255, ${0.42 * fade})`);
+    heat.addColorStop(0.2, `rgba(251, 191, 36, ${0.36 * fade})`);
+    heat.addColorStop(0.55, `rgba(239, 68, 68, ${0.2 * fade})`);
+    heat.addColorStop(1, "rgba(30, 10, 10, 0)");
+    ctx.fillStyle = heat;
+    ctx.beginPath();
+    ctx.arc(x, y, 96 + easeOut * 52, 0, TAU);
+    ctx.fill();
+
+    const scorchA = 0.4 * (1 - u * 0.8);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = `rgba(35, 20, 16, ${scorchA})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 34 + easeOut * 44, 20 + easeOut * 28, 0, 0, TAU);
+    ctx.fill();
+
+    ctx.globalCompositeOperation = "lighter";
+    const sparkN = 18;
+    for (let i = 0; i < sparkN; i++) {
+      const a = ((i * 137.507764) % 360) * (Math.PI / 180) + u * 2.6;
+      const r = 26 + easeOut * (80 + (i % 5) * 14);
+      const sx = x + Math.cos(a) * r;
+      const sy = y + Math.sin(a) * r;
+      const sr = 1.8 + (1 - u) * 2.8;
+      ctx.fillStyle = `rgba(254, 243, 199, ${0.24 * fade})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, TAU);
+      ctx.fill();
+    }
+
+    const smokeN = 12;
+    for (let i = 0; i < smokeN; i++) {
+      const a = ((i * 53.2 + 17) % 360) * (Math.PI / 180);
+      const r = 10 + i * 3 + easeOut * 36;
+      const sx = x + Math.cos(a) * r * 0.55;
+      const sy = y + Math.sin(a) * r * 0.36 - easeOut * (8 + i * 0.9);
+      const sr = 10 + i * 0.75 + easeOut * 10;
+      const alpha = (0.18 + (i % 4) * 0.03) * fade;
+      ctx.fillStyle = `rgba(148, 163, 184, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, TAU);
+      ctx.fill();
+    }
+
+    ctx.restore();
   }
 }
 

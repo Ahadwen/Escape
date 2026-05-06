@@ -259,9 +259,7 @@ export function createGauntletHexEvent(deps) {
   function clampPlayerToLockHexFor(player) {
     // Only outer wait (1) and active gauntlet (2). Phase 3+ must not clamp — circular maxD vs pointy hex traps players at vertices.
     if (phase !== 1 && phase !== 2) return;
-    const ph = worldToHex(player.x, player.y);
-    if (ph.q !== lockQ || ph.r !== lockR) return;
-    const c = hexToWorld(ph.q, ph.r);
+    const c = hexToWorld(lockQ, lockR);
     const maxD = phase === 1 ? outerWaitingMaxCenterDistPx() : lockTileMaxCenterDistPx();
     const dx = player.x - c.x;
     const dy = player.y - c.y;

@@ -33,6 +33,7 @@ export function createSpecialHexRuntime({
   getIsLunatic = () => false,
   getSimElapsed = () => 0,
   getRunLevel = () => 0,
+  getActivePathId = () => null,
   getShouldSuppressProceduralEventHexSpawns = () => false,
 }) {
   const west = HEX_DIRS[3];
@@ -50,6 +51,8 @@ export function createSpecialHexRuntime({
   /** @type {Set<string>} */
   const proceduralSafehouse = new Set();
   /** @type {Set<string>} */
+  const proceduralHallsEvent = new Set();
+  /** @type {Set<string>} */
   const rouletteSpent = new Set();
   /** @type {Set<string>} */
   const forgeSpent = new Set();
@@ -59,6 +62,8 @@ export function createSpecialHexRuntime({
   const surgeSpent = new Set();
   /** @type {Set<string>} */
   const safehouseSpent = new Set();
+  /** @type {Set<string>} */
+  const hallsEventSpent = new Set();
 
   /** @type {'na' | 'roulette' | 'forge' | 'arena' | 'surge' | 'safehouse' | string} */
   let testWestKind = "na";
@@ -131,16 +136,27 @@ export function createSpecialHexRuntime({
       proceduralArena.has(k) ||
       proceduralSurge.has(k) ||
       proceduralSafehouse.has(k) ||
+      proceduralHallsEvent.has(k) ||
+      hallsEventSpent.has(k) ||
       safehouseSpent.has(k)
     ) {
       return;
     }
+
+    if (getActivePathId() === "halls") {
+      if (proceduralHallsEvent.size >= 1) return;
+      if (Math.random() >= 1 / 6) return;
+      proceduralHallsEvent.add(k);
+      return;
+    }
+
     const activeSpecials =
       proceduralRoulette.size +
       proceduralForge.size +
       proceduralArena.size +
       proceduralSurge.size +
-      proceduralSafehouse.size;
+      proceduralSafehouse.size +
+      proceduralHallsEvent.size;
     if (activeSpecials >= 1) return;
 
     const sim = getSimElapsed();
@@ -157,6 +173,7 @@ export function createSpecialHexRuntime({
     arenaSpent.delete(k);
     surgeSpent.delete(k);
     safehouseSpent.delete(k);
+    hallsEventSpent.delete(k);
 
     if (getIsLunatic()) {
       const dSafe = proceduralSpecialDenominator(sim, safeRampBaseSim);
@@ -205,6 +222,9 @@ export function createSpecialHexRuntime({
     for (const s of proceduralSafehouse) {
       if (!neededKeys.has(s) && proceduralSafehouse.delete(s)) bumpProceduralSpecialDespawnLock();
     }
+    for (const s of proceduralHallsEvent) {
+      if (!neededKeys.has(s) && proceduralHallsEvent.delete(s)) bumpProceduralSpecialDespawnLock();
+    }
     for (const s of rouletteSpent) {
       if (!neededKeys.has(s)) rouletteSpent.delete(s);
     }
@@ -220,6 +240,9 @@ export function createSpecialHexRuntime({
     for (const s of safehouseSpent) {
       if (!neededKeys.has(s)) safehouseSpent.delete(s);
     }
+    for (const s of hallsEventSpent) {
+      if (!neededKeys.has(s)) hallsEventSpent.delete(s);
+    }
   }
 
   function onTileEvicted(cacheKey) {
@@ -229,12 +252,14 @@ export function createSpecialHexRuntime({
     if (proceduralArena.delete(cacheKey)) removedActive = true;
     if (proceduralSurge.delete(cacheKey)) removedActive = true;
     if (proceduralSafehouse.delete(cacheKey)) removedActive = true;
+    if (proceduralHallsEvent.delete(cacheKey)) removedActive = true;
     if (removedActive) bumpProceduralSpecialDespawnLock();
     rouletteSpent.delete(cacheKey);
     forgeSpent.delete(cacheKey);
     arenaSpent.delete(cacheKey);
     surgeSpent.delete(cacheKey);
     safehouseSpent.delete(cacheKey);
+    hallsEventSpent.delete(cacheKey);
   }
 
   function getVisualKind(q, r) {
@@ -249,6 +274,7 @@ export function createSpecialHexRuntime({
     if (proceduralArena.has(k) || arenaSpent.has(k)) return "arena";
     if (proceduralSurge.has(k) || surgeSpent.has(k)) return "surge";
     if (proceduralSafehouse.has(k) || safehouseSpent.has(k)) return "safehouse";
+    if (proceduralHallsEvent.has(k) || hallsEventSpent.has(k)) return "hallsEvent";
     return null;
   }
 
@@ -396,11 +422,29 @@ export function createSpecialHexRuntime({
     }
   }
 
+  function isHallsEventHexTile(q, r) {
+    const k = key(q, r);
+    return proceduralHallsEvent.has(k) || hallsEventSpent.has(k);
+  }
+
+  function isHallsEventHexInteractive(q, r) {
+    return proceduralHallsEvent.has(key(q, r));
+  }
+
+  function markProceduralHallsEventHexSpent(q, r) {
+    const k = key(q, r);
+    if (!proceduralHallsEvent.has(k)) return;
+    proceduralHallsEvent.delete(k);
+    hallsEventSpent.add(k);
+    bumpProceduralSpecialDespawnLock();
+  }
+
   function isSpecialTile(q, r) {
     if (isSpawnHex(q, r)) return true;
     const kind = getVisualKind(q, r);
     return (
       kind === "roulette" || kind === "forge" || kind === "arena" || kind === "surge" || kind === "safehouse"
+      || kind === "hallsEvent"
     );
   }
 
@@ -410,11 +454,13 @@ export function createSpecialHexRuntime({
     proceduralArena.clear();
     proceduralSurge.clear();
     proceduralSafehouse.clear();
+    proceduralHallsEvent.clear();
     rouletteSpent.clear();
     forgeSpent.clear();
     arenaSpent.clear();
     surgeSpent.clear();
     safehouseSpent.clear();
+    hallsEventSpent.clear();
     quadRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
     safeRampBaseSim = SPECIAL_PROCEDURAL_GRACE_SEC;
     spawnLockUntilSim = 0;
@@ -451,6 +497,10 @@ export function createSpecialHexRuntime({
     isSafehouseHexSpentTile,
     getPrimarySafehouseAxial,
     markProceduralSafehouseHexSpent,
+    isHallsEventHexTile,
+    isHallsEventHexInteractive,
+    isHallsEventSpent: (q, r) => hallsEventSpent.has(key(q, r)),
+    markProceduralHallsEventHexSpent,
     forEachSafehouseBarrierHex,
     resetSessionState,
   };

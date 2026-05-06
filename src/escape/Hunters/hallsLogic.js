@@ -111,8 +111,8 @@ export const HALLS_KING_SLIDE_CAP_PX = 1320;
 /** Default chess-piece glide speed (px/s); knight long leg runs slower so L-shape reads clearly. */
 export const HALLS_CHESS_GLIDE_SPEED_PX_S = 820;
 /** Knight: long leg glide (orthogonal); short leg is faster for a crisp “corner”. */
-export const HALLS_KNIGHT_LONG_GLIDE_MUL = 0.42;
-export const HALLS_KNIGHT_SHORT_GLIDE_MUL = 1.18;
+export const HALLS_KNIGHT_LONG_GLIDE_MUL = 0.64;
+export const HALLS_KNIGHT_SHORT_GLIDE_MUL = 1.52;
 
 const HALLS_WAVE_RAMP_SEC = 300;
 const HALLS_WAVE_INTERVAL_START_SEC = 20;

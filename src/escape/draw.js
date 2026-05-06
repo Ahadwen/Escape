@@ -720,6 +720,52 @@ export function drawSurgeHexWorld(ctx, activeHexes, hexToWorld, isSurgeTile, isS
   }
 }
 
+/**
+ * Halls event lock tile: red boundary + encounter timer.
+ * @param {{ lockQ: number; lockR: number; endsAt: number; simElapsed: number } | null} [hallsFx]
+ */
+export function drawHallsEventHexWorld(
+  ctx,
+  activeHexes,
+  hexToWorld,
+  hallsFx = null,
+  isHallsEventTile = () => false,
+  isHallsEventSpent = () => false,
+) {
+  for (const h of activeHexes) {
+    if (!isHallsEventTile(h.q, h.r) || isHallsEventSpent(h.q, h.r)) continue;
+    if (hallsFx && h.q === hallsFx.lockQ && h.r === hallsFx.lockR) continue;
+    const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+    const t = hallsFx?.simElapsed ?? 0;
+    const pulse = 0.74 + 0.26 * (0.5 + 0.5 * Math.sin(t * 6.2 + h.q * 0.9 + h.r * 0.7));
+    // Keep this readable but cheap: heavy shadow blur here can be costly on some GPUs.
+    strokePointyHexOutline(ctx, cx, cy, HEX_SIZE, `rgba(59, 130, 246, ${0.86 + 0.24 * pulse})`, 3 + 1.2 * pulse, 0);
+    strokePointyHexOutline(ctx, cx, cy, HEX_SIZE * 0.985, `rgba(147, 197, 253, ${0.5 + 0.25 * pulse})`, 1.3, 0);
+  }
+  if (!hallsFx) return;
+  for (const h of activeHexes) {
+    if (h.q !== hallsFx.lockQ || h.r !== hallsFx.lockR) continue;
+    const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+    const pulse = 0.9 + 0.1 * (0.5 + 0.5 * Math.sin(hallsFx.simElapsed * 8));
+    strokePointyHexOutline(ctx, cx, cy, HEX_SIZE, `rgba(239, 68, 68, ${0.92 * pulse})`, 3.2, 18);
+    const rem = Math.max(0, hallsFx.endsAt - hallsFx.simElapsed);
+    const arcR = HEX_SIZE * 0.72;
+    ctx.save();
+    ctx.strokeStyle = "rgba(254, 242, 242, 0.95)";
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.arc(cx, cy, arcR, -Math.PI / 2, -Math.PI / 2 + TAU * (rem / 30));
+    ctx.stroke();
+    ctx.fillStyle = "rgba(254, 242, 242, 0.9)";
+    ctx.font = "600 13px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(rem <= 0 ? "0" : rem.toFixed(1) + "s", cx, cy);
+    ctx.restore();
+  }
+}
+
 export function strokePointyHexOutline(ctx, cx, cy, vertexRadius, strokeStyle, lineWidth, glowBlur) {
   const path = pointyHexPathAtOrigin(vertexRadius);
   const blur = Math.max(0, Math.min(6, Number(glowBlur) || 0));
