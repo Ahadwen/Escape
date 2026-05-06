@@ -165,6 +165,31 @@ let activeCharacterId = "knight";
  */
 let runLevel = 0;
 
+/**
+ * URL debug override for mobile testing, e.g. `?path=halls&level=4`.
+ * `level` is display level (1-based), converted to internal `runLevel` (0-based).
+ * @returns {{ forcedPathId: string | null; forcedRunLevel: number | null; randomiseBuild: boolean }}
+ */
+function readUrlRunOverrides() {
+  if (typeof window === "undefined" || !window.location) {
+    return { forcedPathId: null, forcedRunLevel: null, randomiseBuild: false };
+  }
+  const params = new URLSearchParams(window.location.search || "");
+  const pathRaw = String(params.get("path") ?? "").trim().toLowerCase();
+  const levelRaw = String(params.get("level") ?? "").trim();
+  const randomiseBuildRaw = String(params.get("randomiseBuild") ?? "").trim().toLowerCase();
+  const forcedPathId = pathRaw || null;
+  let forcedRunLevel = null;
+  if (levelRaw) {
+    const parsed = Number.parseInt(levelRaw, 10);
+    if (Number.isFinite(parsed) && parsed >= 1) forcedRunLevel = Math.max(0, parsed - 1);
+  }
+  const randomiseBuild = randomiseBuildRaw === "true" || randomiseBuildRaw === "1" || randomiseBuildRaw === "yes";
+  return { forcedPathId, forcedRunLevel, randomiseBuild };
+}
+
+const URL_RUN_OVERRIDES = readUrlRunOverrides();
+
 const BEST_SURVIVAL_LS_KEY = "escape-best-survival-sec";
 
 function readBestSurvivalFromStorage() {
@@ -3717,6 +3742,8 @@ function boot() {
     safehouseHexFlow.resetSession();
     runLevel = 0;
     pathRuntime.resetRun();
+    applyUrlRunOverrides();
+    applyUrlBuildOverrides();
     pathsVisitedThisRun.clear();
     runHealCrystalsCollected = 0;
     refreshDebugRunProgressUi();
@@ -4320,6 +4347,8 @@ function boot() {
     safehouseHexFlow.resetSession();
     runLevel = 0;
     pathRuntime.resetRun();
+    applyUrlRunOverrides();
+    applyUrlBuildOverrides();
     refreshDebugRunProgressUi();
     if (specialTestWestEl && "value" in specialTestWestEl) {
       specials.setTestWestKind(specialTestWestEl.value);
@@ -4642,6 +4671,42 @@ function boot() {
     refreshDebugRunProgressUi();
   }
 
+  function applyUrlRunOverrides() {
+    const { forcedPathId, forcedRunLevel } = URL_RUN_OVERRIDES;
+    if (forcedRunLevel != null) runLevel = forcedRunLevel;
+    if (forcedPathId) pathRuntime.setForcedPathId(forcedPathId);
+    if (runLevel < 1 && !pathRuntime.getForcedPathId()) {
+      pathRuntime.resetRun();
+    } else {
+      pathRuntime.ensurePathAssignedForLevel(runLevel);
+    }
+  }
+
+  function populateRandomDebugBuild(logLabel = "populate build") {
+    for (let r = 1; r <= 13; r++) {
+      inventory.deckByRank[r] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(r, `deck${r}`);
+    }
+    for (let i = 0; i < inventory.backpackSlots.length; i++) {
+      const rank = 1 + Math.floor(Math.random() * 13);
+      inventory.backpackSlots[i] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(rank, `bp${i}`);
+    }
+    syncDeckHud();
+    runLogger.log("debug", logLabel, { deckFilled: 13, backpackSlots: inventory.backpackSlots.length });
+  }
+
+  let urlRandomiseBuildTimerId = 0;
+  function applyUrlBuildOverrides() {
+    if (!URL_RUN_OVERRIDES.randomiseBuild) return;
+    if (urlRandomiseBuildTimerId) clearTimeout(urlRandomiseBuildTimerId);
+    urlRandomiseBuildTimerId = setTimeout(() => {
+      urlRandomiseBuildTimerId = 0;
+      populateRandomDebugBuild("populate build (url)");
+    }, 2500);
+  }
+
+  applyUrlRunOverrides();
+  applyUrlBuildOverrides();
+
   if (debugPathSelectEl && "value" in debugPathSelectEl) {
     for (const def of pathRuntime.getPathDefs()) {
       const opt = document.createElement("option");
@@ -4845,15 +4910,7 @@ function boot() {
   });
 
   debugItemPopulateBuildBtn?.addEventListener("click", () => {
-    for (let r = 1; r <= 13; r++) {
-      inventory.deckByRank[r] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(r, `deck${r}`);
-    }
-    for (let i = 0; i < inventory.backpackSlots.length; i++) {
-      const rank = 1 + Math.floor(Math.random() * 13);
-      inventory.backpackSlots[i] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(rank, `bp${i}`);
-    }
-    syncDeckHud();
-    runLogger.log("debug", "populate build", { deckFilled: 13, backpackSlots: inventory.backpackSlots.length });
+    populateRandomDebugBuild("populate build");
   });
 
   document.getElementById("debug-depths-whirlpool-trigger")?.addEventListener("click", () => {
