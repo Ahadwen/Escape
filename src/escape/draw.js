@@ -43,10 +43,12 @@ export function drawCircle(ctx, x, y, r, color, alpha = 1) {
  * @param {object} [opts]
  * @param {boolean} [opts.lunaticMaxHpCrystal] — amber “growth” crystal (Lunatic: pickup grants +max HP).
  * @param {boolean} [opts.bootlegSwampCrystal] — sickly yellow swamp bootleg crystal.
+ * @param {boolean} [opts.hallsMarbleCrystal] — Halls marble sanctuary crystal (cool sheen, full heal + capped temp).
  */
 export function drawHealPickup(ctx, p, elapsed, opts = {}) {
   const maxHpCrystal = !!opts.lunaticMaxHpCrystal;
   const bootlegSwamp = !!opts.bootlegSwampCrystal;
+  const hallsMarble = !!opts.hallsMarbleCrystal;
   const pulse = 0.94 + 0.06 * (0.5 + 0.5 * Math.sin(elapsed * 5));
   const h = (p.plusHalf ?? HEAL_PICKUP_PLUS_HALF) * pulse;
   const t = p.plusThick ?? HEAL_PICKUP_ARM_THICK;
@@ -70,6 +72,26 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
     ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
     ctx.globalAlpha = 1;
     ctx.strokeStyle = "rgba(254, 240, 138, 0.55)";
+  } else if (hallsMarble) {
+    ctx.shadowColor = "rgba(199, 210, 254, 0.85)";
+    ctx.shadowBlur = 22;
+    ctx.fillStyle = "#334155";
+    ctx.fillRect(-h, -t / 2, 2 * h, t);
+    ctx.fillRect(-t / 2, -h, t, 2 * h);
+    ctx.shadowBlur = 14;
+    ctx.fillStyle = "#475569";
+    ctx.fillRect(-h + 0.8, -t / 2 + 0.5, 2 * h - 1.6, t - 1);
+    ctx.fillRect(-t / 2 + 0.5, -h + 0.8, t - 1, 2 * h - 1.6);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillRect(-h * 0.52, -t * 0.32, h * 1.04, t * 0.64);
+    ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = "#a78bfa";
+    ctx.fillRect(-h * 0.35, -t * 0.22, h * 0.7, t * 0.44);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(241, 245, 249, 0.62)";
   } else if (maxHpCrystal) {
     ctx.shadowColor = "rgba(251, 191, 36, 0.9)";
     ctx.shadowBlur = 20;
@@ -120,19 +142,25 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
     ? frac > 0.35
       ? "rgba(250, 204, 21, 0.92)"
       : "rgba(217, 119, 6, 0.9)"
-    : maxHpCrystal
+    : hallsMarble
       ? frac > 0.35
-        ? "rgba(251, 191, 36, 0.95)"
-        : "rgba(248, 113, 113, 0.95)"
-      : frac > 0.35
-        ? "rgba(110, 231, 183, 0.95)"
-        : "rgba(251, 146, 60, 0.95)";
+        ? "rgba(196, 181, 253, 0.92)"
+        : "rgba(148, 163, 184, 0.9)"
+      : maxHpCrystal
+        ? frac > 0.35
+          ? "rgba(251, 191, 36, 0.95)"
+          : "rgba(248, 113, 113, 0.95)"
+        : frac > 0.35
+          ? "rgba(110, 231, 183, 0.95)"
+          : "rgba(251, 146, 60, 0.95)";
   ctx.fillRect(-barW / 2, barY, barW * frac, barH);
   ctx.strokeStyle = bootlegSwamp
     ? "rgba(253, 224, 71, 0.65)"
-    : maxHpCrystal
-      ? "rgba(254, 243, 199, 0.75)"
-      : "rgba(236, 253, 245, 0.7)";
+    : hallsMarble
+      ? "rgba(226, 232, 240, 0.72)"
+      : maxHpCrystal
+        ? "rgba(254, 243, 199, 0.75)"
+        : "rgba(236, 253, 245, 0.7)";
   ctx.lineWidth = 1;
   ctx.strokeRect(-barW / 2, barY, barW, barH);
   ctx.restore();
@@ -202,13 +230,10 @@ export function fillPointyHexCell(ctx, cx, cy, vertexRadius, fillStyle, strokeSt
  * @param {number} playerY world y
  */
 export function fillHallsMarbleHexCell(ctx, cx, cy, vertexRadius, q, r, timeSec, playerX, playerY) {
-  const mix = (q * 9283711 + r * 689287) >>> 0;
   const fillBleed = 0.85;
   const R = vertexRadius + fillBleed;
-  const warmLift = ((mix % 19) / 19) * 0.018;
-
-  const worldAng = timeSec * 0.052 + 0.25;
-  const span = 960;
+  const worldAng = timeSec * 0.022 + 0.28;
+  const span = 1380;
   const gx1 = playerX + Math.cos(worldAng) * span;
   const gy1 = playerY + Math.sin(worldAng) * span;
   const gx2 = playerX - Math.cos(worldAng) * span;
@@ -223,13 +248,22 @@ export function fillHallsMarbleHexCell(ctx, cx, cy, vertexRadius, q, r, timeSec,
     else ctx.lineTo(x, y);
   }
   ctx.closePath();
+  const hash = (q * 92837111) ^ (r * 689287499);
+  const h01 = ((Math.sin(hash * 0.0000013) + 1) * 0.5) % 1;
+  const lerp = (a, b, t) => a + (b - a) * t;
+  /** @param {number} u 0..1 from hash bits */
+  const u01 = (shift) => {
+    const u = ((hash >>> (shift & 15)) & 4095) / 4095;
+    return u;
+  };
+  // Randomized marble tone per tile: near-white -> warm tan.
+  const rC = Math.round(lerp(226, 194, h01));
+  const gC = Math.round(lerp(214, 170, h01));
+  const bC = Math.round(lerp(198, 136, h01));
   const base = ctx.createLinearGradient(gx1, gy1, gx2, gy2);
-  /** Cooler, lower floor plane — lighter alabaster terrain pops on top (see `drawObstacles` halls). */
-  base.addColorStop(0, `rgba(198, 192, 186, ${0.97 - warmLift})`);
-  base.addColorStop(0.32, `rgba(184, 178, 170, ${0.96})`);
-  base.addColorStop(0.55, `rgba(168, 162, 154, ${0.97})`);
-  base.addColorStop(0.8, `rgba(152, 146, 138, ${0.98})`);
-  base.addColorStop(1, `rgba(136, 130, 122, ${0.99})`);
+  base.addColorStop(0, `rgba(${Math.min(255, rC + 8)}, ${Math.min(255, gC + 6)}, ${Math.min(255, bC + 6)}, 0.996)`);
+  base.addColorStop(0.52, `rgba(${rC}, ${gC}, ${bC}, 0.998)`);
+  base.addColorStop(1, `rgba(${Math.max(0, rC - 18)}, ${Math.max(0, gC - 16)}, ${Math.max(0, bC - 12)}, 0.997)`);
   ctx.fillStyle = base;
   ctx.fill();
 
@@ -246,27 +280,100 @@ export function fillHallsMarbleHexCell(ctx, cx, cy, vertexRadius, q, r, timeSec,
   ctx.clip();
 
   const vr = vertexRadius;
-  const driftA = timeSec * 0.41;
-  const driftB = timeSec * 0.36;
-  const glint1X = playerX + Math.cos(driftA) * 140 + Math.sin(timeSec * 0.19) * 28;
-  const glint1Y = playerY + Math.sin(driftB) * 110 + Math.cos(timeSec * 0.17) * 22;
-  const glint2X = playerX + Math.cos(driftA + 1.9) * 95;
-  const glint2Y = playerY + Math.sin(driftB + 2.1) * 85;
+  const tSlow = timeSec * 0.031 + hash * 1.7e-8;
+  const tileAng = u01(3) * Math.PI * 2;
+  const rVein = Math.max(0, rC - 38);
+  const gVein = Math.max(0, gC - 34);
+  const bVein = Math.max(0, bC - 28);
 
-  const spec = ctx.createRadialGradient(glint1X, glint1Y, 0, glint1X, glint1Y, 480);
-  spec.addColorStop(0, "rgba(255, 255, 255, 0.22)");
-  spec.addColorStop(0.18, "rgba(255, 252, 246, 0.08)");
-  spec.addColorStop(0.45, "rgba(255, 255, 255, 0.025)");
-  spec.addColorStop(1, "rgba(255, 255, 255, 0)");
-  ctx.globalCompositeOperation = "soft-light";
-  ctx.fillStyle = spec;
+  // Per-tile bright center + slightly asymmetric dome (marble polish).
+  const domeOffX = (u01(7) - 0.5) * vr * 0.22;
+  const domeOffY = (u01(11) - 0.5) * vr * 0.2;
+  const centerGlow = ctx.createRadialGradient(
+    cx + domeOffX,
+    cy + domeOffY,
+    vr * 0.04,
+    cx + domeOffX * 0.4,
+    cy + domeOffY * 0.4,
+    vr * 1.08,
+  );
+  centerGlow.addColorStop(0, `rgba(255, 248, 232, ${0.22 + u01(19) * 0.1})`);
+  centerGlow.addColorStop(0.28, "rgba(248, 232, 206, 0.14)");
+  centerGlow.addColorStop(0.55, "rgba(228, 206, 168, 0.065)");
+  centerGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.globalCompositeOperation = "screen";
+  ctx.fillStyle = centerGlow;
+  ctx.fillRect(cx - vr * 1.95, cy - vr * 1.95, vr * 3.9, vr * 3.9);
+
+  // Soft low-frequency lighting tilt (per tile) — reads as slab variance, not noise.
+  ctx.globalCompositeOperation = "overlay";
+  const tilt = ctx.createLinearGradient(
+    cx + Math.cos(tileAng) * vr * 1.4,
+    cy + Math.sin(tileAng) * vr * 1.4,
+    cx - Math.cos(tileAng) * vr * 1.4,
+    cy - Math.sin(tileAng) * vr * 1.4,
+  );
+  const tiltA = 0.04 + u01(23) * 0.05;
+  tilt.addColorStop(0, `rgba(255, 255, 255, ${tiltA})`);
+  tilt.addColorStop(0.45, "rgba(120, 100, 80, 0.04)");
+  tilt.addColorStop(1, `rgba(40, 32, 24, ${0.05 + u01(27) * 0.04})`);
+  ctx.fillStyle = tilt;
   ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
 
-  const spec2 = ctx.createRadialGradient(glint2X, glint2Y, 0, glint2X, glint2Y, 340);
-  spec2.addColorStop(0, "rgba(255, 255, 255, 0.09)");
-  spec2.addColorStop(0.3, "rgba(255, 255, 255, 0.03)");
-  spec2.addColorStop(1, "rgba(255, 255, 255, 0)");
-  ctx.fillStyle = spec2;
+  // Elongated "vein" bands (multiply) — cheap marble grain.
+  ctx.globalCompositeOperation = "multiply";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let k = 0; k < 3; k++) {
+    const ang = tileAng + (k - 1) * 0.55 + u01(5 + k * 4) * 0.35;
+    const aMul = 0.09 + u01(31 + k * 9) * 0.1;
+    ctx.strokeStyle = `rgba(${rVein}, ${gVein}, ${bVein}, ${aMul})`;
+    ctx.lineWidth = 0.85 + u01(41 + k) * 0.65;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(ang);
+    ctx.scale(1.15, 0.2 + u01(51 + k) * 0.12);
+    ctx.beginPath();
+    ctx.arc(0, 0, vr * (0.82 + u01(61 + k) * 0.12), 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Edge cooling (marble often reads darker at grout-adjacent edges).
+  ctx.globalCompositeOperation = "multiply";
+  const edgeCool = ctx.createRadialGradient(cx, cy, vr * 0.42, cx, cy, vr * 1.12);
+  edgeCool.addColorStop(0, "rgba(255, 255, 255, 0)");
+  edgeCool.addColorStop(0.72, "rgba(255, 255, 255, 0)");
+  edgeCool.addColorStop(1, `rgba(52, 44, 34, ${0.1 + u01(71) * 0.08})`);
+  ctx.fillStyle = edgeCool;
+  ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
+
+  // Secondary specular streak (slow drift) + tight glint per tile.
+  ctx.globalCompositeOperation = "screen";
+  const sx1 = cx + Math.cos(tSlow + tileAng) * vr * 0.38;
+  const sy1 = cy + Math.sin(tSlow * 0.87 + tileAng * 1.3) * vr * 0.32;
+  const streak = ctx.createRadialGradient(sx1, sy1, 0, sx1, sy1, vr * (0.42 + u01(79) * 0.28));
+  streak.addColorStop(0, `rgba(255, 252, 242, ${0.12 + u01(83) * 0.1})`);
+  streak.addColorStop(0.35, "rgba(255, 236, 210, 0.05)");
+  streak.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = streak;
+  ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
+
+  const glintX = cx + (u01(91) - 0.5) * vr * 1.1;
+  const glintY = cy + (u01(95) - 0.5) * vr * 1.05;
+  const glint = ctx.createRadialGradient(glintX, glintY, 0, glintX, glintY, vr * (0.18 + u01(99) * 0.1));
+  glint.addColorStop(0, "rgba(255, 255, 255, 0.26)");
+  glint.addColorStop(0.5, "rgba(255, 245, 220, 0.06)");
+  glint.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = glint;
+  ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
+
+  // Broad sheen anchored to player (shared across field).
+  const highlight = ctx.createRadialGradient(playerX, playerY, 0, playerX, playerY, 520);
+  highlight.addColorStop(0, "rgba(255, 244, 228, 0.11)");
+  highlight.addColorStop(0.45, "rgba(245, 226, 194, 0.05)");
+  highlight.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = highlight;
   ctx.fillRect(cx - vr * 2, cy - vr * 2, vr * 4, vr * 4);
 
   ctx.globalCompositeOperation = "source-over";

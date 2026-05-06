@@ -35,6 +35,14 @@ export const HEAL_CRYSTAL_HP = 3;
 /** Swamp path: bootleg heal crystals use this base heal before the curse choice modal. */
 export const SWAMP_BOOTLEG_CRYSTAL_HP = 2;
 
+/** Halls path: marble crystal sets HP to full and temp HP to this value (no stacking past it). */
+export const HALLS_MARBLE_CRYSTAL_TEMP_HP = 3;
+/** Halls marble crystal spawn cadence vs `PICKUP_SPAWN_INTERVAL` (2 ⇒ half the spawn rate of a normal crystal). */
+export const HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT = 2;
+/** Halls display levels 4–5 (`runLevel` 3–4): disable floating map card pickups. */
+export const HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MIN = 3;
+export const HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MAX = 4;
+
 /** Rank 2 vs King spawn weight ratio (REFERENCE). */
 export const CARD_RANK_SPAWN_WEIGHT_MAX = 24;
 export const CARD_RANK_SPAWN_WEIGHT_MIN = 1;

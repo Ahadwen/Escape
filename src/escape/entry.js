@@ -11,6 +11,10 @@ import {
   CARD_COLLECTIBLE_LIFETIME_SEC,
   HEAL_CRYSTAL_HP,
   SWAMP_BOOTLEG_CRYSTAL_HP,
+  HALLS_MARBLE_CRYSTAL_TEMP_HP,
+  HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT,
+  HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MIN,
+  HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MAX,
   ROULETTE_OUTER_PENALTY_HP,
   FORGE_OUTER_PENALTY_HP,
   SURGE_TILE_FLASH_SEC,
@@ -590,7 +594,7 @@ function boot() {
     generateHexTileObstacles,
     tileConfig,
     tryProceduralRareSpecialHex: (q, r) => specials.tryProceduralRareSpecialHex(q, r),
-    isSpecialTile: (q, r) => specials.isSpecialTile(q, r),
+    isSpecialTile: (q, r) => pathRuntime.getCurrentPathId() === "halls" || specials.isSpecialTile(q, r),
     onTileEvicted: (key) => {
       safehouseHexFlow.onTileCacheEvicted(key, specials);
       specials.onTileEvicted(key);
@@ -2692,25 +2696,86 @@ function boot() {
     return t * t * (3 - 2 * t);
   }
 
-  /** Halls path: soft warm marble sheen over the floor (call after terrain blocks). */
+  /** Halls path: lightweight palace ambience (performance-first). */
   function drawHallsAtmosphereWorld(ctx, viewW, viewH) {
     const pad = 36;
     const x0 = cameraX - pad;
     const y0 = cameraY - pad;
     const w = viewW + pad * 2;
     const h = viewH + pad * 2;
-    const t = simElapsed * 0.35;
+    const t = simElapsed * 0.28;
     const g = ctx.createLinearGradient(
       x0 + Math.cos(t) * 40,
       y0 + Math.sin(t * 0.7) * 30,
       x0 + w * 0.92,
       y0 + h * 0.88,
     );
-    g.addColorStop(0, "rgba(255, 253, 248, 0.035)");
-    g.addColorStop(0.45, "rgba(255, 255, 255, 0.012)");
-    g.addColorStop(1, "rgba(200, 188, 168, 0.028)");
+    g.addColorStop(0, "rgba(255, 250, 238, 0.06)");
+    g.addColorStop(0.45, "rgba(255, 255, 255, 0.02)");
+    g.addColorStop(1, "rgba(182, 150, 106, 0.045)");
     ctx.fillStyle = g;
     ctx.fillRect(x0, y0, w, h);
+
+    // Keep a few broad light lanes only (cheap but readable depth).
+    const cx = cameraX + viewW * 0.5;
+    const topY = cameraY - 20;
+    const bottomY = cameraY + viewH + 30;
+    const laneCount = 3;
+    for (let i = 0; i < laneCount; i++) {
+      const t0 = i / laneCount - 0.5;
+      const t1 = (i + 1) / laneCount - 0.5;
+      const x0Top = cx + t0 * viewW * 0.28;
+      const x1Top = cx + t1 * viewW * 0.28;
+      const x0Bot = cx + t0 * viewW * 1.05;
+      const x1Bot = cx + t1 * viewW * 1.05;
+      const laneGlow = ctx.createLinearGradient(0, topY, 0, bottomY);
+      laneGlow.addColorStop(0, "rgba(255, 236, 198, 0.08)");
+      laneGlow.addColorStop(0.42, "rgba(255, 226, 178, 0.04)");
+      laneGlow.addColorStop(1, "rgba(122, 76, 26, 0.07)");
+      ctx.beginPath();
+      ctx.moveTo(x0Top, topY);
+      ctx.lineTo(x1Top, topY);
+      ctx.lineTo(x1Bot, bottomY);
+      ctx.lineTo(x0Bot, bottomY);
+      ctx.closePath();
+      ctx.fillStyle = laneGlow;
+      ctx.fill();
+    }
+  }
+
+  /** Halls path: polished floor reflections (streak + local glows under actors). */
+  function drawHallsReflectionsWorld(ctx) {
+    ctx.save();
+    const centerX = cameraX + canvas.width * 0.5;
+    const streak = ctx.createLinearGradient(centerX, cameraY, centerX, cameraY + canvas.height);
+    streak.addColorStop(0, "rgba(255, 245, 222, 0.05)");
+    streak.addColorStop(0.35, "rgba(255, 255, 255, 0.02)");
+    streak.addColorStop(0.55, "rgba(255, 238, 206, 0.07)");
+    streak.addColorStop(1, "rgba(118, 90, 54, 0.05)");
+    ctx.globalCompositeOperation = "soft-light";
+    ctx.fillStyle = streak;
+    ctx.fillRect(cameraX - 40, cameraY - 20, canvas.width + 80, canvas.height + 40);
+    ctx.globalCompositeOperation = "screen";
+
+    const playerReflection = ctx.createRadialGradient(
+      player.x,
+      player.y + player.r * 1.35,
+      player.r * 0.2,
+      player.x,
+      player.y + player.r * 1.8,
+      player.r * 2.9,
+    );
+    playerReflection.addColorStop(0, "rgba(255, 244, 220, 0.28)");
+    playerReflection.addColorStop(0.32, "rgba(255, 228, 186, 0.15)");
+    playerReflection.addColorStop(0.62, "rgba(255, 236, 206, 0.06)");
+    playerReflection.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = playerReflection;
+    ctx.beginPath();
+    ctx.ellipse(player.x, player.y + player.r * 1.75, player.r * 1.9, player.r * 0.72, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Skip per-hunter reflection glows to keep halls performant in dense waves.
+    ctx.restore();
   }
 
   /** Viewport center in world space — stable swamp wash anchor (hex centroid jumps when tiles load). */
@@ -4402,7 +4467,13 @@ function boot() {
       v === "depthsTentacle" ||
       v === "depthsBoltSpawner" ||
       v === "depthsShardChaser" ||
-      v === "depthsGrappleLaser"
+      v === "depthsGrappleLaser" ||
+      v === "hallsPawn" ||
+      v === "hallsRook" ||
+      v === "hallsKnight" ||
+      v === "hallsBishop" ||
+      v === "hallsQueen" ||
+      v === "hallsKing"
     ) {
       return v;
     }
@@ -4460,6 +4531,7 @@ function boot() {
   }
 
   function applyDebugRunLevel(nextRunLevel) {
+    const prevPathId = pathRuntime.getCurrentPathId();
     runLevel = Math.max(0, Math.floor(nextRunLevel));
     if (runLevel < 1 && !pathRuntime.getForcedPathId()) {
       pathRuntime.resetRun();
@@ -4471,6 +4543,19 @@ function boot() {
     hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
     resetDepthsBossRisingWaveChase();
     resetSwampInfection();
+    if (prevPathId !== pathRuntime.getCurrentPathId()) {
+      tiles.clearCache();
+      obstacles = [];
+      activeHexes = [];
+      lastPlayerHexKey = "";
+      ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+        player,
+        obstacles,
+        activePlayerHex,
+        activeHexes,
+        lastPlayerHexKey,
+      }));
+    }
     refreshDebugRunProgressUi();
   }
 
@@ -4482,6 +4567,7 @@ function boot() {
       debugPathSelectEl.appendChild(opt);
     }
     debugPathSelectEl.addEventListener("change", () => {
+      const prevPathId = pathRuntime.getCurrentPathId();
       const selected = String(debugPathSelectEl.value || "__auto__");
       if (selected === "__auto__") {
         pathRuntime.setForcedPathId(null);
@@ -4489,6 +4575,19 @@ function boot() {
         else pathRuntime.ensurePathAssignedForLevel(runLevel);
       } else {
         pathRuntime.setForcedPathId(selected);
+      }
+      if (prevPathId !== pathRuntime.getCurrentPathId()) {
+        tiles.clearCache();
+        obstacles = [];
+        activeHexes = [];
+        lastPlayerHexKey = "";
+        ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+          player,
+          obstacles,
+          activePlayerHex,
+          activeHexes,
+          lastPlayerHexKey,
+        }));
       }
       notePathVisitedForRun();
       refreshDebugRunProgressUi();
@@ -5564,6 +5663,7 @@ function boot() {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
             if (pt) {
               const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
+              const onHalls = pathRuntime.getCurrentPathId() === "halls";
               collectibles.push({
                 kind: "heal",
                 x: pt.x,
@@ -5573,21 +5673,31 @@ function boot() {
                 plusThick: HEAL_PICKUP_ARM_THICK,
                 heal: onSwamp ? SWAMP_BOOTLEG_CRYSTAL_HP : HEAL_CRYSTAL_HP,
                 bootlegSwamp: onSwamp,
+                hallsMarbleCrystal: onHalls && !onSwamp,
                 bornAt: simElapsed,
                 expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
               });
             }
           }
         }
-        nextHealSpawnAt = simElapsed + (PICKUP_SPAWN_INTERVAL + randRange(-0.45, 0.85));
+        const onHallsHeal = pathRuntime.getCurrentPathId() === "halls";
+        const healSpawnMult =
+          pathRuntime.getCurrentPathId() === "swamp" ? 1 : onHallsHeal ? HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT : 1;
+        nextHealSpawnAt = simElapsed + (PICKUP_SPAWN_INTERVAL * healSpawnMult + randRange(-0.45, 0.85));
       }
+
+      const hallsCardItemsDisabled =
+        pathRuntime.getCurrentPathId() === "halls" &&
+        runLevel >= HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MIN &&
+        runLevel <= HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MAX;
 
       if (simElapsed >= nextCardSpawnAt) {
         if (
           !runDead &&
           !runVictory &&
           activeCharacterId !== "lunatic" &&
-          runLevel !== DISPLAY_LEVEL_FIVE_RUN_LEVEL
+          runLevel !== DISPLAY_LEVEL_FIVE_RUN_LEVEL &&
+          !hallsCardItemsDisabled
         ) {
           if (collectibles.filter((c) => c.kind === "card").length < MAX_CARD_PICKUPS) {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: CARD_PICKUP_HIT_R });
@@ -5634,7 +5744,14 @@ function boot() {
               });
               break;
             }
-            if (activeCharacterId === "lunatic") {
+            if (c.hallsMarbleCrystal) {
+              player.hp = player.maxHp;
+              player.tempHp = HALLS_MARBLE_CRYSTAL_TEMP_HP;
+              player.tempHpExpiry = 0;
+              if (activeCharacterId === "valiant" && typeof character.onHealCrystalPickup === "function") {
+                character.onHealCrystalPickup(buildAbilityContext(0), HEAL_CRYSTAL_HP);
+              }
+            } else if (activeCharacterId === "lunatic") {
               player.maxHp += 1;
               player.hp = Math.min(player.maxHp, player.hp + 1);
             } else if (activeCharacterId === "valiant" && typeof character.onHealCrystalPickup === "function") {
@@ -6137,6 +6254,7 @@ function boot() {
       drawDepthsVictoryAscentWorld(ctx, viewW, viewH);
       eldritchBlood?.drawUnderHunters(ctx);
     }
+    if (hallsPathActive) drawHallsReflectionsWorld(ctx);
     if (huntersEnabled) {
       if (firePathActive) {
         for (const h of hunterRuntime.entities.hunters) h.fireGlow = true;
@@ -6151,8 +6269,9 @@ function boot() {
     for (const c of collectibles) {
       if (c.kind === "heal") {
         drawHealPickup(ctx, c, simElapsed, {
-          lunaticMaxHpCrystal: activeCharacterId === "lunatic",
+          lunaticMaxHpCrystal: activeCharacterId === "lunatic" && !c.hallsMarbleCrystal,
           bootlegSwampCrystal: !!c.bootlegSwamp,
+          hallsMarbleCrystal: !!c.hallsMarbleCrystal,
         });
       } else if (c.kind === "card") {
         drawCardPickupWorld(ctx, c, simElapsed);

@@ -54,6 +54,49 @@ import {
   frogMudPoolGrowScale,
   FROG_SPLASH_GROW_SEC,
 } from "./hunterDraw.js";
+import {
+  getHallsSpawnIntervalSec,
+  getHallsWaveSpawnJobs,
+  pickHallsWaveSpawnSpec,
+  resolveHallsPieceHunterType,
+  HALLS_PIECE_IDS,
+  HALLS_ENEMY_LIFETIME_SEC,
+  HALLS_COIN_HIT_RADIUS_PX,
+  HALLS_PAWN_DASH_PX,
+  HALLS_KNIGHT_LONG_LEG_PX,
+  HALLS_KNIGHT_SHORT_LEG_PX,
+  HALLS_SLIDE_PROBE_MAX_PX,
+  HALLS_BISHOP_APPROACH_CAP_PX,
+  HALLS_BISHOP_LINEUP_MIN_PX,
+  HALLS_BISHOP_LINEUP_MAX_PX,
+  HALLS_BISHOP_LINEUP_FRAC,
+  HALLS_BISHOP_ALIGN_CROSS_WEIGHT,
+  HALLS_BISHOP_ALIGN_DIST_WEIGHT,
+  HALLS_BISHOP_PAUSE_SEC,
+  HALLS_BISHOP_TURN_PAUSE_SEC,
+  HALLS_BISHOP_LINE_CROSS_EPS,
+  HALLS_BISHOP_PLAYER_CLEAR_BUFFER,
+  HALLS_BISHOP_STRIKE_COMMIT_MAX_T_PX,
+  HALLS_BISHOP_STRIKE_PAST_PLAYER_PX,
+  HALLS_BISHOP_STRIKE_MAX_T_PX,
+  HALLS_ROOK_APPROACH_CAP_PX,
+  HALLS_ROOK_LINEUP_MIN_PX,
+  HALLS_ROOK_LINEUP_MAX_PX,
+  HALLS_ROOK_LINEUP_FRAC,
+  HALLS_ROOK_ALIGN_CROSS_WEIGHT,
+  HALLS_ROOK_ALIGN_DIST_WEIGHT,
+  HALLS_ROOK_PAUSE_SEC,
+  HALLS_ROOK_TURN_PAUSE_SEC,
+  HALLS_ROOK_LINE_CROSS_EPS,
+  HALLS_ROOK_STRIKE_COMMIT_MAX_T_PX,
+  HALLS_ROOK_STRIKE_PAST_PLAYER_PX,
+  HALLS_ROOK_STRIKE_MAX_T_PX,
+  HALLS_QUEEN_SLIDE_CAP_PX,
+  HALLS_KING_SLIDE_CAP_PX,
+  HALLS_CHESS_GLIDE_SPEED_PX_S,
+  HALLS_KNIGHT_LONG_GLIDE_MUL,
+  HALLS_KNIGHT_SHORT_GLIDE_MUL,
+} from "./hallsLogic.js";
 import { ELDRITCH_BLOOD_CAST_ABOVE_WAVE_PX } from "../specials/EldritchBlood.js";
 
 /** Swamp frog: detonation / pool radius (px). ~3× the original ~35 (“~200% bigger”). */
@@ -163,10 +206,17 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   /** Depths sniper shells: ~3× default off–fire-path radius, shorter windup (non–fire-path only). */
   const DEPTHS_SNIPER_ZONE_R_MULT = 3;
   const DEPTHS_SNIPER_WINDUP_MULT = 0.8;
+  /** Halls bishop holy artillery: larger predictive white-hot ignition field. */
+  const HALLS_BISHOP_HOLY_CAST_COOLDOWN_SEC = 2.6;
+  const HALLS_BISHOP_HOLY_WINDUP_SEC = 0.92;
+  const HALLS_BISHOP_HOLY_ZONE_R = 96;
+  const HALLS_BISHOP_HOLY_LINGER_SEC = 2.8;
+  const HALLS_BISHOP_HOLY_TICK_SEC = 0.2;
+  const HALLS_BISHOP_HOLY_AHEAD_FACING_PX = 220;
+  const HALLS_BISHOP_HOLY_LEAD_SEC = 0.7;
   const DEPTHS_SHARD_SPREAD_RAD = (20 * Math.PI) / 180;
   const DEPTHS_SHARD_DASH_MULT = 3;
   const DEPTHS_SHARD_BASE_DASH = 124;
-
   let nextHunterUid = 0;
   function pushHunter(/** @type {any} */ h) {
     nextHunterUid += 1;
@@ -220,8 +270,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function getSpawnIntervalFromRunTime() {
+    if (hallsPathActive()) {
+      return getHallsSpawnIntervalSec(relDifficultySurvivalSec());
+    }
     const t = getDangerRamp01();
     return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_FLOOR - SPAWN_INTERVAL_START) * t;
+  }
+
+  function getWaveSpawnJobsFromRunTime() {
+    if (hallsPathActive()) {
+      return getHallsWaveSpawnJobs(relDifficultySurvivalSec());
+    }
+    return BASE_WAVE_SPAWN_JOBS + midgameEscalationTicks();
   }
 
   function midgameEscalationTicks() {
@@ -254,6 +314,19 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
   function depthsPathActive() {
     return getActivePathId() === "depths";
+  }
+  function hallsPathActive() {
+    return getActivePathId() === "halls";
+  }
+  function isHallsChessPieceType(type) {
+    return (
+      type === HALLS_PIECE_IDS.PAWN ||
+      type === HALLS_PIECE_IDS.ROOK ||
+      type === HALLS_PIECE_IDS.KNIGHT ||
+      type === HALLS_PIECE_IDS.BISHOP ||
+      type === HALLS_PIECE_IDS.QUEEN ||
+      type === HALLS_PIECE_IDS.KING
+    );
   }
   function boneEnemySpeedMult() {
     return bonePathActive() ? 1.2 : 1;
@@ -508,6 +581,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (type === "depthsEldritchCageLunge") return 11;
     if (type === "fast") return 9;
     if (type === "frogChaser") return 11;
+    if (isHallsChessPieceType(type)) return HALLS_COIN_HIT_RADIUS_PX;
     return 10;
   }
 
@@ -576,6 +650,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       dir: { x: 1, y: 0 },
       hitLockUntil: 0,
     };
+    if (isHallsChessPieceType(type)) h.hallsPieceType = type;
+    else if (opts?.hallsPieceType) h.hallsPieceType = opts.hallsPieceType;
 
     if (type === "sniper") {
       r = 12;
@@ -778,6 +854,38 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.motionTrail = [];
       h.ghostAnchorPlayerX = player.x;
       h.ghostAnchorPlayerY = player.y;
+    } else if (isHallsChessPieceType(type)) {
+      r = hunterRadiusForType(type);
+      life = HALLS_ENEMY_LIFETIME_SEC;
+      lastShotAt = elapsed + 999;
+      h.hallsGliding = false;
+      h.hallsKnightStage = null;
+      h.hallsNextThinkAt = elapsed;
+      if (type === HALLS_PIECE_IDS.BISHOP) {
+        h.hallsBishopPhase = "approach";
+        h.hallsBishopUntil = 0;
+        h.hallsBishopLineUx = 0;
+        h.hallsBishopLineUy = 0;
+        h.hallsBishopHasLastDiag = false;
+        h.hallsBishopLastUx = 0;
+        h.hallsBishopLastUy = 0;
+        h.hallsBishopPendingDestX = 0;
+        h.hallsBishopPendingDestY = 0;
+        h.hallsHolyGlow = true;
+        h.hallsBishopHolyNextAt = elapsed + rand(0.65, 1.3);
+      }
+      if (type === HALLS_PIECE_IDS.ROOK) {
+        h.hallsRookPhase = "approach";
+        h.hallsRookUntil = 0;
+        h.hallsRookLineUx = 0;
+        h.hallsRookLineUy = 0;
+        h.hallsRookHasLastDir = false;
+        h.hallsRookLastUx = 0;
+        h.hallsRookLastUy = 0;
+        h.hallsRookPendingDestX = 0;
+        h.hallsRookPendingDestY = 0;
+        h.hallsRookGlideAxis = "x";
+      }
     }
     h.r = r;
     h.life = life;
@@ -852,16 +960,29 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
   function scheduleWaveSpawns() {
     const jobs = [];
-    const nJobs = BASE_WAVE_SPAWN_JOBS + midgameEscalationTicks();
+    const nJobs = getWaveSpawnJobsFromRunTime();
+    const hallsPath = hallsPathActive();
+    const hallsRelSec = relDifficultySurvivalSec();
     const player = getPlayer();
     for (let i = 0; i < nJobs; i++) {
       jobs.push(() => {
-        const type = pickWaveHunterType();
+        let type = pickWaveHunterType();
+        let hallsPieceType = null;
+        if (hallsPath) {
+          if (isHallsChessPieceType(type)) {
+            hallsPieceType = type;
+            type = resolveHallsPieceHunterType(hallsPieceType);
+          } else {
+            const spec = pickHallsWaveSpawnSpec(hallsRelSec, Math.random);
+            type = spec.hunterType;
+            hallsPieceType = spec.pieceType;
+          }
+        }
         const ang = Math.random() * Math.PI * 2;
         const d = rand(300, 780);
         const x = player.x + Math.cos(ang) * d;
         const y = player.y + Math.sin(ang) * d;
-        spawnHunter(type, x, y);
+        spawnHunter(type, x, y, hallsPieceType ? { hallsPieceType } : undefined);
       });
     }
     for (let i = jobs.length - 1; i > 0; i--) {
@@ -1036,6 +1157,62 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
+  function updateHallsBishopHolyStrikes() {
+    if (suppressRangedAttacksNow) return;
+    if (!hallsPathActive()) return;
+    const elapsed = getSimElapsed();
+    const player = getPlayer();
+    const { w: VIEW_W, h: VIEW_H } = getViewSize();
+    for (const h of entities.hunters) {
+      if (h.type !== HALLS_PIECE_IDS.BISHOP) continue;
+      if (elapsed < Number(h.hallsBishopHolyNextAt ?? 0)) continue;
+      h.hallsBishopHolyNextAt = elapsed + HALLS_BISHOP_HOLY_CAST_COOLDOWN_SEC + rand(-0.2, 0.35);
+
+      const vx = Number(player.velX ?? 0);
+      const vy = Number(player.velY ?? 0);
+      const fx = Number(player.facing?.x ?? 1);
+      const fy = Number(player.facing?.y ?? 0);
+      let aimX =
+        player.x +
+        vx * HALLS_BISHOP_HOLY_LEAD_SEC +
+        fx * HALLS_BISHOP_HOLY_AHEAD_FACING_PX +
+        rand(-18, 18);
+      let aimY =
+        player.y +
+        vy * HALLS_BISHOP_HOLY_LEAD_SEC +
+        fy * HALLS_BISHOP_HOLY_AHEAD_FACING_PX +
+        rand(-18, 18);
+      aimX = clamp(aimX, player.x - VIEW_W * 0.95, player.x + VIEW_W * 0.95);
+      aimY = clamp(aimY, player.y - VIEW_H * 0.95, player.y + VIEW_H * 0.95);
+      if (sniperArtillerySuppressedByRoulette(h.x, h.y, aimX, aimY)) continue;
+
+      entities.dangerZones.push({
+        x: aimX,
+        y: aimY,
+        r: HALLS_BISHOP_HOLY_ZONE_R,
+        bornAt: elapsed,
+        detonateAt: elapsed + HALLS_BISHOP_HOLY_WINDUP_SEC,
+        lingerUntil: elapsed + HALLS_BISHOP_HOLY_WINDUP_SEC + HALLS_BISHOP_HOLY_LINGER_SEC,
+        nextTickAt: elapsed + HALLS_BISHOP_HOLY_WINDUP_SEC + 0.2,
+        tickInterval: HALLS_BISHOP_HOLY_TICK_SEC,
+        windup: HALLS_BISHOP_HOLY_WINDUP_SEC,
+        exploded: false,
+        firePath: true,
+        hallsHolyZone: true,
+      });
+      const dist = Math.hypot(aimX - h.x, aimY - h.y) || 1;
+      entities.bullets.push({
+        x: h.x,
+        y: h.y,
+        tx: aimX,
+        ty: aimY,
+        bornAt: elapsed,
+        life: clamp(0.14 + dist / 2200, 0.16, 0.34),
+        hallsHolyShell: true,
+      });
+    }
+  }
+
   /** Swamp frog-chaser / L3+ sniper shell: large mud wave, 4s pool, spawner-style mud fasts (+ optional center hit). */
   function applySwampFrogExplosionAt(wx, wy, elapsed) {
     const player = getPlayer();
@@ -1082,6 +1259,838 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     h._removeNow = true;
   }
 
+  function hallsChessPlacementBlocked(cx, cy, r) {
+    const c = { x: cx, y: cy, r };
+    const t = getSimElapsed();
+    return (
+      outOfBoundsCircle(c) ||
+      isWorldPointOnForgeRouletteBarrierTile(cx, cy) ||
+      collidesAnyObstacle(c) ||
+      !!collidesValiantEnemyShockFieldDep?.(c, t)
+    );
+  }
+
+  function hallsChessMaxSlideDist(px, py, h, ux, uy, maxLen) {
+    if (maxLen <= 0) return 0;
+    const len = Math.hypot(ux, uy) || 1;
+    const nx = ux / len;
+    const ny = uy / len;
+    let lo = 0;
+    let hi = maxLen;
+    for (let i = 0; i < 26; i++) {
+      const mid = (lo + hi) / 2;
+      const cx = px + nx * mid;
+      const cy = py + ny * mid;
+      if (hallsChessPlacementBlocked(cx, cy, h.r)) hi = mid;
+      else lo = mid;
+    }
+    return lo;
+  }
+
+  /** @returns {"arrived" | "moving" | "stuck"} */
+  function hallsChessGlideToward(h, destX, destY, glideSpeedPxS, spDt) {
+    const eps = 1.6;
+    const dx = destX - h.x;
+    const dy = destY - h.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= eps) {
+      h.x = destX;
+      h.y = destY;
+      return "arrived";
+    }
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const vx = ux * glideSpeedPxS;
+    const vy = uy * glideSpeedPxS;
+    const prevDist = dist;
+    const { touchedObstacle } = moveCircleWithCollisions(h, vx, vy, spDt, {
+      blockValiantEnemyShockFields: true,
+      ignoreObstacles: !!h.boneSwarmPhasing,
+    });
+    const nd = Math.hypot(destX - h.x, destY - h.y);
+    if (nd <= eps) {
+      h.x = destX;
+      h.y = destY;
+      return "arrived";
+    }
+    if (touchedObstacle || nd >= prevDist - 0.25) return "stuck";
+    return "moving";
+  }
+
+  /**
+   * Orthogonal glide (one axis only) so knight L-legs read as long-then-short, not one diagonal smear.
+   * @param {"x" | "y"} axis
+   * @returns {"arrived" | "moving" | "stuck"}
+   */
+  function hallsChessGlideAxisToward(h, destX, destY, axis, glideSpeedPxS, spDt) {
+    const eps = 1.6;
+    const minDt = Math.max(spDt, 1e-6);
+    if (axis === "x") {
+      const dx = destX - h.x;
+      if (Math.abs(dx) <= eps) {
+        h.x = destX;
+        return "arrived";
+      }
+      const step = Math.sign(dx) * Math.min(glideSpeedPxS * spDt, Math.abs(dx));
+      const vx = step / minDt;
+      const prevAbs = Math.abs(dx);
+      const { touchedObstacle } = moveCircleWithCollisions(h, vx, 0, spDt, {
+        blockValiantEnemyShockFields: true,
+        ignoreObstacles: !!h.boneSwarmPhasing,
+      });
+      const nd = Math.abs(destX - h.x);
+      if (nd <= eps) {
+        h.x = destX;
+        return "arrived";
+      }
+      if (touchedObstacle || nd >= prevAbs - 0.25) return "stuck";
+      return "moving";
+    }
+    const dy = destY - h.y;
+    if (Math.abs(dy) <= eps) {
+      h.y = destY;
+      return "arrived";
+    }
+    const step = Math.sign(dy) * Math.min(glideSpeedPxS * spDt, Math.abs(dy));
+    const vy = step / minDt;
+    const prevAbs = Math.abs(dy);
+    const { touchedObstacle } = moveCircleWithCollisions(h, 0, vy, spDt, {
+      blockValiantEnemyShockFields: true,
+      ignoreObstacles: !!h.boneSwarmPhasing,
+    });
+    const nd = Math.abs(destY - h.y);
+    if (nd <= eps) {
+      h.y = destY;
+      return "arrived";
+    }
+    if (touchedObstacle || nd >= prevAbs - 0.25) return "stuck";
+    return "moving";
+  }
+
+  function hallsChessCooldownFor(pieceType) {
+    if (pieceType === HALLS_PIECE_IDS.PAWN) return 0.46;
+    if (pieceType === HALLS_PIECE_IDS.ROOK) return 0.58;
+    if (pieceType === HALLS_PIECE_IDS.KNIGHT) return 0.52;
+    if (pieceType === HALLS_PIECE_IDS.BISHOP) return 0.52;
+    if (pieceType === HALLS_PIECE_IDS.QUEEN) return 0.44;
+    if (pieceType === HALLS_PIECE_IDS.KING) return 0.62;
+    return 0.5;
+  }
+
+  function hallsChessFaceToward(h, ax, ay) {
+    const dx = ax - h.x;
+    const dy = ay - h.y;
+    const l = Math.hypot(dx, dy) || 1;
+    h.dir.x = dx / l;
+    h.dir.y = dy / l;
+  }
+
+  function hallsPickPawnDash(h, target) {
+    const dx = target.x - h.x;
+    const dy = target.y - h.y;
+
+    /** @param {number} ux @param {number} uy */
+    const orthoDash = (ux, uy) => {
+      const d = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, HALLS_PAWN_DASH_PX);
+      if (d < 0.05) return null;
+      return { x: h.x + ux * d, y: h.y + uy * d, score: distSq({ x: h.x + ux * d, y: h.y + uy * d }, target) };
+    };
+
+    /** @param {number} sx @param {number} sy */
+    const diagDash = (sx, sy) => {
+      const ux = sx * Math.SQRT1_2;
+      const uy = sy * Math.SQRT1_2;
+      const d = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, HALLS_PAWN_DASH_PX);
+      if (d < 0.05) return null;
+      const x = h.x + ux * d;
+      const y = h.y + uy * d;
+      return { x, y, score: distSq({ x, y }, target) };
+    };
+
+    const orthoCand = [-1, 0, 1, 0, 0, -1, 0, 1];
+    /** @type {{ x: number; y: number; score: number }[]} */
+    const orthos = [];
+    for (let i = 0; i < orthoCand.length; i += 2) {
+      const o = orthoDash(orthoCand[i], orthoCand[i + 1]);
+      if (o) orthos.push(o);
+    }
+
+    const inSlashBand = Math.abs(dx) > 22 && Math.abs(dy) > 22;
+    const t = getSimElapsed();
+    const slashPulse =
+      Math.sin(Number(h.bornAt ?? 0) * 2.61 + t * 6.2 + h.y * 0.002) > 0.82;
+
+    if (inSlashBand && slashPulse) {
+      /** @type {{ x: number; y: number; score: number }[]} */
+      const diags = [];
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          const d = diagDash(sx, sy);
+          if (d) diags.push(d);
+        }
+      }
+      if (diags.length) {
+        let best = diags[0];
+        for (const d of diags) if (d.score < best.score) best = d;
+        return { x: best.x, y: best.y };
+      }
+    }
+
+    if (orthos.length) {
+      let best = orthos[0];
+      for (const o of orthos) if (o.score < best.score) best = o;
+      return { x: best.x, y: best.y };
+    }
+
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        const d = diagDash(sx, sy);
+        if (d) return { x: d.x, y: d.y };
+      }
+    }
+    return null;
+  }
+
+  /** Cross-track (px) from `(hx,hy)` to rook line through that point: rank if `|uy|`≈0 else file. */
+  function hallsRookLineCrossAt(hx, hy, player, ux, uy) {
+    if (Math.abs(uy) < 1e-9) return Math.abs(player.y - hy);
+    return Math.abs(player.x - hx);
+  }
+
+  function hallsRookStrikeGlideT(h, ux, uy, player) {
+    const tHit = hallsBishopRayFirstHitPlayerT(h, ux, uy, player);
+    const past = HALLS_ROOK_STRIKE_PAST_PLAYER_PX;
+    const want = tHit != null ? tHit + past : 560;
+    return hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, Math.min(want, HALLS_ROOK_STRIKE_MAX_T_PX));
+  }
+
+  /** @param {any} h @param {{ x: number; y: number; r?: number }} target @param {{ x: number; y: number; r?: number }} player */
+  function hallsTickRookChess(h, elapsed, spDt, target, player, glide) {
+    const aimAt = () => hallsChessFaceToward(h, target.x, target.y);
+
+    if (h.hallsGliding && h.hallsDestX != null && h.hallsDestY != null) {
+      aimAt();
+      const axis = h.hallsRookGlideAxis === "y" ? "y" : "x";
+      const st = hallsChessGlideAxisToward(h, h.hallsDestX, h.hallsDestY, axis, glide, spDt);
+      const done = st === "arrived" || st === "stuck";
+      if (!done) return;
+
+      h.hallsGliding = false;
+      h.hallsDestX = null;
+      h.hallsDestY = null;
+
+      const ph = h.hallsRookPhase ?? "approach";
+
+      if (ph === "strike") {
+        const Rr = hallsBishopPlayerHitRadius(h, player);
+        const miss = distSq(h, player) > Rr * Rr;
+        if (miss) {
+          h.hallsRookPhase = "approach";
+          h.hallsNextThinkAt = elapsed + 0.18;
+        } else {
+          h.hallsRookPhase = "approach";
+          h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(HALLS_PIECE_IDS.ROOK) * 0.55;
+        }
+        return;
+      }
+
+      if (ph === "approach") {
+        h.hallsRookLastUx = Number(h.hallsRookLineUx);
+        h.hallsRookLastUy = Number(h.hallsRookLineUy);
+        h.hallsRookHasLastDir = true;
+      }
+
+      h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(HALLS_PIECE_IDS.ROOK) * 0.52;
+      return;
+    }
+
+    const phase = h.hallsRookPhase ?? "approach";
+
+    if (phase === "pause") {
+      aimAt();
+      if (elapsed < (h.hallsRookUntil ?? 0)) return;
+      const ux = Number(h.hallsRookLineUx);
+      const uy = Number(h.hallsRookLineUy);
+      if (Math.hypot(ux, uy) < 0.2) {
+        h.hallsRookPhase = "approach";
+        h.hallsNextThinkAt = elapsed;
+        return;
+      }
+      const tStrike = hallsRookStrikeGlideT(h, ux, uy, player);
+      if (tStrike < 12) {
+        h.hallsRookPhase = "approach";
+        h.hallsNextThinkAt = elapsed;
+        return;
+      }
+      h.hallsRookPhase = "strike";
+      h.hallsRookGlideAxis = Math.abs(uy) < 1e-9 ? "x" : "y";
+      h.hallsDestX = h.x + ux * tStrike;
+      h.hallsDestY = h.y + uy * tStrike;
+      h.hallsGliding = true;
+      return;
+    }
+
+    if (phase === "turn_pause") {
+      aimAt();
+      if (elapsed < (h.hallsRookUntil ?? 0)) return;
+      const px = Number(h.hallsRookPendingDestX);
+      const py = Number(h.hallsRookPendingDestY);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) {
+        h.hallsRookPhase = "approach";
+        h.hallsNextThinkAt = elapsed;
+        return;
+      }
+      h.hallsRookGlideAxis = Math.abs(px - h.x) >= Math.abs(py - h.y) ? "x" : "y";
+      h.hallsDestX = px;
+      h.hallsDestY = py;
+      h.hallsGliding = true;
+      h.hallsRookPhase = "approach";
+      aimAt();
+      return;
+    }
+
+    if (elapsed < (h.hallsNextThinkAt ?? 0)) {
+      aimAt();
+      return;
+    }
+
+    const wpx = player.x - h.x;
+    const wpy = player.y - h.y;
+    const distTo = Math.hypot(wpx, wpy) || 1;
+    const lineWant = clamp(
+      HALLS_ROOK_LINEUP_FRAC * distTo,
+      HALLS_ROOK_LINEUP_MIN_PX,
+      HALLS_ROOK_LINEUP_MAX_PX,
+    );
+    const cap = HALLS_ROOK_APPROACH_CAP_PX;
+
+    /** Best single-axis slide to share a rank or file with the player (then pause + strike). */
+    let bestUx = 0;
+    let bestUy = 0;
+    let bestT = 0;
+    let bestScore = Infinity;
+    const orthos = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ];
+    for (const [oux, ouy] of orthos) {
+      const tObs = hallsChessMaxSlideDist(h.x, h.y, h, oux, ouy, cap);
+      const t = Math.min(lineWant, tObs);
+      if (t < 22) continue;
+      const px = h.x + oux * t;
+      const py = h.y + ouy * t;
+      let strikeUx = 0;
+      let strikeUy = 0;
+      if (Math.abs(ouy) > 0.5) {
+        strikeUx = Math.abs(wpx) > 6 ? Math.sign(wpx) : 1;
+        strikeUy = 0;
+      } else {
+        strikeUx = 0;
+        strikeUy = Math.abs(wpy) > 6 ? Math.sign(wpy) : 1;
+      }
+      const crossEnd = hallsRookLineCrossAt(px, py, player, strikeUx, strikeUy);
+      const score =
+        HALLS_ROOK_ALIGN_CROSS_WEIGHT * crossEnd +
+        HALLS_ROOK_ALIGN_DIST_WEIGHT * distSq({ x: px, y: py }, target);
+      if (score < bestScore) {
+        bestScore = score;
+        bestUx = oux;
+        bestUy = ouy;
+        bestT = t;
+      }
+    }
+
+    /** Shortest hit along a rank or file the rook can shoot forward on. */
+    let threatUx = bestUx;
+    let threatUy = bestUy;
+    let threatHit = Infinity;
+    for (const sx of [-1, 1]) {
+      const ux = sx;
+      const uy = 0;
+      if (wpx * ux + wpy * uy < 5) continue;
+      const th = hallsBishopRayFirstHitPlayerT(h, ux, uy, player);
+      if (th != null && th < threatHit) {
+        threatHit = th;
+        threatUx = ux;
+        threatUy = uy;
+      }
+    }
+    for (const sy of [-1, 1]) {
+      const ux = 0;
+      const uy = sy;
+      if (wpx * ux + wpy * uy < 5) continue;
+      const th = hallsBishopRayFirstHitPlayerT(h, ux, uy, player);
+      if (th != null && th < threatHit) {
+        threatHit = th;
+        threatUx = ux;
+        threatUy = uy;
+      }
+    }
+
+    if (bestT < 22 || !Number.isFinite(bestScore)) {
+      h.hallsNextThinkAt = elapsed + 0.2;
+      aimAt();
+      return;
+    }
+
+    const crossNow = hallsRookLineCrossAt(h.x, h.y, player, threatUx, threatUy);
+    const aheadThreat = wpx * threatUx + wpy * threatUy > 5;
+    const strikeReady =
+      threatHit < Infinity &&
+      aheadThreat &&
+      crossNow < HALLS_ROOK_LINE_CROSS_EPS &&
+      threatHit > 22 &&
+      threatHit < HALLS_ROOK_STRIKE_COMMIT_MAX_T_PX;
+
+    if (strikeReady) {
+      h.hallsRookPhase = "pause";
+      h.hallsRookLineUx = threatUx;
+      h.hallsRookLineUy = threatUy;
+      h.hallsRookUntil = elapsed + HALLS_ROOK_PAUSE_SEC;
+      aimAt();
+      return;
+    }
+
+    h.hallsRookLineUx = bestUx;
+    h.hallsRookLineUy = bestUy;
+    const destX = h.x + bestUx * bestT;
+    const destY = h.y + bestUy * bestT;
+
+    const dirEps = 1e-4;
+    const dirChanged =
+      !!h.hallsRookHasLastDir &&
+      (Math.abs(bestUx - Number(h.hallsRookLastUx)) > dirEps || Math.abs(bestUy - Number(h.hallsRookLastUy)) > dirEps);
+
+    if (dirChanged) {
+      h.hallsRookPhase = "turn_pause";
+      h.hallsRookPendingDestX = destX;
+      h.hallsRookPendingDestY = destY;
+      h.hallsRookUntil = elapsed + HALLS_ROOK_TURN_PAUSE_SEC;
+      aimAt();
+      return;
+    }
+
+    h.hallsRookGlideAxis = Math.abs(bestUx) > 0.5 ? "x" : "y";
+    h.hallsDestX = destX;
+    h.hallsDestY = destY;
+    h.hallsGliding = true;
+    h.hallsRookPhase = "approach";
+    aimAt();
+  }
+
+  function hallsBishopPlayerHitRadius(h, player) {
+    return h.r + (player.r ?? 10) + HALLS_BISHOP_PLAYER_CLEAR_BUFFER;
+  }
+
+  function hallsBishopCrossAt(hx, hy, player, ux, uy) {
+    const dx = player.x - hx;
+    const dy = player.y - hy;
+    return Math.abs(dx * uy - dy * ux);
+  }
+
+  function hallsBishopLineCrossPx(h, player, ux, uy) {
+    return hallsBishopCrossAt(h.x, h.y, player, ux, uy);
+  }
+
+  /** Smallest t>0 where |h + u*t − player| = hit radius (u unit); null if ray misses that disk ahead. */
+  function hallsBishopRayFirstHitPlayerT(h, ux, uy, player) {
+    const R = hallsBishopPlayerHitRadius(h, player);
+    const ax = h.x - player.x;
+    const ay = h.y - player.y;
+    const b = 2 * (ax * ux + ay * uy);
+    const c = ax * ax + ay * ay - R * R;
+    const disc = b * b - 4 * c;
+    if (disc < 0) return null;
+    const s = Math.sqrt(disc);
+    const t0 = (-b - s) / 2;
+    const t1 = (-b + s) / 2;
+    let best = Infinity;
+    if (t0 > 1e-3 && Number.isFinite(t0)) best = Math.min(best, t0);
+    if (t1 > 1e-3 && Number.isFinite(t1)) best = Math.min(best, t1);
+    return best < Infinity ? best : null;
+  }
+
+  /** Max t along u (≤ maxT) before obstacles or clipping the player disk (approach). */
+  function hallsBishopApproachMaxT(h, ux, uy, maxT, player) {
+    const tObs = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, maxT);
+    const tHit = hallsBishopRayFirstHitPlayerT(h, ux, uy, player);
+    if (tHit == null) return tObs;
+    return Math.min(tObs, Math.max(0, tHit - 16));
+  }
+
+  function hallsBishopStrikeGlideT(h, ux, uy, player) {
+    const tHit = hallsBishopRayFirstHitPlayerT(h, ux, uy, player);
+    const past = HALLS_BISHOP_STRIKE_PAST_PLAYER_PX;
+    const want = tHit != null ? tHit + past : 560;
+    return hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, Math.min(want, HALLS_BISHOP_STRIKE_MAX_T_PX));
+  }
+
+  /** @param {any} h @param {{ x: number; y: number; r?: number }} target @param {{ x: number; y: number; r?: number }} player */
+  function hallsTickBishopChess(h, elapsed, spDt, target, player, glide) {
+    const aimAt = () => hallsChessFaceToward(h, target.x, target.y);
+    const diagEqualized = () => Math.abs(Math.abs(player.x - h.x) - Math.abs(player.y - h.y)) <= HALLS_BISHOP_LINE_CROSS_EPS;
+    const leadX = player.x + Number(player.velX ?? 0) * 0.44;
+    const leadY = player.y + Number(player.velY ?? 0) * 0.44;
+    const aggressiveLineWant = (distTo) =>
+      clamp(
+        HALLS_BISHOP_LINEUP_FRAC * distTo * 1.45,
+        HALLS_BISHOP_LINEUP_MIN_PX * 1.15,
+        HALLS_BISHOP_LINEUP_MAX_PX * 1.4,
+      );
+
+    if (h.hallsGliding && h.hallsDestX != null && h.hallsDestY != null) {
+      aimAt();
+      const st = hallsChessGlideToward(h, h.hallsDestX, h.hallsDestY, glide, spDt);
+      const done = st === "arrived" || st === "stuck";
+      if (!done) return;
+
+      h.hallsGliding = false;
+      h.hallsDestX = null;
+      h.hallsDestY = null;
+
+      const ph = h.hallsBishopPhase ?? "approach";
+
+      if (ph === "strike") {
+        const Rr = hallsBishopPlayerHitRadius(h, player);
+        const miss = distSq(h, player) > Rr * Rr;
+        if (miss) {
+          h.hallsBishopPhase = "approach";
+          h.hallsNextThinkAt = elapsed + 0.06;
+        } else {
+          h.hallsBishopPhase = "approach";
+          h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(HALLS_PIECE_IDS.BISHOP) * 0.25;
+        }
+        return;
+      }
+
+      if (ph === "approach") {
+        h.hallsBishopLastUx = Number(h.hallsBishopLineUx);
+        h.hallsBishopLastUy = Number(h.hallsBishopLineUy);
+        h.hallsBishopHasLastDiag = true;
+      }
+
+      // Keep bishops flowing: re-plan immediately after each approach glide.
+      h.hallsNextThinkAt = elapsed;
+      return;
+    }
+
+    const phase = h.hallsBishopPhase ?? "approach";
+
+    if (phase === "pause") {
+      aimAt();
+      if (elapsed < (h.hallsBishopUntil ?? 0)) return;
+      const ux = Number(h.hallsBishopLineUx);
+      const uy = Number(h.hallsBishopLineUy);
+      if (Math.hypot(ux, uy) < 0.2) {
+        h.hallsBishopPhase = "approach";
+        h.hallsNextThinkAt = elapsed;
+        return;
+      }
+      const tObs = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, HALLS_BISHOP_STRIKE_MAX_T_PX);
+      const tWant = clamp(Math.hypot(leadX - h.x, leadY - h.y) * 0.95, 220, HALLS_BISHOP_STRIKE_MAX_T_PX);
+      const tStrike = Math.min(tObs, tWant);
+      if (tStrike < 12) {
+        h.hallsBishopPhase = "approach";
+        h.hallsNextThinkAt = elapsed;
+        return;
+      }
+      h.hallsBishopPhase = "strike";
+      h.hallsDestX = h.x + ux * tStrike;
+      h.hallsDestY = h.y + uy * tStrike;
+      h.hallsGliding = true;
+      return;
+    }
+
+    if (phase === "turn_pause") {
+      aimAt();
+      if (elapsed < (h.hallsBishopUntil ?? 0)) return;
+      const px = Number(h.hallsBishopPendingDestX);
+      const py = Number(h.hallsBishopPendingDestY);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) {
+        h.hallsBishopPhase = "approach";
+        h.hallsNextThinkAt = elapsed;
+        return;
+      }
+      h.hallsDestX = px;
+      h.hallsDestY = py;
+      h.hallsGliding = true;
+      h.hallsBishopPhase = "approach";
+      aimAt();
+      return;
+    }
+
+    if (elapsed < (h.hallsNextThinkAt ?? 0)) {
+      aimAt();
+      return;
+    }
+
+    const wpx = player.x - h.x;
+    const wpy = player.y - h.y;
+    const distTo = Math.hypot(wpx, wpy) || 1;
+    const lineWant = aggressiveLineWant(distTo);
+    const cap = HALLS_BISHOP_APPROACH_CAP_PX;
+
+    // Rule 1: keep gliding on a diagonal until |dx| ~= |dy| (same diagonal relation).
+    let bestUx = 0;
+    let bestUy = 0;
+    let bestT = 0;
+    let bestScore = Infinity;
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        const ux = sx * Math.SQRT1_2;
+        const uy = sy * Math.SQRT1_2;
+        if (wpx * ux + wpy * uy < 8) continue;
+        // For confident motion, use full obstacle-limited stride (don't brake early near player disk).
+        const tClear = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, cap);
+        const t = Math.min(lineWant, tClear);
+        if (t < 120) continue;
+        const px = h.x + ux * t;
+        const py = h.y + uy * t;
+        const ddx = Math.abs(leadX - px);
+        const ddy = Math.abs(leadY - py);
+        const equalErr = Math.abs(ddx - ddy);
+        const closeScore = distSq({ x: px, y: py }, { x: leadX, y: leadY });
+        const score = HALLS_BISHOP_ALIGN_CROSS_WEIGHT * equalErr + HALLS_BISHOP_ALIGN_DIST_WEIGHT * closeScore * 0.65;
+        if (score < bestScore) {
+          bestScore = score;
+          bestUx = ux;
+          bestUy = uy;
+          bestT = t;
+        }
+      }
+    }
+
+    if (bestT < 120) {
+      h.hallsNextThinkAt = elapsed + 0.06;
+      aimAt();
+      return;
+    }
+
+    // Rule 2: once equalized, switch to the perpendicular diagonal and move toward the player.
+    if (diagEqualized()) {
+      const lwx = leadX - h.x;
+      const lwy = leadY - h.y;
+      const sameSign = lwx * lwy >= 0;
+      const perpA = sameSign ? { ux: Math.SQRT1_2, uy: -Math.SQRT1_2 } : { ux: Math.SQRT1_2, uy: Math.SQRT1_2 };
+      const perpB = sameSign ? { ux: -Math.SQRT1_2, uy: Math.SQRT1_2 } : { ux: -Math.SQRT1_2, uy: -Math.SQRT1_2 };
+      const dotA = lwx * perpA.ux + lwy * perpA.uy;
+      const dotB = lwx * perpB.ux + lwy * perpB.uy;
+      const pick = dotA >= dotB ? perpA : perpB;
+      h.hallsBishopLineUx = pick.ux;
+      h.hallsBishopLineUy = pick.uy;
+      const dirEps = 1e-4;
+      const attackDirChanged =
+        !!h.hallsBishopHasLastDiag &&
+        (Math.abs(pick.ux - Number(h.hallsBishopLastUx)) > dirEps ||
+          Math.abs(pick.uy - Number(h.hallsBishopLastUy)) > dirEps);
+      const crashObs = hallsChessMaxSlideDist(h.x, h.y, h, pick.ux, pick.uy, HALLS_BISHOP_STRIKE_MAX_T_PX);
+      const crashWant = clamp(Math.hypot(lwx, lwy) * 1.05, 240, HALLS_BISHOP_STRIKE_MAX_T_PX);
+      const crashT = Math.min(crashObs, crashWant);
+      if (crashT > 24) {
+        if (attackDirChanged) {
+          h.hallsBishopPhase = "turn_pause";
+          h.hallsBishopPendingDestX = h.x + pick.ux * crashT;
+          h.hallsBishopPendingDestY = h.y + pick.uy * crashT;
+          h.hallsBishopUntil = elapsed + HALLS_BISHOP_TURN_PAUSE_SEC;
+          aimAt();
+          return;
+        }
+        h.hallsBishopPhase = "strike";
+        h.hallsDestX = h.x + pick.ux * crashT;
+        h.hallsDestY = h.y + pick.uy * crashT;
+        h.hallsGliding = true;
+        aimAt();
+        return;
+      }
+      h.hallsBishopPhase = "pause";
+      h.hallsBishopUntil = elapsed + HALLS_BISHOP_PAUSE_SEC;
+      aimAt();
+      return;
+    }
+
+    h.hallsBishopLineUx = bestUx;
+    h.hallsBishopLineUy = bestUy;
+    const destX = h.x + bestUx * bestT;
+    const destY = h.y + bestUy * bestT;
+    const dirEps = 1e-4;
+    const dirChanged =
+      !!h.hallsBishopHasLastDiag &&
+      (Math.abs(bestUx - Number(h.hallsBishopLastUx)) > dirEps ||
+        Math.abs(bestUy - Number(h.hallsBishopLastUy)) > dirEps);
+    if (dirChanged) {
+      h.hallsBishopPhase = "turn_pause";
+      h.hallsBishopPendingDestX = destX;
+      h.hallsBishopPendingDestY = destY;
+      h.hallsBishopUntil = elapsed + HALLS_BISHOP_TURN_PAUSE_SEC;
+      aimAt();
+      return;
+    }
+
+    h.hallsDestX = destX;
+    h.hallsDestY = destY;
+    h.hallsGliding = true;
+    h.hallsBishopPhase = "approach";
+    aimAt();
+  }
+
+  function hallsPickQueenSlide(h, target) {
+    const dx = target.x - h.x;
+    const dy = target.y - h.y;
+    const l = Math.hypot(dx, dy) || 1;
+    const ux = dx / l;
+    const uy = dy / l;
+    const max = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, HALLS_QUEEN_SLIDE_CAP_PX);
+    if (max < 0.05) return null;
+    return { x: h.x + ux * max, y: h.y + uy * max };
+  }
+
+  function hallsPickKingSlide(h, target) {
+    const dx = target.x - h.x;
+    const dy = target.y - h.y;
+    const l = Math.hypot(dx, dy) || 1;
+    const ux = dx / l;
+    const uy = dy / l;
+    const max = hallsChessMaxSlideDist(h.x, h.y, h, ux, uy, HALLS_KING_SLIDE_CAP_PX);
+    if (max < 0.05) return null;
+    return { x: h.x + ux * max, y: h.y + uy * max };
+  }
+
+  function hallsPickKnightL(h, target) {
+    const L = HALLS_KNIGHT_LONG_LEG_PX;
+    const S = HALLS_KNIGHT_SHORT_LEG_PX;
+    let best = null;
+    let bestD = Infinity;
+    /** @param {number} mxx @param {number} myy @param {number} exx @param {number} eyy */
+    const consider = (mxx, myy, exx, eyy) => {
+      if (hallsChessPlacementBlocked(mxx, myy, h.r)) return;
+      if (hallsChessPlacementBlocked(exx, eyy, h.r)) return;
+      const d = distSq({ x: exx, y: eyy }, target);
+      if (d < bestD) {
+        bestD = d;
+        best = { mx: mxx, my: myy, ex: exx, ey: eyy };
+      }
+    };
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        consider(h.x + sx * L, h.y, h.x + sx * L, h.y + sy * S);
+        consider(h.x, h.y + sx * L, h.x + sy * S, h.y + sx * L);
+      }
+    }
+    return best;
+  }
+
+  /** @param {any} h @param {{ x: number; y: number; r?: number }} target */
+  function hallsTickChessPieceMovement(h, elapsed, spDt, target) {
+    const piece = h.type;
+    const glide =
+      HALLS_CHESS_GLIDE_SPEED_PX_S *
+      runLevelEnemySpeedMult() *
+      midgameEnemySpeedMult() *
+      boneEnemySpeedMult();
+
+    if (piece === HALLS_PIECE_IDS.BISHOP) {
+      hallsTickBishopChess(h, elapsed, spDt, target, getPlayer(), glide);
+      return;
+    }
+    if (piece === HALLS_PIECE_IDS.ROOK) {
+      hallsTickRookChess(h, elapsed, spDt, target, getPlayer(), glide);
+      return;
+    }
+
+    const aimAt = () => hallsChessFaceToward(h, target.x, target.y);
+
+    const finishDash = () => {
+      h.hallsGliding = false;
+      h.hallsKnightStage = null;
+      h.hallsDestX = null;
+      h.hallsDestY = null;
+      h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(piece);
+    };
+
+    if (h.hallsGliding && h.hallsDestX != null && h.hallsDestY != null) {
+      aimAt();
+      const knight = piece === HALLS_PIECE_IDS.KNIGHT;
+      const knightMul =
+        knight && h.hallsKnightStage === "a"
+          ? HALLS_KNIGHT_LONG_GLIDE_MUL
+          : knight && h.hallsKnightStage === "b"
+            ? HALLS_KNIGHT_SHORT_GLIDE_MUL
+            : 1;
+      const spd = glide * knightMul;
+      const st = knight
+        ? hallsChessGlideAxisToward(
+            h,
+            h.hallsDestX,
+            h.hallsDestY,
+            h.hallsKnightAxis === "y" ? "y" : "x",
+            spd,
+            spDt,
+          )
+        : hallsChessGlideToward(h, h.hallsDestX, h.hallsDestY, spd, spDt);
+      const done = st === "arrived" || st === "stuck";
+      if (!done) return;
+
+      if (piece === HALLS_PIECE_IDS.KNIGHT && h.hallsKnightStage === "a" && done) {
+        if (st === "arrived") {
+          h.hallsKnightStage = "b";
+          h.hallsKnightAxis = h.hallsKnightAxis === "x" ? "y" : "x";
+          h.hallsDestX = Number(h.hallsKnightEndX);
+          h.hallsDestY = Number(h.hallsKnightEndY);
+          h.hallsGliding = true;
+          return;
+        }
+        finishDash();
+        return;
+      }
+
+      finishDash();
+      return;
+    }
+
+    if (elapsed < (h.hallsNextThinkAt ?? 0)) {
+      aimAt();
+      return;
+    }
+
+    /** @type {{ x: number; y: number } | null} */
+    let dest = null;
+    if (piece === HALLS_PIECE_IDS.PAWN) dest = hallsPickPawnDash(h, target);
+    else if (piece === HALLS_PIECE_IDS.QUEEN) dest = hallsPickQueenSlide(h, target);
+    else if (piece === HALLS_PIECE_IDS.KING) dest = hallsPickKingSlide(h, target);
+    else if (piece === HALLS_PIECE_IDS.KNIGHT) {
+      const plan = hallsPickKnightL(h, target);
+      if (plan) {
+        h.hallsKnightStage = "a";
+        h.hallsKnightAxis =
+          Math.abs(plan.mx - h.x) >= Math.abs(plan.my - h.y) ? "x" : "y";
+        h.hallsKnightMidX = plan.mx;
+        h.hallsKnightMidY = plan.my;
+        h.hallsKnightEndX = plan.ex;
+        h.hallsKnightEndY = plan.ey;
+        h.hallsDestX = plan.mx;
+        h.hallsDestY = plan.my;
+        h.hallsGliding = true;
+        h.hallsNextThinkAt = elapsed;
+        aimAt();
+        return;
+      }
+    }
+
+    if (!dest) {
+      h.hallsNextThinkAt = elapsed + 0.18;
+      aimAt();
+      return;
+    }
+
+    h.hallsDestX = dest.x;
+    h.hallsDestY = dest.y;
+    h.hallsGliding = true;
+    h.hallsKnightStage = null;
+    aimAt();
+  }
+
   function moveHunters(dt) {
     const elapsed = getSimElapsed();
     const player = getPlayer();
@@ -1111,6 +2120,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle" && h.type !== "depthsEldritchBarrageBolt")
         continue;
       const spDt = dt * spades13AuraEnemyDtMult();
+
+      if (isHallsChessPieceType(h.type)) {
+        hallsTickChessPieceMovement(h, elapsed, spDt, pickTargetForHunter(h));
+        continue;
+      }
 
       if (h.type === "airSpawner" || h.type === "depthsBoltSpawner") {
         const target = pickTargetForHunter(h);
@@ -2427,6 +3441,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     moveHunters(dt);
     applyFrontShieldArc();
     updateSnipers();
+    updateHallsBishopHolyStrikes();
     updateRangedAttackers(dt);
     updateSniperFireArcs(dt);
     updateSwampPools();

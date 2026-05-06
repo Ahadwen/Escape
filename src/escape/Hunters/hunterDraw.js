@@ -6,6 +6,8 @@ import {
 } from "../specials/EldritchBlood.js";
 import depthsEldritchBossUrl from "../../assets/Cthulu.png";
 import depthsEldritchLightningUrl from "../../assets/lightning.png";
+import hallsChessSpritesUrl from "../../assets/Chess.png";
+import { HALLS_COIN_HIT_RADIUS_PX, getHallsChessAtlasSrcRect } from "./hallsLogic.js";
 
 /** Preloaded boss PNG (2D canvas). */
 const depthsEldritchBossImg = new Image();
@@ -13,6 +15,246 @@ depthsEldritchBossImg.src = depthsEldritchBossUrl;
 
 const depthsEldritchLightningImg = new Image();
 depthsEldritchLightningImg.src = depthsEldritchLightningUrl;
+
+/** Halls chess sheet: row0 king,queen,rook — row1 bishop,knight,pawn (3×2). */
+const hallsChessSpritesImg = new Image();
+hallsChessSpritesImg.src = hallsChessSpritesUrl;
+
+/** Halls chess enemies: sprite from `Chess.png` when loaded; else procedural coin. */
+const HALLS_COIN_RADIUS_PX = HALLS_COIN_HIT_RADIUS_PX;
+const HALLS_COIN_PIECE_TYPES = new Set([
+  "hallsPawn",
+  "hallsRook",
+  "hallsKnight",
+  "hallsBishop",
+  "hallsQueen",
+  "hallsKing",
+]);
+
+/**
+ * Staunton-style silhouettes (filled), tuned for ~100px coin legibility.
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {string} pieceType
+ */
+function drawHallsCoinInsignia(ctx, pieceType) {
+  const s = HALLS_COIN_RADIUS_PX * 0.52;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  switch (pieceType) {
+    case "hallsPawn": {
+      ctx.beginPath();
+      ctx.arc(0, -0.44 * s, s * 0.17, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, -0.24 * s, s * 0.22, s * 0.075, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillRect(-s * 0.075, -0.16 * s, s * 0.15, s * 0.2);
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.28, 0.16 * s);
+      ctx.quadraticCurveTo(-s * 0.34, 0.36 * s, 0, 0.4 * s);
+      ctx.quadraticCurveTo(s * 0.34, 0.36 * s, s * 0.28, 0.16 * s);
+      ctx.lineTo(s * 0.1, 0.06 * s);
+      ctx.lineTo(-s * 0.1, 0.06 * s);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case "hallsRook": {
+      const w = s * 0.44;
+      const bodyTop = -0.55 * s;
+      const bodyH = 0.88 * s;
+      ctx.fillRect(-w * 0.5, bodyTop, w, bodyH);
+      const toothW = w / 3;
+      const merlonH = s * 0.15;
+      for (let i = 0; i < 3; i++) {
+        const x0 = -w * 0.5 + i * toothW + toothW * 0.05;
+        ctx.fillRect(x0, bodyTop - merlonH, toothW * 0.9, merlonH);
+      }
+      break;
+    }
+    case "hallsKnight": {
+      ctx.beginPath();
+      ctx.moveTo(-0.06 * s, 0.36 * s);
+      ctx.quadraticCurveTo(-0.34 * s, 0.24 * s, -0.32 * s, -0.02 * s);
+      ctx.quadraticCurveTo(-0.3 * s, -0.26 * s, -0.12 * s, -0.36 * s);
+      ctx.lineTo(-0.04 * s, -0.54 * s);
+      ctx.quadraticCurveTo(-0.14 * s, -0.42 * s, -0.22 * s, -0.34 * s);
+      ctx.quadraticCurveTo(-0.02 * s, -0.4 * s, 0.18 * s, -0.34 * s);
+      ctx.quadraticCurveTo(0.46 * s, -0.2 * s, 0.4 * s, 0.04 * s);
+      ctx.quadraticCurveTo(0.24 * s, 0.14 * s, 0.04 * s, 0.08 * s);
+      ctx.quadraticCurveTo(-0.04 * s, 0.2 * s, -0.06 * s, 0.36 * s);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case "hallsBishop": {
+      ctx.beginPath();
+      ctx.moveTo(0, -0.58 * s);
+      ctx.bezierCurveTo(-0.24 * s, -0.48 * s, -0.44 * s, -0.1 * s, -0.3 * s, 0.12 * s);
+      ctx.lineTo(-0.1 * s, 0.04 * s);
+      ctx.lineTo(0, 0.14 * s);
+      ctx.lineTo(0.1 * s, 0.04 * s);
+      ctx.lineTo(0.3 * s, 0.12 * s);
+      ctx.bezierCurveTo(0.44 * s, -0.1 * s, 0.24 * s, -0.48 * s, 0, -0.58 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, -0.64 * s, s * 0.095, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, 0.26 * s, s * 0.24, s * 0.085, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillRect(-s * 0.055, 0.15 * s, s * 0.11, s * 0.14);
+      break;
+    }
+    case "hallsQueen": {
+      const bandTop = -0.18 * s;
+      const bandH = s * 0.11;
+      ctx.fillRect(-s * 0.4, bandTop, s * 0.8, bandH);
+      const spikeH = s * 0.32;
+      const xs = [-0.34, -0.17, 0, 0.17, 0.34];
+      for (const xf of xs) {
+        const cx = xf * s;
+        ctx.beginPath();
+        ctx.moveTo(cx - s * 0.075, bandTop);
+        ctx.lineTo(cx, bandTop - spikeH);
+        ctx.lineTo(cx + s * 0.075, bandTop);
+        ctx.closePath();
+        ctx.fill();
+      }
+      for (const xf of xs) {
+        ctx.beginPath();
+        ctx.arc(xf * s, bandTop - spikeH - s * 0.04, s * 0.055, 0, TAU);
+        ctx.fill();
+      }
+      ctx.fillRect(-s * 0.07, bandTop + bandH, s * 0.14, s * 0.24);
+      ctx.beginPath();
+      ctx.ellipse(0, 0.42 * s, s * 0.3, s * 0.095, 0, 0, TAU);
+      ctx.fill();
+      break;
+    }
+    case "hallsKing": {
+      ctx.beginPath();
+      ctx.ellipse(0, 0.4 * s, s * 0.26, s * 0.09, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillRect(-s * 0.075, 0.12 * s, s * 0.15, s * 0.3);
+      const domeCy = -0.02 * s;
+      const domeR = s * 0.26;
+      ctx.beginPath();
+      ctx.moveTo(-domeR, domeCy);
+      ctx.arc(0, domeCy, domeR, Math.PI, 0, true);
+      ctx.closePath();
+      ctx.fill();
+      const crossY = domeCy - domeR;
+      ctx.fillRect(-s * 0.038, crossY - s * 0.42, s * 0.076, s * 0.44);
+      ctx.fillRect(-s * 0.16, crossY - s * 0.24, s * 0.32, s * 0.07);
+      ctx.fillRect(-s * 0.032, crossY - s * 0.5, s * 0.064, s * 0.13);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{ x: number; y: number; hallsPieceType: string }} h
+ */
+function drawHallsChessCoin(ctx, h, opts) {
+  const { x, y } = h;
+  const pieceType = String(h.hallsPieceType ?? "");
+  if (!HALLS_COIN_PIECE_TYPES.has(pieceType)) return;
+  const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
+  const t = Number.isFinite(Number(opts.simElapsed)) ? Number(opts.simElapsed) : 0;
+  const R = HALLS_COIN_RADIUS_PX;
+  const img = hallsChessSpritesImg;
+  const src = getHallsChessAtlasSrcRect(pieceType, img.naturalWidth, img.naturalHeight);
+  const useSprite = img.complete && img.naturalWidth > 0 && src != null;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const glint = 0.5 + 0.5 * Math.sin(t * 2.4 + Number(h.bornAt ?? 0) * 0.01);
+  ctx.translate(x, y);
+
+  ctx.beginPath();
+  ctx.arc(2.5, 3.5, R, 0, TAU);
+  ctx.fillStyle = "rgba(12, 8, 4, 0.28)";
+  ctx.fill();
+
+  if (useSprite && src) {
+    const { sx, sy, sw, sh } = src;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, TAU);
+    ctx.clip();
+    const cover = Math.max((2 * R) / sw, (2 * R) / sh);
+    const dw = sw * cover;
+    const dh = sh * cover;
+    ctx.drawImage(img, sx, sy, sw, sh, -dw * 0.5, -dh * 0.5, dw, dh);
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, TAU);
+    ctx.strokeStyle = "rgba(40, 28, 10, 0.82)";
+    ctx.lineWidth = 3.2;
+    ctx.stroke();
+
+    const shine = ctx.createLinearGradient(-R, -R, R * 0.6, R * 0.6);
+    shine.addColorStop(0, `rgba(255, 255, 255, ${0.1 + 0.08 * glint})`);
+    shine.addColorStop(0.35, "rgba(255, 255, 255, 0)");
+    shine.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.beginPath();
+    ctx.arc(0, 0, R - 3, 0, TAU);
+    ctx.fillStyle = shine;
+    ctx.fill();
+  } else {
+    const body = ctx.createRadialGradient(-R * 0.42, -R * 0.42, R * 0.08, 0, 0, R);
+    body.addColorStop(0, `rgba(255, 248, 220, ${0.92 + 0.06 * glint})`);
+    body.addColorStop(0.22, "#f0d078");
+    body.addColorStop(0.5, "#c9a227");
+    body.addColorStop(0.78, "#8b6914");
+    body.addColorStop(1, "#5c4210");
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, TAU);
+    ctx.fillStyle = body;
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(60, 40, 12, 0.75)";
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, R - 10, 0, TAU);
+    ctx.strokeStyle = "rgba(120, 90, 30, 0.45)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const innerBg = ctx.createRadialGradient(R * 0.15, R * 0.12, 0, 0, 0, R - 14);
+    innerBg.addColorStop(0, "rgba(255, 243, 200, 0.22)");
+    innerBg.addColorStop(0.55, "rgba(180, 140, 50, 0.12)");
+    innerBg.addColorStop(1, "rgba(70, 50, 18, 0.18)");
+    ctx.beginPath();
+    ctx.arc(0, 0, R - 14, 0, TAU);
+    ctx.fillStyle = innerBg;
+    ctx.fill();
+
+    ctx.fillStyle = "#2c1f0a";
+    ctx.strokeStyle = "#1a1206";
+    ctx.lineWidth = 1.1;
+    drawHallsCoinInsignia(ctx, pieceType);
+
+    const shine = ctx.createLinearGradient(-R, -R, R * 0.6, R * 0.6);
+    shine.addColorStop(0, `rgba(255, 255, 255, ${0.14 + 0.1 * glint})`);
+    shine.addColorStop(0.35, "rgba(255, 255, 255, 0)");
+    shine.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.beginPath();
+    ctx.arc(0, 0, R - 4, 0, TAU);
+    ctx.fillStyle = shine;
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
 
 /** Extra radians applied when drawing the boss PNG; 0 = use the asset’s native orientation. */
 const DEPTHS_ELDRITCH_BOSS_SPRITE_YAW = 0;
@@ -921,6 +1163,10 @@ function drawDepthsEldritchBloom(ctx, h, simElapsed) {
  * @param {{ colourblind?: boolean; simElapsed?: number; depthsPath?: boolean }} [opts]
  */
 export function drawHunterBody(ctx, h, opts = {}) {
+  if (h.hallsPieceType && HALLS_COIN_PIECE_TYPES.has(String(h.hallsPieceType))) {
+    drawHallsChessCoin(ctx, h, opts);
+    return;
+  }
   if (h.type === "depthsTentacle") {
     const t = Number(opts.simElapsed);
     drawDepthsTentacle(ctx, h, Number.isFinite(t) ? t : 0);
@@ -1029,6 +1275,11 @@ export function drawHunterBody(ctx, h, opts = {}) {
     const pulse = 0.5 + 0.5 * Math.sin((Number(h.cryptRevealU ?? 1) + x * 0.004 + y * 0.004) * 8.5);
     drawCircle(ctx, x, y, rBody + 9 + pulse * 3, "#cbd5e1", 0.12 + pulse * 0.1);
     drawCircle(ctx, x, y, rBody + 4 + pulse * 2, "#f8fafc", 0.08 + pulse * 0.08);
+  }
+  if (h.hallsHolyGlow) {
+    const holyPulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + x * 0.005 + y * 0.004) * 7.2);
+    drawCircle(ctx, x, y, rBody + 12 + holyPulse * 3.5, "#f8fafc", 0.14 + holyPulse * 0.12);
+    drawCircle(ctx, x, y, rBody + 7 + holyPulse * 2.2, "#ddd6fe", 0.12 + holyPulse * 0.1);
   }
   const g = ctx.createRadialGradient(x - rBody * 0.38, y - rBody * 0.42, rBody * 0.08, x, y, rBody);
   g.addColorStop(0, pal.light);
@@ -1385,6 +1636,7 @@ export function drawDangerZones(ctx, dangerZones, now, sniperBangDuration) {
     if (!zone.exploded) {
       const radius = zone.r * (1 - 0.045 * life);
       const firePath = !!zone.firePath;
+      const hallsHoly = !!zone.hallsHolyZone;
       const depthsSnipe = !!zone.depthsSniperZone;
       if (depthsSnipe) {
         drawCircle(ctx, zone.x, zone.y, radius, "#4c1d95", 0.22 + life * 0.42);
@@ -1401,16 +1653,30 @@ export function drawDangerZones(ctx, dangerZones, now, sniperBangDuration) {
         ctx.arc(zone.x, zone.y, radius * 0.78, 0, TAU);
         ctx.stroke();
       } else {
-        drawCircle(ctx, zone.x, zone.y, radius, firePath ? "#dc2626" : "#ef4444", 0.25 + life * 0.4);
-        ctx.strokeStyle = firePath ? "#fb7185" : "#f87171";
+        drawCircle(
+          ctx,
+          zone.x,
+          zone.y,
+          radius,
+          hallsHoly ? "#f8fafc" : firePath ? "#dc2626" : "#ef4444",
+          hallsHoly ? 0.32 + life * 0.42 : 0.25 + life * 0.4,
+        );
+        ctx.strokeStyle = hallsHoly ? "#ffffff" : firePath ? "#fb7185" : "#f87171";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, radius, 0, TAU);
         ctx.stroke();
         if (firePath) {
           const inner = radius * 0.58;
-          drawCircle(ctx, zone.x, zone.y, inner, "#fb7185", 0.16 + 0.1 * life);
-          ctx.strokeStyle = "rgba(254, 226, 226, 0.55)";
+          drawCircle(
+            ctx,
+            zone.x,
+            zone.y,
+            inner,
+            hallsHoly ? "#e9d5ff" : "#fb7185",
+            (hallsHoly ? 0.22 : 0.16) + 0.1 * life,
+          );
+          ctx.strokeStyle = hallsHoly ? "rgba(255, 255, 255, 0.72)" : "rgba(254, 226, 226, 0.55)";
           ctx.lineWidth = 1.2;
           ctx.beginPath();
           ctx.arc(zone.x, zone.y, radius * 0.78, 0, TAU);
@@ -1420,17 +1686,25 @@ export function drawDangerZones(ctx, dangerZones, now, sniperBangDuration) {
     } else if (lingering) {
       const r = zone.r;
       const firePath = !!zone.firePath;
+      const hallsHoly = !!zone.hallsHolyZone;
       const depthsSnipe = !!zone.depthsSniperZone;
       if (depthsSnipe) {
         drawDepthsSniperZoneSinking(ctx, zone, now);
       } else {
-        drawCircle(ctx, zone.x, zone.y, r, firePath ? "#991b1b" : "#9f1239", firePath ? 0.46 : 0.38);
-        ctx.strokeStyle = firePath ? "rgba(251, 113, 133, 0.95)" : "rgba(248, 113, 113, 0.95)";
+        drawCircle(
+          ctx,
+          zone.x,
+          zone.y,
+          r,
+          hallsHoly ? "#e2e8f0" : firePath ? "#991b1b" : "#9f1239",
+          hallsHoly ? 0.5 : firePath ? 0.46 : 0.38,
+        );
+        ctx.strokeStyle = hallsHoly ? "rgba(255, 255, 255, 0.98)" : firePath ? "rgba(251, 113, 133, 0.95)" : "rgba(248, 113, 113, 0.95)";
         ctx.lineWidth = 2.5;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, r, 0, TAU);
         ctx.stroke();
-        ctx.strokeStyle = "rgba(254, 202, 202, 0.55)";
+        ctx.strokeStyle = hallsHoly ? "rgba(233, 213, 255, 0.72)" : "rgba(254, 202, 202, 0.55)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, r * 0.72, 0, TAU);
@@ -1439,12 +1713,12 @@ export function drawDangerZones(ctx, dangerZones, now, sniperBangDuration) {
       if (firePath) {
         const swirl = now * 2.6;
         const ringR = r * (0.5 + 0.08 * Math.sin(now * 7));
-        ctx.strokeStyle = "rgba(252, 165, 165, 0.45)";
+        ctx.strokeStyle = hallsHoly ? "rgba(255, 255, 255, 0.6)" : "rgba(252, 165, 165, 0.45)";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, ringR, swirl, swirl + Math.PI * 1.5);
         ctx.stroke();
-        ctx.strokeStyle = "rgba(254, 242, 242, 0.28)";
+        ctx.strokeStyle = hallsHoly ? "rgba(243, 232, 255, 0.45)" : "rgba(254, 242, 242, 0.28)";
         ctx.lineWidth = 1.2;
         ctx.beginPath();
         ctx.arc(zone.x, zone.y, r * 0.9, -swirl * 0.9, -swirl * 0.9 + Math.PI * 1.2);
@@ -1630,7 +1904,7 @@ export function drawSniperBullets(ctx, bullets, now) {
     const life = clamp((now - b.bornAt) / b.life, 0, 1);
     const x = b.x + (b.tx - b.x) * life;
     const y = b.y + (b.ty - b.y) * life;
-    const col = b.depthsShell ? "#5eead4" : "#fca5a5";
+    const col = b.hallsHolyShell ? "#f8fafc" : b.depthsShell ? "#5eead4" : "#fca5a5";
     drawCircle(ctx, x, y, 2, col);
   }
 }
