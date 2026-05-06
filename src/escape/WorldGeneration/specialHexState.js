@@ -439,6 +439,16 @@ export function createSpecialHexRuntime({
     bumpProceduralSpecialDespawnLock();
   }
 
+  /** Convert a halls event tile into an active safehouse tile in-place. */
+  function promoteHallsEventHexToSafehouse(q, r) {
+    const k = key(q, r);
+    proceduralHallsEvent.delete(k);
+    hallsEventSpent.delete(k);
+    safehouseSpent.delete(k);
+    proceduralSafehouse.add(k);
+    onProceduralSafehousePlaced?.();
+  }
+
   function isSpecialTile(q, r) {
     if (isSpawnHex(q, r)) return true;
     const kind = getVisualKind(q, r);
@@ -501,6 +511,7 @@ export function createSpecialHexRuntime({
     isHallsEventHexInteractive,
     isHallsEventSpent: (q, r) => hallsEventSpent.has(key(q, r)),
     markProceduralHallsEventHexSpent,
+    promoteHallsEventHexToSafehouse,
     forEachSafehouseBarrierHex,
     resetSessionState,
   };

@@ -4218,6 +4218,7 @@ function boot() {
     allowProceduralHallsEvents: () => !USE_HALLS_CHESS_TRIGGERS,
     isHallsEventHexInteractive: (q, r) => specials.isHallsEventHexInteractive(q, r),
     markProceduralHallsEventHexSpent: (q, r) => specials.markProceduralHallsEventHexSpent(q, r),
+    promoteHallsEventHexToSafehouse: (q, r) => specials.promoteHallsEventHexToSafehouse(q, r),
     spawnHallsHealCrystal: (q, r) => spawnHallsHealCrystal(q, r),
     killHuntersOnHex: (q, r) => hunterRuntime.killHuntersStandingOnSurgeHex(q, r),
     ejectHuntersFromHallsLockHex: (lq, lr) => hunterRuntime.ejectHuntersFromSurgeLockHex(lq, lr, 2),

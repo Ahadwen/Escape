@@ -243,6 +243,22 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_QUEEN_ARC_BOLT_R = 9;
   const HALLS_ROOK_AURA_R = 142;
   const HALLS_ROOK_AURA_TICK_SEC = 0.26;
+  const HALLS_KING_CAST_INTERVAL_SEC = 4;
+  const HALLS_KING_GLOW_FALLOFF_SEC = 4;
+  const HALLS_KING_ROOK_LINE_COUNT = 6;
+  const HALLS_KING_ROOK_LINE_SPAN = HEX_SIZE * 1.7;
+  const HALLS_KING_ROOK_LINE_START_OFF = HEX_SIZE * 1.55;
+  const HALLS_KING_ROOK_LINE_SPEED = 620;
+  const HALLS_KING_ROOK_LINE_LIFE = 3.4;
+  const HALLS_KING_BISHOP_LINE_COUNT = 5;
+  const HALLS_KING_BISHOP_LINE_SPAN = HEX_SIZE * 1.7;
+  const HALLS_KING_BISHOP_LINE_START_OFF = HEX_SIZE * 1.65;
+  const HALLS_KING_BISHOP_LINE_SPEED = 620;
+  const HALLS_KING_BISHOP_LINE_LIFE = 3.4;
+  const HALLS_KING_PAWN_RAIN_COUNT = 4;
+  const HALLS_KING_PAWN_RAIN_STEP_SEC = 0.2;
+  const HALLS_KING_PAWN_RAIN_LIFE_SEC = 6;
+  const HALLS_KING_QUEEN_SUMMON_LIFE_SEC = 6;
   const DEPTHS_SHARD_SPREAD_RAD = (20 * Math.PI) / 180;
   const DEPTHS_SHARD_DASH_MULT = 3;
   const DEPTHS_SHARD_BASE_DASH = 124;
@@ -938,6 +954,21 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsQueenChargeUy = 0;
         h.hallsQueenWasInside = false;
       }
+      if (type === HALLS_PIECE_IDS.KING) {
+        h.hallsKingCastNextAt = elapsed + HALLS_KING_CAST_INTERVAL_SEC;
+        h.hallsKingGlowColor = "";
+        h.hallsKingGlowStartAt = 0;
+        h.hallsKingGlowUntil = 0;
+        h.hallsKingPawnRainRemaining = 0;
+        h.hallsKingPawnRainNextAt = 0;
+        h.hallsKingPawnRainExpireAt = 0;
+        h.hallsKingSpellBag = [];
+      }
+    }
+    if (opts?.hallsKingLineProjectile) {
+      h.hallsKingLineProjectile = true;
+      h.hallsScriptedVx = Number(opts?.hallsScriptedVx ?? 0);
+      h.hallsScriptedVy = Number(opts?.hallsScriptedVy ?? 0);
     }
     if (Number.isFinite(Number(opts?.hallsLockCenterX)) && Number.isFinite(Number(opts?.hallsLockCenterY))) {
       h.hallsLockCenterX = Number(opts.hallsLockCenterX);
@@ -1772,6 +1803,132 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     h.hallsQueenState = "charge";
   }
 
+  function hallsKingCastRookLine(h, elapsed) {
+    const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
+    const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
+    const vertical = Math.random() < 0.5;
+    const nx = vertical ? 0 : 1;
+    const ny = vertical ? 1 : 0;
+    const px = -ny;
+    const py = nx;
+    for (let i = 0; i < HALLS_KING_ROOK_LINE_COUNT; i++) {
+      const t = HALLS_KING_ROOK_LINE_COUNT <= 1 ? 0.5 : i / (HALLS_KING_ROOK_LINE_COUNT - 1);
+      const off = (t - 0.5) * HALLS_KING_ROOK_LINE_SPAN;
+      const sx = cx - nx * HALLS_KING_ROOK_LINE_START_OFF + px * off;
+      const sy = cy - ny * HALLS_KING_ROOK_LINE_START_OFF + py * off;
+      spawnHunter(HALLS_PIECE_IDS.ROOK, sx, sy, {
+        hallsPieceType: HALLS_PIECE_IDS.ROOK,
+        hallsEventSpawn: true,
+        hallsKingLineProjectile: true,
+        hallsScriptedVx: nx * HALLS_KING_ROOK_LINE_SPEED,
+        hallsScriptedVy: ny * HALLS_KING_ROOK_LINE_SPEED,
+        allowInsideSpecialTile: true,
+        forceExactPosition: true,
+        dieAtOverride: elapsed + HALLS_KING_ROOK_LINE_LIFE,
+      });
+    }
+  }
+
+  function hallsKingCastBishopLine(h, elapsed) {
+    const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
+    const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
+    const sign = Math.random() < 0.5 ? 1 : -1;
+    const nx = Math.SQRT1_2;
+    const ny = sign * Math.SQRT1_2;
+    const px = -ny;
+    const py = nx;
+    for (let i = 0; i < HALLS_KING_BISHOP_LINE_COUNT; i++) {
+      const t = HALLS_KING_BISHOP_LINE_COUNT <= 1 ? 0.5 : i / (HALLS_KING_BISHOP_LINE_COUNT - 1);
+      const off = (t - 0.5) * HALLS_KING_BISHOP_LINE_SPAN;
+      const sx = cx - nx * HALLS_KING_BISHOP_LINE_START_OFF + px * off;
+      const sy = cy - ny * HALLS_KING_BISHOP_LINE_START_OFF + py * off;
+      spawnHunter(HALLS_PIECE_IDS.BISHOP, sx, sy, {
+        hallsPieceType: HALLS_PIECE_IDS.BISHOP,
+        hallsEventSpawn: true,
+        hallsKingLineProjectile: true,
+        hallsScriptedVx: nx * HALLS_KING_BISHOP_LINE_SPEED,
+        hallsScriptedVy: ny * HALLS_KING_BISHOP_LINE_SPEED,
+        allowInsideSpecialTile: true,
+        forceExactPosition: true,
+        dieAtOverride: elapsed + HALLS_KING_BISHOP_LINE_LIFE,
+      });
+    }
+  }
+
+  function hallsTickKingChess(h, elapsed, target) {
+    const spellIds = ["rookLine", "bishopLine", "pawnRain", "queenSummon"];
+    const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
+    const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
+    hallsChessFaceToward(h, Number(target.x ?? h.x), Number(target.y ?? h.y));
+    h.hallsGliding = false;
+    h.hallsDestX = h.x;
+    h.hallsDestY = h.y;
+
+    if (Number(h.hallsKingPawnRainRemaining ?? 0) > 0 && elapsed >= Number(h.hallsKingPawnRainNextAt ?? 0)) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * HEX_SIZE * 0.78;
+      spawnHunter(HALLS_PIECE_IDS.PAWN, cx + Math.cos(a) * r, cy + Math.sin(a) * r, {
+        hallsPieceType: HALLS_PIECE_IDS.PAWN,
+        hallsEventSpawn: true,
+        allowInsideSpecialTile: true,
+        forceExactPosition: true,
+        dieAtOverride: Number(h.hallsKingPawnRainExpireAt ?? (elapsed + HALLS_KING_PAWN_RAIN_LIFE_SEC)),
+      });
+      h.hallsKingPawnRainRemaining = Number(h.hallsKingPawnRainRemaining ?? 0) - 1;
+      h.hallsKingPawnRainNextAt = elapsed + HALLS_KING_PAWN_RAIN_STEP_SEC;
+    }
+
+    if (elapsed < Number(h.hallsKingCastNextAt ?? 0)) return;
+    h.hallsKingCastNextAt = elapsed + HALLS_KING_CAST_INTERVAL_SEC;
+    if (!Array.isArray(h.hallsKingSpellBag) || h.hallsKingSpellBag.length === 0) {
+      h.hallsKingSpellBag = spellIds.slice();
+      for (let i = h.hallsKingSpellBag.length - 1; i > 0; i--) {
+        const j = (Math.random() * (i + 1)) | 0;
+        const tmp = h.hallsKingSpellBag[i];
+        h.hallsKingSpellBag[i] = h.hallsKingSpellBag[j];
+        h.hallsKingSpellBag[j] = tmp;
+      }
+    }
+    const spellId = String(h.hallsKingSpellBag.pop() ?? "rookLine");
+    if (spellId === "rookLine") {
+      h.hallsKingGlowColor = "#93c5fd";
+      h.hallsKingGlowStartAt = elapsed;
+      h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
+      hallsKingCastRookLine(h, elapsed);
+      return;
+    }
+    if (spellId === "bishopLine") {
+      h.hallsKingGlowColor = "#ffffff";
+      h.hallsKingGlowStartAt = elapsed;
+      h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
+      hallsKingCastBishopLine(h, elapsed);
+      return;
+    }
+    if (spellId === "pawnRain") {
+      h.hallsKingGlowColor = "#fb923c";
+      h.hallsKingGlowStartAt = elapsed;
+      h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
+      h.hallsKingPawnRainRemaining = HALLS_KING_PAWN_RAIN_COUNT;
+      h.hallsKingPawnRainNextAt = elapsed;
+      h.hallsKingPawnRainExpireAt = elapsed + HALLS_KING_PAWN_RAIN_LIFE_SEC;
+      return;
+    }
+    if (spellId === "queenSummon") {
+      h.hallsKingGlowColor = "#f9a8d4";
+      h.hallsKingGlowStartAt = elapsed;
+      h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
+      const ang = Math.random() * Math.PI * 2;
+      const spawnR = HEX_SIZE * 1.16;
+      spawnHunter(HALLS_PIECE_IDS.QUEEN, cx + Math.cos(ang) * spawnR, cy + Math.sin(ang) * spawnR, {
+        hallsPieceType: HALLS_PIECE_IDS.QUEEN,
+        hallsEventSpawn: true,
+        allowInsideSpecialTile: true,
+        forceExactPosition: true,
+        dieAtOverride: elapsed + HALLS_KING_QUEEN_SUMMON_LIFE_SEC,
+      });
+    }
+  }
+
   function hallsBishopPlayerHitRadius(h, player) {
     return h.r + (player.r ?? 10) + HALLS_BISHOP_PLAYER_CLEAR_BUFFER;
   }
@@ -2139,6 +2296,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       hallsTickQueenChess(h, elapsed, spDt, target, glide);
       return;
     }
+    if (piece === HALLS_PIECE_IDS.KING) {
+      hallsTickKingChess(h, elapsed, target);
+      return;
+    }
 
     const aimAt = () => hallsChessFaceToward(h, target.x, target.y);
 
@@ -2315,6 +2476,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       if (elapsed < (h.stunnedUntil || 0) && h.type !== "depthsTentacle" && h.type !== "depthsEldritchBarrageBolt")
         continue;
       const spDt = dt * spades13AuraEnemyDtMult();
+
+      if (h.hallsKingLineProjectile) {
+        moveCircleWithCollisions(h, Number(h.hallsScriptedVx ?? 0), Number(h.hallsScriptedVy ?? 0), spDt, {
+          ignoreObstacles: true,
+        });
+        continue;
+      }
 
       if (isHallsChessPieceType(h.type)) {
         hallsTickChessPieceMovement(h, elapsed, spDt, pickTargetForHunter(h));
@@ -3528,7 +3696,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
         continue;
       }
-      const rr = h.r + player.r;
+      const hitR = h.hallsKingLineProjectile ? Math.min(h.r, 14) : h.r;
+      const rr = hitR + player.r;
       if (distSq(h, player) <= rr * rr) {
         damagePlayer(1, {
           sourceX: h.x,
@@ -3539,6 +3708,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
       }
       if (h.type === HALLS_PIECE_IDS.ROOK && elapsed >= Number(h.hallsRookAuraNextAt ?? 0)) {
+        if (h.hallsKingLineProjectile) continue;
         h.hallsRookAuraNextAt = elapsed + HALLS_ROOK_AURA_TICK_SEC;
         const auraR = HALLS_ROOK_AURA_R + player.r;
         if (distSq(h, player) <= auraR * auraR) {

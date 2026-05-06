@@ -30,6 +30,7 @@ import { HALLS_PIECE_IDS } from "../../Hunters/hallsLogic.js";
  * @property {(q: number, r: number) => void} [spawnHallsHealCrystal]
  * @property {(q: number, r: number) => void} [killHuntersOnHex]
  * @property {(lockQ: number, lockR: number) => void} [ejectHuntersFromHallsLockHex]
+ * @property {(q: number, r: number) => void} [promoteHallsEventHexToSafehouse]
  * @property {() => string | null} [getDebugHallsPieceType]
  * @property {() => boolean} [isCardPickupPaused]
  * @property {() => boolean} [allowProceduralHallsEvents]
@@ -51,6 +52,9 @@ export function createEventHexController(deps) {
     HALLS_PIECE_IDS.KING,
   ];
   const HALLS_EVENT_DURATION_SEC = 30;
+  const HALLS_KING_EVENT_DURATION_SEC = 60;
+  const HALLS_KING_SPAWN_DELAY_SEC = 2;
+  const HALLS_KING_END_TRANSITION_SEC = 1.6;
   const cardPaused = deps.isCardPickupPaused ?? (() => false);
   const allowProceduralHallsEvents = deps.allowProceduralHallsEvents ?? (() => true);
 
@@ -85,7 +89,7 @@ export function createEventHexController(deps) {
     isCardPickupPaused: cardPaused,
   });
 
-  /** @type {null | { lockQ: number; lockR: number; pieceType: string; startedAt: number; endsAt: number; spawned: boolean; finished: boolean; source: "tile" | "trigger" }} */
+  /** @type {null | { lockQ: number; lockR: number; pieceType: string; startedAt: number; spawnAt: number; endsAt: number; transitionAt: number; transitionUntil: number; transitioning: boolean; spawned: boolean; finished: boolean; source: "tile" | "trigger" }} */
   let hallsActive = null;
   let hallsEventIndex = 0;
 
@@ -112,12 +116,20 @@ export function createEventHexController(deps) {
     const forced = String(opts.pieceType ?? deps.getDebugHallsPieceType?.() ?? "");
     const forcedPiece = HALLS_EVENT_ORDER.includes(forced) ? forced : null;
     const pieceType = forcedPiece ?? HALLS_EVENT_ORDER[hallsEventIndex % HALLS_EVENT_ORDER.length];
+    const startedAt = deps.getSimElapsed();
+    const isKing = pieceType === HALLS_PIECE_IDS.KING;
+    const durationSec = isKing ? HALLS_KING_EVENT_DURATION_SEC : HALLS_EVENT_DURATION_SEC;
+    const spawnDelaySec = isKing ? HALLS_KING_SPAWN_DELAY_SEC : 0;
     hallsActive = {
       lockQ: q,
       lockR: r,
       pieceType,
-      startedAt: deps.getSimElapsed(),
-      endsAt: deps.getSimElapsed() + HALLS_EVENT_DURATION_SEC,
+      startedAt,
+      spawnAt: startedAt + spawnDelaySec,
+      endsAt: startedAt + durationSec,
+      transitionAt: 0,
+      transitionUntil: 0,
+      transitioning: false,
       spawned: false,
       finished: false,
       source,
@@ -140,6 +152,23 @@ export function createEventHexController(deps) {
     hallsActive = null;
   }
 
+  function startKingEndTransition(player, elapsed) {
+    if (!hallsActive || hallsActive.transitioning) return;
+    const c = deps.hexToWorld(hallsActive.lockQ, hallsActive.lockR);
+    const maxD = hallsMaxCenterDistPx(player.r);
+    const dx = player.x - c.x;
+    const dy = player.y - c.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const ux = d > 0.01 ? dx / d : 1;
+    const uy = d > 0.01 ? dy / d : 0;
+    player.x = c.x + ux * maxD;
+    player.y = c.y + uy * maxD;
+    hallsActive.transitioning = true;
+    hallsActive.transitionAt = elapsed;
+    hallsActive.transitionUntil = elapsed + HALLS_KING_END_TRANSITION_SEC;
+    deps.killHuntersOnHex?.(hallsActive.lockQ, hallsActive.lockR);
+  }
+
   function tickHalls() {
     const elapsed = deps.getSimElapsed();
     const player = deps.getPlayer();
@@ -149,7 +178,7 @@ export function createEventHexController(deps) {
       beginHallsEncounter(ph.q, ph.r);
     }
     if (!hallsActive) return;
-    if (!hallsActive.spawned) {
+    if (!hallsActive.spawned && elapsed >= hallsActive.spawnAt) {
       hallsActive.spawned = true;
       const c = deps.hexToWorld(hallsActive.lockQ, hallsActive.lockR);
       deps.spawnHunter(hallsActive.pieceType, c.x, c.y, {
@@ -163,7 +192,21 @@ export function createEventHexController(deps) {
       });
     }
     clampPlayerToHallsLock(player);
-    if (elapsed >= hallsActive.endsAt) finishHallsEncounter();
+    if (hallsActive.transitioning) {
+      if (elapsed >= hallsActive.transitionUntil) {
+        if (hallsActive.pieceType === HALLS_PIECE_IDS.KING) {
+          deps.promoteHallsEventHexToSafehouse?.(hallsActive.lockQ, hallsActive.lockR);
+          hallsActive = null;
+        } else {
+          finishHallsEncounter();
+        }
+      }
+      return;
+    }
+    if (elapsed >= hallsActive.endsAt) {
+      if (hallsActive.pieceType === HALLS_PIECE_IDS.KING) startKingEndTransition(player, elapsed);
+      else finishHallsEncounter();
+    }
   }
 
   function reset() {
@@ -206,6 +249,12 @@ export function createEventHexController(deps) {
       return {
         lockQ: hallsActive.lockQ,
         lockR: hallsActive.lockR,
+        pieceType: hallsActive.pieceType,
+        startedAt: hallsActive.startedAt,
+        spawnAt: hallsActive.spawnAt,
+        transitioning: hallsActive.transitioning,
+        transitionAt: hallsActive.transitionAt,
+        transitionUntil: hallsActive.transitionUntil,
         endsAt: hallsActive.endsAt,
         simElapsed: deps.getSimElapsed(),
       };

@@ -12,6 +12,10 @@ import {
 
 const POINTY_HEX_PATH_CACHE = new Map();
 
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
 function pointyHexPathAtOrigin(vertexRadius) {
   const key = Math.round(vertexRadius * 100) / 100;
   const hit = POINTY_HEX_PATH_CACHE.get(key);
@@ -722,7 +726,7 @@ export function drawSurgeHexWorld(ctx, activeHexes, hexToWorld, isSurgeTile, isS
 
 /**
  * Halls event lock tile: red boundary + encounter timer.
- * @param {{ lockQ: number; lockR: number; endsAt: number; simElapsed: number } | null} [hallsFx]
+ * @param {{ lockQ: number; lockR: number; pieceType?: string; startedAt?: number; spawnAt?: number; endsAt: number; simElapsed: number } | null} [hallsFx]
  */
 export function drawHallsEventHexWorld(
   ctx,
@@ -746,16 +750,47 @@ export function drawHallsEventHexWorld(
   for (const h of activeHexes) {
     if (h.q !== hallsFx.lockQ || h.r !== hallsFx.lockR) continue;
     const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+    if (hallsFx.pieceType === "hallsKing" && hallsFx.simElapsed < Number(hallsFx.spawnAt ?? 0)) {
+      const spawnAt = Number(hallsFx.spawnAt ?? hallsFx.simElapsed);
+      const startedAt = Number(hallsFx.startedAt ?? spawnAt - 2);
+      const uRaw = (hallsFx.simElapsed - startedAt) / Math.max(0.001, spawnAt - startedAt);
+      const u = Math.max(0, Math.min(1, uRaw));
+      const pulse = 0.5 + 0.5 * Math.sin(hallsFx.simElapsed * 9.5);
+      const ringR = HEX_SIZE * (0.24 + 0.6 * u) + pulse * 5;
+      ctx.save();
+      ctx.strokeStyle = `rgba(251, 191, 36, ${0.5 + 0.4 * pulse})`;
+      ctx.lineWidth = 3.2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, ringR, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(254, 240, 138, 0.9)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(8, ringR * 0.72), 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (hallsFx.pieceType === "hallsKing" && hallsFx.transitioning) {
+      const ta = Number(hallsFx.transitionAt ?? hallsFx.simElapsed);
+      const tu = Number(hallsFx.transitionUntil ?? (ta + 1));
+      const u = clamp((hallsFx.simElapsed - ta) / Math.max(0.001, tu - ta), 0, 1);
+      const morphR = HEX_SIZE * (0.34 + 0.72 * u);
+      drawCircle(ctx, cx, cy, morphR, "#bae6fd", 0.18 + 0.28 * u);
+      drawCircle(ctx, cx, cy, morphR * 0.7, "#22d3ee", 0.12 + 0.2 * u);
+      strokePointyHexOutline(ctx, cx, cy, HEX_SIZE * (0.92 + 0.08 * u), `rgba(125, 211, 252, ${0.38 + 0.34 * u})`, 3.2, 0);
+      strokePointyHexOutline(ctx, cx, cy, HEX_SIZE * 0.84, `rgba(224, 242, 254, ${0.22 + 0.3 * u})`, 1.4, 0);
+    }
     const pulse = 0.9 + 0.1 * (0.5 + 0.5 * Math.sin(hallsFx.simElapsed * 8));
     strokePointyHexOutline(ctx, cx, cy, HEX_SIZE, `rgba(239, 68, 68, ${0.92 * pulse})`, 3.2, 18);
     const rem = Math.max(0, hallsFx.endsAt - hallsFx.simElapsed);
+    const duration = Math.max(1, Number(hallsFx.endsAt) - Number(hallsFx.startedAt ?? (hallsFx.endsAt - 30)));
     const arcR = HEX_SIZE * 0.72;
     ctx.save();
     ctx.strokeStyle = "rgba(254, 242, 242, 0.95)";
     ctx.lineWidth = 4;
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.arc(cx, cy, arcR, -Math.PI / 2, -Math.PI / 2 + TAU * (rem / 30));
+    ctx.arc(cx, cy, arcR, -Math.PI / 2, -Math.PI / 2 + TAU * (rem / duration));
     ctx.stroke();
     ctx.fillStyle = "rgba(254, 242, 242, 0.9)";
     ctx.font = "600 13px system-ui, sans-serif";

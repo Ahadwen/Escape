@@ -1284,7 +1284,7 @@ export function drawHunterBody(ctx, h, opts = {}) {
         ctx.restore();
       }
     }
-    if (h.type === "hallsRook") {
+    if (h.type === "hallsRook" && !h.hallsKingLineProjectile) {
       const pulse = 0.5 + 0.5 * Math.sin(tNow * 7.1 + Number(h.bornAt ?? 0) * 0.3);
       const auraR = r + 92 + pulse * 10;
       const ring1 = auraR;
@@ -1318,6 +1318,29 @@ export function drawHunterBody(ctx, h, opts = {}) {
       ctx.restore();
       ctx.setLineDash([]);
       ctx.lineDashOffset = 0;
+    }
+    if (h.type === "hallsKing" && Number(h.hallsKingGlowUntil ?? 0) > tNow) {
+      const glow = String(h.hallsKingGlowColor || "#93c5fd");
+      const startAt = Number(h.hallsKingGlowStartAt ?? (Number(h.hallsKingGlowUntil) - 4));
+      const life = Math.max(0.001, Number(h.hallsKingGlowUntil) - startAt);
+      const rem = Math.max(0, Number(h.hallsKingGlowUntil) - tNow);
+      const fade = Math.max(0, Math.min(1, rem / life));
+      const pulse = 0.5 + 0.5 * Math.sin(tNow * 8.8);
+      const intensity = fade * fade;
+      drawCircle(ctx, x, y, r + 22 + pulse * 6, glow, (0.26 + 0.16 * pulse) * intensity);
+      drawCircle(ctx, x, y, r + 12 + pulse * 3.4, glow, (0.18 + 0.12 * pulse) * intensity);
+      drawCircle(ctx, x, y, r + 5 + pulse * 1.8, "#ffffff", (0.07 + 0.06 * pulse) * intensity);
+
+      // Lightweight atmospheric particles orbiting/falling off as cast glow decays.
+      const pCount = 10;
+      for (let i = 0; i < pCount; i++) {
+        const a = tNow * (1.2 + i * 0.08) + i * 0.63;
+        const ringR = r + 18 + ((i % 4) * 8) + Math.sin(tNow * 2.4 + i) * 3;
+        const px = x + Math.cos(a) * ringR;
+        const py = y + Math.sin(a * 1.07) * ringR * 0.72;
+        const pr = 1.4 + (i % 3) * 0.45 + pulse * 0.4;
+        drawCircle(ctx, px, py, pr, glow, (0.1 + 0.08 * pulse) * intensity);
+      }
     }
     if (h.hallsHolyGlow) {
       const holyPulse = 0.5 + 0.5 * Math.sin((Number(h.bornAt ?? 0) + x * 0.005 + y * 0.004) * 7.2);
