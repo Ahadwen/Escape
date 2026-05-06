@@ -130,8 +130,8 @@ import {
 } from "./specials/EldritchBlood.js";
 import { createEventHexController } from "./WorldGeneration/eventTiles/eventController.js";
 import { dropJokerRewardFromSpecialEvent } from "./items/jokerEventReward.js";
-import { createHunterRuntime } from "./hunters/hunterRuntime.js";
-import { clamp, pointToSegmentDistance } from "./hunters/hunterGeometry.js";
+import { createHunterRuntime } from "./Hunters/hunterRuntime.js";
+import { clamp, pointToSegmentDistance } from "./Hunters/hunterGeometry.js";
 import creditsRaw from "../assets/creditsContent.js";
 import { tickAttackRings, drawAttackRings, pushAttackRing } from "./fx/attackRings.js";
 import {
