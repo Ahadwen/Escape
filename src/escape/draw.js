@@ -750,6 +750,27 @@ export function drawHallsEventHexWorld(
   for (const h of activeHexes) {
     if (h.q !== hallsFx.lockQ || h.r !== hallsFx.lockR) continue;
     const { x: cx, y: cy } = hexToWorld(h.q, h.r);
+    if (hallsFx.pieceType === "hallsKing") {
+      // King arena: fade into a dark stone floor as the event begins.
+      const startedAt = Number(hallsFx.startedAt ?? hallsFx.simElapsed);
+      const fadeInSec = 1.2;
+      const u = clamp((hallsFx.simElapsed - startedAt) / fadeInSec, 0, 1);
+      const stoneA = 0.2 + 0.55 * u;
+      const stonePath = pointyHexPathAtOrigin(HEX_SIZE * 0.985);
+      ctx.save();
+      ctx.translate(cx, cy);
+      const g = ctx.createRadialGradient(0, -HEX_SIZE * 0.24, HEX_SIZE * 0.08, 0, 0, HEX_SIZE * 1.08);
+      g.addColorStop(0, `rgba(100, 116, 139, ${0.24 * stoneA})`);
+      g.addColorStop(0.42, `rgba(51, 65, 85, ${0.58 * stoneA})`);
+      g.addColorStop(1, `rgba(15, 23, 42, ${0.96 * stoneA})`);
+      ctx.fillStyle = g;
+      ctx.fill(stonePath);
+      // Subtle cool rim sheen so the stone read doesn't look flat.
+      ctx.strokeStyle = `rgba(148, 163, 184, ${0.24 * u})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke(stonePath);
+      ctx.restore();
+    }
     if (hallsFx.pieceType === "hallsKing" && hallsFx.simElapsed < Number(hallsFx.spawnAt ?? 0)) {
       const spawnAt = Number(hallsFx.spawnAt ?? hallsFx.simElapsed);
       const startedAt = Number(hallsFx.startedAt ?? spawnAt - 2);

@@ -6,8 +6,13 @@ import {
 } from "../specials/EldritchBlood.js";
 import depthsEldritchBossUrl from "../../assets/Cthulu.png";
 import depthsEldritchLightningUrl from "../../assets/lightning.png";
-import hallsChessSpritesUrl from "../../assets/Chess.png";
-import { HALLS_COIN_HIT_RADIUS_PX, getHallsChessAtlasSrcRect } from "./hallsLogic.js";
+import hallsKingUrl from "../../assets/king.png";
+import hallsQueenUrl from "../../assets/queen.png";
+import hallsRookUrl from "../../assets/rook.png";
+import hallsBishopUrl from "../../assets/bishop.png";
+import hallsKnightUrl from "../../assets/knight.png";
+import hallsPawnUrl from "../../assets/pawn.png";
+import { HALLS_COIN_HIT_RADIUS_PX } from "./hallsLogic.js";
 
 /** Preloaded boss PNG (2D canvas). */
 const depthsEldritchBossImg = new Image();
@@ -16,11 +21,23 @@ depthsEldritchBossImg.src = depthsEldritchBossUrl;
 const depthsEldritchLightningImg = new Image();
 depthsEldritchLightningImg.src = depthsEldritchLightningUrl;
 
-/** Halls chess sheet: row0 king,queen,rook — row1 bishop,knight,pawn (3×2). */
-const hallsChessSpritesImg = new Image();
-hallsChessSpritesImg.src = hallsChessSpritesUrl;
+/** Halls chess piece PNGs (direct image per piece). */
+const hallsPieceImgByType = {
+  hallsKing: new Image(),
+  hallsQueen: new Image(),
+  hallsRook: new Image(),
+  hallsBishop: new Image(),
+  hallsKnight: new Image(),
+  hallsPawn: new Image(),
+};
+hallsPieceImgByType.hallsKing.src = hallsKingUrl;
+hallsPieceImgByType.hallsQueen.src = hallsQueenUrl;
+hallsPieceImgByType.hallsRook.src = hallsRookUrl;
+hallsPieceImgByType.hallsBishop.src = hallsBishopUrl;
+hallsPieceImgByType.hallsKnight.src = hallsKnightUrl;
+hallsPieceImgByType.hallsPawn.src = hallsPawnUrl;
 
-/** Halls chess enemies: sprite from `Chess.png` when loaded; else procedural coin. */
+/** Halls chess enemies: direct piece PNG when loaded; else procedural coin. */
 const HALLS_COIN_RADIUS_PX = HALLS_COIN_HIT_RADIUS_PX;
 const HALLS_COIN_PIECE_TYPES = new Set([
   "hallsPawn",
@@ -167,9 +184,8 @@ function drawHallsChessCoin(ctx, h, opts) {
   const alpha = clamp(Number(h.opacity ?? 1), 0, 1);
   const t = Number.isFinite(Number(opts.simElapsed)) ? Number(opts.simElapsed) : 0;
   const R = HALLS_COIN_RADIUS_PX;
-  const img = hallsChessSpritesImg;
-  const src = getHallsChessAtlasSrcRect(pieceType, img.naturalWidth, img.naturalHeight);
-  const useSprite = img.complete && img.naturalWidth > 0 && src != null;
+  const img = hallsPieceImgByType[pieceType];
+  const useSprite = !!img && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
 
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -181,16 +197,17 @@ function drawHallsChessCoin(ctx, h, opts) {
   ctx.fillStyle = "rgba(12, 8, 4, 0.28)";
   ctx.fill();
 
-  if (useSprite && src) {
-    const { sx, sy, sw, sh } = src;
+  if (useSprite) {
     ctx.save();
     ctx.beginPath();
     ctx.arc(0, 0, R, 0, TAU);
     ctx.clip();
+    const sw = img.naturalWidth;
+    const sh = img.naturalHeight;
     const cover = Math.max((2 * R) / sw, (2 * R) / sh);
     const dw = sw * cover;
     const dh = sh * cover;
-    ctx.drawImage(img, sx, sy, sw, sh, -dw * 0.5, -dh * 0.5, dw, dh);
+    ctx.drawImage(img, 0, 0, sw, sh, -dw * 0.5, -dh * 0.5, dw, dh);
     ctx.restore();
 
     ctx.beginPath();
@@ -1325,21 +1342,90 @@ export function drawHunterBody(ctx, h, opts = {}) {
       const life = Math.max(0.001, Number(h.hallsKingGlowUntil) - startAt);
       const rem = Math.max(0, Number(h.hallsKingGlowUntil) - tNow);
       const fade = Math.max(0, Math.min(1, rem / life));
-      const pulse = 0.5 + 0.5 * Math.sin(tNow * 8.8);
-      const intensity = fade * fade;
-      drawCircle(ctx, x, y, r + 22 + pulse * 6, glow, (0.26 + 0.16 * pulse) * intensity);
-      drawCircle(ctx, x, y, r + 12 + pulse * 3.4, glow, (0.18 + 0.12 * pulse) * intensity);
-      drawCircle(ctx, x, y, r + 5 + pulse * 1.8, "#ffffff", (0.07 + 0.06 * pulse) * intensity);
+      const castPhase = 1 - fade;
+      const pulseFast = 0.5 + 0.5 * Math.sin(tNow * 11.4);
+      const pulseSlow = 0.5 + 0.5 * Math.sin(tNow * 4.3 + 0.8);
+      const burst = Math.max(0, 1 - castPhase / 0.2);
+      const intensity = Math.max(0, fade * fade * (1.1 + pulseFast * 0.35));
+      const arenaCx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : x;
+      const arenaCy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : y;
 
-      // Lightweight atmospheric particles orbiting/falling off as cast glow decays.
-      const pCount = 10;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+
+      // Large floor bloom + outer haze so the cast reads from far away.
+      const floorAuraR = r + 62 + pulseSlow * 16 + burst * 24;
+      const gFloor = ctx.createRadialGradient(x, y, r * 0.2, x, y, floorAuraR);
+      gFloor.addColorStop(0, `${glow}00`);
+      gFloor.addColorStop(0.18, `${glow}6a`);
+      gFloor.addColorStop(0.55, `${glow}28`);
+      gFloor.addColorStop(1, "rgba(15,23,42,0)");
+      ctx.fillStyle = gFloor;
+      ctx.beginPath();
+      ctx.arc(x, y, floorAuraR, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+
+      // Arena-center tint pulse (base wash + edge ring) so the floor read is unmistakable.
+      const tileTintR = r * 6.9 + pulseSlow * 34 + burst * 28;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      drawCircle(ctx, arenaCx, arenaCy, tileTintR, glow, (0.22 + 0.08 * pulseFast) * intensity);
+      drawCircle(ctx, arenaCx, arenaCy, tileTintR * 0.78, "#ffffff", (0.06 + 0.04 * pulseSlow) * intensity);
+      ctx.strokeStyle = `rgba(248, 250, 252, ${(0.16 + 0.12 * pulseFast) * intensity})`;
+      ctx.lineWidth = 2.8;
+      ctx.beginPath();
+      ctx.arc(arenaCx, arenaCy, tileTintR * (0.9 + 0.04 * pulseSlow), 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+
+      drawCircle(ctx, x, y, r + 44 + pulseSlow * 8 + burst * 7, glow, (0.44 + 0.2 * pulseFast) * intensity);
+      drawCircle(ctx, x, y, r + 26 + pulseFast * 6, glow, (0.3 + 0.14 * pulseSlow) * intensity);
+      drawCircle(ctx, x, y, r + 12 + pulseFast * 2.4, "#ffffff", (0.24 + 0.12 * pulseFast) * intensity);
+
+      // Rotating runic rings + crown spikes.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = `rgba(241, 245, 249, ${0.34 * intensity + 0.2 * pulseFast * intensity})`;
+      ctx.lineWidth = 1.9;
+      ctx.setLineDash([13, 8]);
+      ctx.lineDashOffset = -tNow * 74;
+      ctx.beginPath();
+      ctx.arc(x, y, r + 44 + pulseFast * 3.2, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([4, 10]);
+      ctx.lineDashOffset = tNow * 61;
+      ctx.strokeStyle = `rgba(191, 219, 254, ${0.3 * intensity + 0.14 * pulseSlow * intensity})`;
+      ctx.beginPath();
+      ctx.arc(x, y, r + 57 + pulseSlow * 4.2, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+
+      const spokeCount = 10;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = `rgba(255,255,255,${0.2 * intensity + 0.22 * burst})`;
+      ctx.lineWidth = 2.3;
+      for (let i = 0; i < spokeCount; i++) {
+        const a = (i / spokeCount) * TAU + tNow * 0.9;
+        const inner = r + 36 + pulseSlow * 5;
+        const outer = inner + 22 + burst * 20 + (i % 2 ? 6 : 0);
+        ctx.beginPath();
+        ctx.moveTo(x + Math.cos(a) * inner, y + Math.sin(a) * inner);
+        ctx.lineTo(x + Math.cos(a) * outer, y + Math.sin(a) * outer);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Denser embers for motion and readability.
+      const pCount = 24;
       for (let i = 0; i < pCount; i++) {
-        const a = tNow * (1.2 + i * 0.08) + i * 0.63;
-        const ringR = r + 18 + ((i % 4) * 8) + Math.sin(tNow * 2.4 + i) * 3;
+        const a = tNow * (1.5 + i * 0.03) + i * 0.54;
+        const ringR = r + 26 + ((i % 6) * 8) + Math.sin(tNow * 2.7 + i * 0.41) * 5;
         const px = x + Math.cos(a) * ringR;
-        const py = y + Math.sin(a * 1.07) * ringR * 0.72;
-        const pr = 1.4 + (i % 3) * 0.45 + pulse * 0.4;
-        drawCircle(ctx, px, py, pr, glow, (0.1 + 0.08 * pulse) * intensity);
+        const py = y + Math.sin(a * 1.12) * ringR * 0.8;
+        const pr = 1.3 + (i % 4) * 0.5 + pulseFast * 0.35;
+        drawCircle(ctx, px, py, pr, glow, (0.14 + 0.1 * pulseFast + 0.12 * burst) * intensity);
       }
     }
     if (h.hallsHolyGlow) {

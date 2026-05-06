@@ -5980,6 +5980,9 @@ function boot() {
       while (ultimateBurstWaves.length && simElapsed >= ultimateBurstWaves[0].at) {
         const wave = ultimateBurstWaves.shift();
         if (!wave || !hunterRuntime) continue;
+        const disableBurstPushbackDuringKingArena = hunterRuntime.entities.hunters.some(
+          (h) => h?.type === "hallsKing" && !!h?.hallsEventSpawn,
+        );
         for (const h of hunterRuntime.entities.hunters) {
           const dx = h.x - player.x;
           const dy = h.y - player.y;
@@ -5989,6 +5992,7 @@ function boot() {
           const ux = dx / len;
           const uy = dy / len;
           if (
+            !disableBurstPushbackDuringKingArena &&
             h.type !== "spawner" &&
             h.type !== "airSpawner" &&
             h.type !== "cryptSpawner" &&
@@ -6039,6 +6043,9 @@ function boot() {
         shield.y = player.y + Math.sin(shield.angle) * shield.radius;
       }
       if (hunterRuntime?.entities) {
+        const disableShieldPushbackDuringKingArena = hunterRuntime.entities.hunters.some(
+          (h) => h?.type === "hallsKing" && !!h?.hallsEventSpawn,
+        );
         for (const shield of ultimateShields) {
           for (const h of hunterRuntime.entities.hunters) {
             if (h.type === "spawner" || h.type === "airSpawner" || h.type === "cryptSpawner") continue;
@@ -6046,6 +6053,7 @@ function boot() {
             const dx = h.x - shield.x;
             const dy = h.y - shield.y;
             if (dx * dx + dy * dy > rr * rr) continue;
+            if (disableShieldPushbackDuringKingArena) continue;
             // Deflect from player center outward (REFERENCE shield behavior).
             const awayLen = Math.hypot(h.x - player.x, h.y - player.y) || 1;
             const awayX = (h.x - player.x) / awayLen;

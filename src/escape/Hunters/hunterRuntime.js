@@ -243,7 +243,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_QUEEN_ARC_BOLT_R = 9;
   const HALLS_ROOK_AURA_R = 142;
   const HALLS_ROOK_AURA_TICK_SEC = 0.26;
-  const HALLS_KING_CAST_INTERVAL_SEC = 4;
+  const HALLS_KING_CAST_INTERVAL_PHASE1_SEC = 4;
+  const HALLS_KING_CAST_INTERVAL_PHASE2_SEC = 3;
+  const HALLS_KING_CAST_INTERVAL_PHASE3_SEC = 2;
+  const HALLS_KING_CAST_PHASE2_AT_SEC = 20;
+  const HALLS_KING_CAST_PHASE3_AT_SEC = 40;
   const HALLS_KING_GLOW_FALLOFF_SEC = 4;
   const HALLS_KING_ROOK_LINE_COUNT = 6;
   const HALLS_KING_ROOK_LINE_SPAN = HEX_SIZE * 1.7;
@@ -955,7 +959,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsQueenWasInside = false;
       }
       if (type === HALLS_PIECE_IDS.KING) {
-        h.hallsKingCastNextAt = elapsed + HALLS_KING_CAST_INTERVAL_SEC;
+        h.hallsKingCastNextAt = elapsed + HALLS_KING_CAST_INTERVAL_PHASE1_SEC;
         h.hallsKingGlowColor = "";
         h.hallsKingGlowStartAt = 0;
         h.hallsKingGlowUntil = 0;
@@ -963,6 +967,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsKingPawnRainNextAt = 0;
         h.hallsKingPawnRainExpireAt = 0;
         h.hallsKingSpellBag = [];
+        h.hallsKingCastsSinceQueen = 0;
+        h.hallsKingLastSpellId = "";
       }
     }
     if (opts?.hallsKingLineProjectile) {
@@ -1856,9 +1862,19 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function hallsTickKingChess(h, elapsed, target) {
-    const spellIds = ["rookLine", "bishopLine", "pawnRain", "queenSummon"];
     const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
     const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
+    const aliveSec = Math.max(0, elapsed - Number(h.bornAt ?? elapsed));
+    const phase2 = aliveSec >= HALLS_KING_CAST_PHASE2_AT_SEC;
+    const phase3 = aliveSec >= HALLS_KING_CAST_PHASE3_AT_SEC;
+    const castInterval = phase3
+      ? HALLS_KING_CAST_INTERVAL_PHASE3_SEC
+      : phase2
+        ? HALLS_KING_CAST_INTERVAL_PHASE2_SEC
+        : HALLS_KING_CAST_INTERVAL_PHASE1_SEC;
+    const spellIds = phase3
+      ? ["rookLine", "bishopLine", "queenSummon"]
+      : ["rookLine", "bishopLine", "pawnRain", "queenSummon"];
     hallsChessFaceToward(h, Number(target.x ?? h.x), Number(target.y ?? h.y));
     h.hallsGliding = false;
     h.hallsDestX = h.x;
@@ -1879,7 +1895,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
 
     if (elapsed < Number(h.hallsKingCastNextAt ?? 0)) return;
-    h.hallsKingCastNextAt = elapsed + HALLS_KING_CAST_INTERVAL_SEC;
+    h.hallsKingCastNextAt = elapsed + castInterval;
+    if (Array.isArray(h.hallsKingSpellBag) && h.hallsKingSpellBag.length) {
+      h.hallsKingSpellBag = h.hallsKingSpellBag.filter((id) => spellIds.includes(String(id)));
+    }
     if (!Array.isArray(h.hallsKingSpellBag) || h.hallsKingSpellBag.length === 0) {
       h.hallsKingSpellBag = spellIds.slice();
       for (let i = h.hallsKingSpellBag.length - 1; i > 0; i--) {
@@ -1889,12 +1908,27 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsKingSpellBag[j] = tmp;
       }
     }
-    const spellId = String(h.hallsKingSpellBag.pop() ?? "rookLine");
+    const forceQueen = Number(h.hallsKingCastsSinceQueen ?? 0) >= 2;
+    let spellId = forceQueen ? "queenSummon" : String(h.hallsKingSpellBag.pop() ?? "rookLine");
+    if (phase3 && spellId === "pawnRain") spellId = "rookLine";
+    const lastSpellId = String(h.hallsKingLastSpellId ?? "");
+    if (!forceQueen && spellId === lastSpellId) {
+      const bag = Array.isArray(h.hallsKingSpellBag) ? h.hallsKingSpellBag : [];
+      const altIdx = bag.findIndex((id) => String(id) !== lastSpellId);
+      if (altIdx >= 0) {
+        spellId = String(bag.splice(altIdx, 1)[0]);
+      } else {
+        const fallback = spellIds.find((id) => id !== lastSpellId);
+        if (fallback) spellId = fallback;
+      }
+    }
     if (spellId === "rookLine") {
       h.hallsKingGlowColor = "#93c5fd";
       h.hallsKingGlowStartAt = elapsed;
       h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
       hallsKingCastRookLine(h, elapsed);
+      h.hallsKingCastsSinceQueen = Number(h.hallsKingCastsSinceQueen ?? 0) + 1;
+      h.hallsKingLastSpellId = spellId;
       return;
     }
     if (spellId === "bishopLine") {
@@ -1902,6 +1936,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsKingGlowStartAt = elapsed;
       h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
       hallsKingCastBishopLine(h, elapsed);
+      h.hallsKingCastsSinceQueen = Number(h.hallsKingCastsSinceQueen ?? 0) + 1;
+      h.hallsKingLastSpellId = spellId;
       return;
     }
     if (spellId === "pawnRain") {
@@ -1911,6 +1947,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsKingPawnRainRemaining = HALLS_KING_PAWN_RAIN_COUNT;
       h.hallsKingPawnRainNextAt = elapsed;
       h.hallsKingPawnRainExpireAt = elapsed + HALLS_KING_PAWN_RAIN_LIFE_SEC;
+      h.hallsKingCastsSinceQueen = Number(h.hallsKingCastsSinceQueen ?? 0) + 1;
+      h.hallsKingLastSpellId = spellId;
       return;
     }
     if (spellId === "queenSummon") {
@@ -1922,10 +1960,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       spawnHunter(HALLS_PIECE_IDS.QUEEN, cx + Math.cos(ang) * spawnR, cy + Math.sin(ang) * spawnR, {
         hallsPieceType: HALLS_PIECE_IDS.QUEEN,
         hallsEventSpawn: true,
+        hallsLockCenterX: cx,
+        hallsLockCenterY: cy,
         allowInsideSpecialTile: true,
         forceExactPosition: true,
         dieAtOverride: elapsed + HALLS_KING_QUEEN_SUMMON_LIFE_SEC,
       });
+      h.hallsKingCastsSinceQueen = 0;
+      h.hallsKingLastSpellId = spellId;
     }
   }
 
@@ -3608,11 +3650,16 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     });
   }
 
+  function hallsKingArenaActive() {
+    return entities.hunters.some((h) => h?.type === HALLS_PIECE_IDS.KING && !!h?.hallsEventSpawn);
+  }
+
   /** REFERENCE hearts J/Q/K front arc shield: repel nearby hostiles and clear projectiles in facing cone. */
   function applyFrontShieldArc() {
     const player = getPlayer();
     const arcDeg = Math.max(0, Number(player.frontShieldArcDeg ?? 0));
     if (arcDeg <= 0) return;
+    const disablePushback = hallsKingArenaActive();
 
     const facingAngle = Math.atan2(player.facing?.y ?? 0, player.facing?.x ?? 1);
     const halfArc = (arcDeg * Math.PI) / 360;
@@ -3631,14 +3678,16 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       while (delta < -Math.PI) delta += Math.PI * 2;
       if (Math.abs(delta) > halfArc) continue;
 
-      const away = vectorToTarget(player, h);
-      const test = { x: h.x + away.x * 34, y: h.y + away.y * 34, r: h.r };
-      if (!outOfBoundsCircle(test) && !collidesAnyObstacle(test)) {
-        h.x = test.x;
-        h.y = test.y;
+      if (!disablePushback) {
+        const away = vectorToTarget(player, h);
+        const test = { x: h.x + away.x * 34, y: h.y + away.y * 34, r: h.r };
+        if (!outOfBoundsCircle(test) && !collidesAnyObstacle(test)) {
+          h.x = test.x;
+          h.y = test.y;
+        }
+        h.dir.x = away.x;
+        h.dir.y = away.y;
       }
-      h.dir.x = away.x;
-      h.dir.y = away.y;
     }
 
     for (let i = entities.projectiles.length - 1; i >= 0; i--) {
