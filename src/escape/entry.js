@@ -13,6 +13,7 @@ import {
   SWAMP_BOOTLEG_CRYSTAL_HP,
   HALLS_MARBLE_CRYSTAL_TEMP_HP,
   HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT,
+  HALLS_BOSS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT,
   ROULETTE_OUTER_PENALTY_HP,
   FORGE_OUTER_PENALTY_HP,
   SURGE_TILE_FLASH_SEC,
@@ -302,10 +303,12 @@ const DEPTHS_WHIRLPOOL_TOOTH_VISUAL_SCALE = 0.75;
 /** Depths sniper linger pool: strip ability-based move speed (burst / ult / Lunatic sprint leg) for this long after contact. */
 const DEPTHS_SNIPER_POOL_SUPPRESS_ABILITY_SPEED_SEC = 1;
 
-/** Fifth sanctuary tier — UI display level = `runLevel + 1` (no new map card drops; heal crystals unchanged). */
+/** Fifth sanctuary tier — UI display level = `runLevel + 1` (no new map card drops; Depths boss chase; Halls boss race baseline). */
 const DISPLAY_LEVEL_FIVE_RUN_LEVEL = 4;
 /** Depths display level 5 — boss chase (`runLevel` after four sanctuary ups). */
 const DEPTHS_BOSS_CHASE_RUN_LEVEL = DISPLAY_LEVEL_FIVE_RUN_LEVEL;
+/** Halls display level 5 — boss race-to-exit floor (`runLevel` after four sanctuary ups). */
+const HALLS_BOSS_PATHWAY_RUN_LEVEL = DISPLAY_LEVEL_FIVE_RUN_LEVEL;
 /** Display depth 4 (`runLevel === 3`) — storm whirlpool roll + mid-wash tentacle burst **only** here (not L1–3 or boss L5). */
 const DEPTHS_WHIRLPOOL_RUN_LEVEL = 3;
 /** Rising flood: slightly faster than base walk so walking alone cannot outrun it. */
@@ -521,6 +524,11 @@ function boot() {
   /** Before tile cache: URL `path` / `level` must be active so halls → empty hex terrain, etc. */
   applyUrlRunOverrides();
 
+  /** Halls pathway display level 5 — race baseline (terrain, no chess triggers / procedural halls event hex). */
+  function isHallsBossPathwayLevel() {
+    return pathRuntime.getCurrentPathId() === "halls" && runLevel === HALLS_BOSS_PATHWAY_RUN_LEVEL;
+  }
+
   mountCharacterRoster(document);
   const debugAllowed = isLocalDebugHost(window);
   let devPanelEl = document.getElementById("special-test-west-panel");
@@ -615,7 +623,8 @@ function boot() {
     getRunLevel: () => runLevel,
     getActivePathId: () => pathRuntime.getCurrentPathId(),
     getShouldSuppressProceduralEventHexSpawns: () =>
-      pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL,
+      (pathRuntime.getCurrentPathId() === "depths" && runLevel === DEPTHS_BOSS_CHASE_RUN_LEVEL) ||
+      isHallsBossPathwayLevel(),
   }), "specials", runLogger);
   const safehouseHexFlow = instrumentObjectMethods(createSafehouseHexFlow(), "safehouse", runLogger);
   specials.setOnProceduralSafehousePlaced(() => safehouseHexFlow.onProceduralSafehousePlaced());
@@ -640,7 +649,8 @@ function boot() {
     generateHexTileObstacles,
     tileConfig,
     tryProceduralRareSpecialHex: (q, r) => specials.tryProceduralRareSpecialHex(q, r),
-    isSpecialTile: (q, r) => pathRuntime.getCurrentPathId() === "halls" || specials.isSpecialTile(q, r),
+    isSpecialTile: (q, r) =>
+      (pathRuntime.getCurrentPathId() === "halls" && !isHallsBossPathwayLevel()) || specials.isSpecialTile(q, r),
     onTileEvicted: (key) => {
       safehouseHexFlow.onTileCacheEvicted(key, specials);
       specials.onTileEvicted(key);
@@ -3443,15 +3453,17 @@ function boot() {
   }
 
   function tickFireGrowthZones(dt) {
-    const firePathActive = pathRuntime.getCurrentPathId() === "fire";
-    // L2+: keep/tick artillery mini-zones so players learn the hazard language early.
-    // L3+: additionally enable ambient fire-zone spawning.
-    if (!firePathActive || runLevel < 1) {
+    const pathId = pathRuntime.getCurrentPathId();
+    const firePathActive = pathId === "fire";
+    const hallsGrowthFromArtillery = pathId === "halls";
+    /** Fire: full system. Halls: artillery mini-zones only (no ambient `maybeSpawnFireGrowthZone`). */
+    const allowFireGrowthZones = (firePathActive || hallsGrowthFromArtillery) && runLevel >= 1;
+    if (!allowFireGrowthZones) {
       if (fireGrowthZones.length) resetFireGrowthZones();
       return;
     }
     pruneFireGrowthZonesToActiveHexes();
-    if (runLevel >= 2) maybeSpawnFireGrowthZone(dt);
+    if (runLevel >= 2 && firePathActive) maybeSpawnFireGrowthZone(dt);
 
     for (const zone of fireGrowthZones) {
       // Match gameplay damage footprint to the visible fire body/ring.
@@ -3916,6 +3928,23 @@ function boot() {
             resetDepthsBossRisingWaveChase();
             resetDepthsWhirlpoolForRun();
           }
+          if (isHallsBossPathwayLevel()) {
+            for (let i = collectibles.length - 1; i >= 0; i--) {
+              if (collectibles[i].kind === "chessTrigger") collectibles.splice(i, 1);
+            }
+            hallsChessTriggerSpentTiles.clear();
+            tiles.clearCache();
+            obstacles = [];
+            activeHexes = [];
+            lastPlayerHexKey = "";
+            ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+              player,
+              obstacles,
+              activePlayerHex,
+              activeHexes,
+              lastPlayerHexKey,
+            }));
+          }
         },
         onSpawnAnchorResetToDifficultyClock: (eff) => {
           hunterRuntime?.softResetSpawnPacingAfterSafehouseLevel(eff);
@@ -4263,7 +4292,7 @@ function boot() {
     },
     spawnHunter: (type, x, y, opts) => hunterRuntime.spawnHunter(type, x, y, opts),
     getDebugHallsPieceType: () => debugHallsPieceType,
-    allowProceduralHallsEvents: () => !USE_HALLS_CHESS_TRIGGERS,
+    allowProceduralHallsEvents: () => !USE_HALLS_CHESS_TRIGGERS && !isHallsBossPathwayLevel(),
     isHallsEventHexInteractive: (q, r) => specials.isHallsEventHexInteractive(q, r),
     markProceduralHallsEventHexSpent: (q, r) => specials.markProceduralHallsEventHexSpent(q, r),
     promoteHallsEventHexToSafehouse: (q, r) => specials.promoteHallsEventHexToSafehouse(q, r),
@@ -4689,6 +4718,22 @@ function boot() {
     resetDepthsBossRisingWaveChase();
     resetSwampInfection();
     if (prevPathId !== pathRuntime.getCurrentPathId()) {
+      tiles.clearCache();
+      obstacles = [];
+      activeHexes = [];
+      lastPlayerHexKey = "";
+      ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+        player,
+        obstacles,
+        activePlayerHex,
+        activeHexes,
+        lastPlayerHexKey,
+      }));
+    } else if (isHallsBossPathwayLevel()) {
+      for (let i = collectibles.length - 1; i >= 0; i--) {
+        if (collectibles[i].kind === "chessTrigger") collectibles.splice(i, 1);
+      }
+      hallsChessTriggerSpentTiles.clear();
       tiles.clearCache();
       obstacles = [];
       activeHexes = [];
@@ -5280,6 +5325,7 @@ function boot() {
       pathRuntime.applyDebuffHooks({ dt, simElapsed, runLevel, player, inventory, activeCharacterId });
       const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
       const firePathActive = pathRuntime.getCurrentPathId() === "fire";
+      const hallsPathForIgnite = pathRuntime.getCurrentPathId() === "halls";
       const bonePathActive = pathRuntime.getCurrentPathId() === "bone";
       if (swampDamageInstanceSeenAt.size > 0) {
         const cutoff = simElapsed - 20;
@@ -5290,7 +5336,7 @@ function boot() {
       if (!swampPathActive && (inventory.swampInfectionStacks ?? 0) > 0) {
         resetSwampInfection();
       }
-      if (!firePathActive) {
+      if (!firePathActive && !hallsPathForIgnite) {
         fireIgniteUntil = 0;
         fireIgniteNextTickAt = 0;
         fireIgniteTickStep = 1;
@@ -5830,30 +5876,40 @@ function boot() {
 
       if (simElapsed >= nextHealSpawnAt) {
         const onHalls = pathRuntime.getCurrentPathId() === "halls";
-        if (!runDead && !runVictory) {
-          if (!onHalls && collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS) {
-            const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
-            if (pt) {
-              const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
-              collectibles.push({
-                kind: "heal",
-                x: pt.x,
-                y: pt.y,
-                r: HEAL_PICKUP_HIT_R,
-                plusHalf: HEAL_PICKUP_PLUS_HALF,
-                plusThick: HEAL_PICKUP_ARM_THICK,
-                heal: onSwamp ? SWAMP_BOOTLEG_CRYSTAL_HP : HEAL_CRYSTAL_HP,
-                bootlegSwamp: onSwamp,
-                hallsMarbleCrystal: onHalls && !onSwamp,
-                bornAt: simElapsed,
-                expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
-              });
-            }
+        const hallsBossHealSpawns = isHallsBossPathwayLevel();
+        if (
+          !runDead &&
+          !runVictory &&
+          (!onHalls || hallsBossHealSpawns) &&
+          collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS
+        ) {
+          const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
+          if (pt) {
+            const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
+            collectibles.push({
+              kind: "heal",
+              x: pt.x,
+              y: pt.y,
+              r: HEAL_PICKUP_HIT_R,
+              plusHalf: HEAL_PICKUP_PLUS_HALF,
+              plusThick: HEAL_PICKUP_ARM_THICK,
+              heal: onSwamp ? SWAMP_BOOTLEG_CRYSTAL_HP : HEAL_CRYSTAL_HP,
+              bootlegSwamp: onSwamp,
+              hallsMarbleCrystal: onHalls && !onSwamp,
+              bornAt: simElapsed,
+              expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
+            });
           }
         }
         const onHallsHeal = pathRuntime.getCurrentPathId() === "halls";
         const healSpawnMult =
-          pathRuntime.getCurrentPathId() === "swamp" ? 1 : onHallsHeal ? HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT : 1;
+          pathRuntime.getCurrentPathId() === "swamp"
+            ? 1
+            : onHallsHeal && isHallsBossPathwayLevel()
+              ? HALLS_BOSS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT
+              : onHallsHeal
+                ? HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT
+                : 1;
         nextHealSpawnAt = simElapsed + (PICKUP_SPAWN_INTERVAL * healSpawnMult + randRange(-0.45, 0.85));
       }
 
@@ -5888,7 +5944,7 @@ function boot() {
         nextCardSpawnAt = simElapsed + (CARD_SPAWN_INTERVAL + randRange(-1.6, 3.4));
       }
 
-      if (USE_HALLS_CHESS_TRIGGERS && simElapsed >= nextChessTriggerSpawnAt) {
+      if (USE_HALLS_CHESS_TRIGGERS && !isHallsBossPathwayLevel() && simElapsed >= nextChessTriggerSpawnAt) {
         const onHalls = pathRuntime.getCurrentPathId() === "halls";
         if (!runDead && !runVictory && onHalls && !hexEventRuntime?.isHallsEncounterActive?.()) {
           const ph = worldToHex(player.x, player.y);
@@ -6181,7 +6237,10 @@ function boot() {
         if (pathRuntime.getCurrentPathId() === "swamp") {
           tickSwampHunterMudTrails(dt);
         }
-        if (pathRuntime.getCurrentPathId() === "fire" && runLevel >= 1) {
+        if (
+          (pathRuntime.getCurrentPathId() === "fire" || pathRuntime.getCurrentPathId() === "halls") &&
+          runLevel >= 1
+        ) {
           spawnFireGrowthZonesFromFireArtillery();
         }
       }
@@ -6391,7 +6450,7 @@ function boot() {
     if (depthsPathActive) drawDepthsWhirlpoolWorld(ctx);
     if (hallsPathActive) drawHallsAtmosphereWorld(ctx, viewW, viewH);
     if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
-    if (firePathActive && runLevel >= 1) drawFireGrowthZones(ctx);
+    if ((firePathActive || hallsPathActive) && runLevel >= 1) drawFireGrowthZones(ctx);
     if (activeCharacterId === "bulwark" && typeof character.getBulwarkWorld === "function") {
       const lock = character.getBulwarkWorld().getDeathLock();
       if (lock) {
@@ -6464,8 +6523,8 @@ function boot() {
       activeHexes,
       hexToWorld,
       hexEventRuntime?.getHallsDrawState?.() ?? null,
-      USE_HALLS_CHESS_TRIGGERS ? () => false : (q, r) => specials.isHallsEventHexTile(q, r),
-      USE_HALLS_CHESS_TRIGGERS ? () => false : (q, r) => specials.isHallsEventSpent(q, r),
+      USE_HALLS_CHESS_TRIGGERS || isHallsBossPathwayLevel() ? () => false : (q, r) => specials.isHallsEventHexTile(q, r),
+      USE_HALLS_CHESS_TRIGGERS || isHallsBossPathwayLevel() ? () => false : (q, r) => specials.isHallsEventSpent(q, r),
     );
     if (depthsPathActive && isDepthsBossFightLevel()) {
       if (!depthsVictoryAscentActive && !runVictory) {
@@ -6727,7 +6786,7 @@ function boot() {
       ctx.arc(iconX, iconY, ringR, -Math.PI / 2 + Math.PI * 2 * t, -Math.PI / 2 + Math.PI * 2);
       ctx.stroke();
     }
-    if (firePathActive && fireIgniteUntil > simElapsed) {
+    if ((firePathActive || hallsPathActive) && fireIgniteUntil > simElapsed) {
       const pulse = 0.62 + 0.38 * (0.5 + 0.5 * Math.sin(simElapsed * 12));
       ctx.fillStyle = `rgba(220, 38, 38, ${0.18 + pulse * 0.1})`;
       ctx.beginPath();

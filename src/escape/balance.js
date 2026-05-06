@@ -39,6 +39,13 @@ export const SWAMP_BOOTLEG_CRYSTAL_HP = 2;
 export const HALLS_MARBLE_CRYSTAL_TEMP_HP = 3;
 /** Halls marble crystal spawn cadence vs `PICKUP_SPAWN_INTERVAL` (2 ⇒ half the spawn rate of a normal crystal). */
 export const HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT = 2;
+/**
+ * Halls boss pathway (display level 5, `runLevel === 4`): marble heal spawn interval vs `PICKUP_SPAWN_INTERVAL`
+ * (3 ⇒ one-third the spawn rate of a normal crystal).
+ */
+export const HALLS_BOSS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT = 3;
+/** Fifth sanctuary / boss tier: `runLevel` 4 (display level 5; Halls race, Depths chase). */
+export const LATE_PATH_BOSS_FLOOR_RUN_LEVEL = 4;
 /** Halls display levels 4–5 (`runLevel` 3–4): disable floating map card pickups. */
 export const HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MIN = 3;
 export const HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MAX = 4;

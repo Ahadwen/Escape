@@ -27,6 +27,7 @@ import {
   BULWARK_CHARGE_TERRAIN_GROUP_STUN_SEC,
   FROG_MUD_POOL_MOVE_MULT,
   SWAMP_L3PLUS_SNIPER_WAVE_KEEP_FRACTION,
+  LATE_PATH_BOSS_FLOOR_RUN_LEVEL,
 } from "../balance.js";
 import { SNIPER_ARTILLERY_WINDUP, SNIPER_ARTILLERY_LEAD, SNIPER_ARTILLERY_BANG_DURATION } from "../constants.js";
 import {
@@ -56,9 +57,6 @@ import {
   FROG_SPLASH_GROW_SEC,
 } from "./hunterDraw.js";
 import {
-  getHallsSpawnIntervalSec,
-  getHallsWaveSpawnJobs,
-  pickHallsWaveSpawnSpec,
   resolveHallsPieceHunterType,
   HALLS_PIECE_IDS,
   HALLS_ENEMY_LIFETIME_SEC,
@@ -285,6 +283,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function pushHunter(/** @type {any} */ h) {
     nextHunterUid += 1;
     h.hunterUid = nextHunterUid;
+    if (hallsPathActive()) h.hallsPathwayCreamEnemy = true;
     entities.hunters.push(h);
   }
 
@@ -336,17 +335,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function getSpawnIntervalFromRunTime() {
-    if (hallsPathActive()) {
-      return getHallsSpawnIntervalSec(relDifficultySurvivalSec());
-    }
     const t = getDangerRamp01();
     return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_FLOOR - SPAWN_INTERVAL_START) * t;
   }
 
   function getWaveSpawnJobsFromRunTime() {
-    if (hallsPathActive()) {
-      return getHallsWaveSpawnJobs(relDifficultySurvivalSec());
-    }
     return BASE_WAVE_SPAWN_JOBS + midgameEscalationTicks();
   }
 
@@ -383,6 +376,16 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
   function hallsPathActive() {
     return getActivePathId() === "halls";
+  }
+  /** Halls display level 5: ring spawns only in the half-plane above the player (+Y down ⇒ sin(angle) < 0). */
+  function isHallsBossPathwaySpawnYConstrained() {
+    return hallsPathActive() && getRunLevel() === LATE_PATH_BOSS_FLOOR_RUN_LEVEL;
+  }
+  function randomSpawnAngleAroundPlayer() {
+    if (isHallsBossPathwaySpawnYConstrained()) {
+      return Math.PI + Math.random() * Math.PI;
+    }
+    return Math.random() * Math.PI * 2;
   }
   function isHallsChessPieceType(type) {
     return (
@@ -1017,7 +1020,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       if (opts?.allowInsideSpecialTile) return;
       if (!isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y)) return;
       for (let attempt = 0; attempt < 40; attempt++) {
-        const a = Math.random() * Math.PI * 2;
+        const a = randomSpawnAngleAroundPlayer();
         const dist = rand(280, 780);
         h.x = player.x + Math.cos(a) * dist;
         h.y = player.y + Math.sin(a) * dist;
@@ -1040,7 +1043,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           ejectSpawnerHunterFromSpecialHexFootprint(h);
           const circ = { x: h.x, y: h.y, r: h.r };
           if (!isWorldPointOnSpecialSpawnerForbiddenHex(h.x, h.y) && !collidesAnyObstacle(circ)) break;
-          const a = Math.random() * Math.PI * 2;
+          const a = randomSpawnAngleAroundPlayer();
           const dist = rand(300, 780);
           h.x = player.x + Math.cos(a) * dist;
           h.y = player.y + Math.sin(a) * dist;
@@ -1057,7 +1060,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
 
     if (type === "spawner" || type === "airSpawner" || type === "cryptSpawner" || type === "depthsBoltSpawner") {
       for (let attempt = 0; attempt < 64; attempt++) {
-        const ang2 = Math.random() * Math.PI * 2;
+        const ang2 = randomSpawnAngleAroundPlayer();
         const d2 = rand(320, 760);
         h.x = player.x + Math.cos(ang2) * d2;
         h.y = player.y + Math.sin(ang2) * d2;
@@ -1069,7 +1072,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
     }
 
-    const ang = Math.random() * Math.PI * 2;
+    const ang = randomSpawnAngleAroundPlayer();
     const d = rand(320, 760);
     h.x = player.x + Math.cos(ang) * d;
     h.y = player.y + Math.sin(ang) * d;
@@ -1082,24 +1085,16 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function scheduleWaveSpawns() {
     const jobs = [];
     const nJobs = getWaveSpawnJobsFromRunTime();
-    const hallsPath = hallsPathActive();
-    const hallsRelSec = relDifficultySurvivalSec();
     const player = getPlayer();
     for (let i = 0; i < nJobs; i++) {
       jobs.push(() => {
         let type = pickWaveHunterType();
         let hallsPieceType = null;
-        if (hallsPath) {
-          if (isHallsChessPieceType(type)) {
-            hallsPieceType = type;
-            type = resolveHallsPieceHunterType(hallsPieceType);
-          } else {
-            const spec = pickHallsWaveSpawnSpec(hallsRelSec, Math.random);
-            type = spec.hunterType;
-            hallsPieceType = spec.pieceType;
-          }
+        if (isHallsChessPieceType(type)) {
+          hallsPieceType = type;
+          type = resolveHallsPieceHunterType(hallsPieceType);
         }
-        const ang = Math.random() * Math.PI * 2;
+        const ang = randomSpawnAngleAroundPlayer();
         const d = rand(300, 780);
         const x = player.x + Math.cos(ang) * d;
         const y = player.y + Math.sin(ang) * d;
@@ -1165,8 +1160,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         continue;
       }
       h.lastShotAt = elapsed;
-      const firePath = getActivePathId() === "fire";
-      const depthSnipe = depthsPathActive() && !firePath;
+      /** Fire + Halls: large linger shell, ignite ticks, red VFX (`zone.firePath`); growth zones stay fire-path-only in `entry.js`. */
+      const sniperFireStyleShell = getActivePathId() === "fire" || hallsPathActive();
+      const firePath = sniperFireStyleShell;
+      const depthSnipe = depthsPathActive() && !sniperFireStyleShell;
       const windup = depthSnipe ? SNIPER_ARTILLERY_WINDUP * DEPTHS_SNIPER_WINDUP_MULT : SNIPER_ARTILLERY_WINDUP;
       const leadT = windup * SNIPER_ARTILLERY_LEAD;
       const tvx = target === player ? (player.velX ?? 0) : 0;
@@ -3924,12 +3921,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function tickSpawnWavesAndLifetime() {
     const elapsed = getSimElapsed();
     const bossNoSpawn = depthsBossSuppressNormalSpawns();
-    const hallsNoPassiveSpawn = hallsPathActive();
     if (bossNoSpawn) {
-      spawnState.spawnScheduled.length = 0;
-      if (spawnState.nextSpawnAt < elapsed + 1e6) spawnState.nextSpawnAt = elapsed + 1e6;
-    }
-    if (hallsNoPassiveSpawn) {
       spawnState.spawnScheduled.length = 0;
       if (spawnState.nextSpawnAt < elapsed + 1e6) spawnState.nextSpawnAt = elapsed + 1e6;
     }
@@ -3946,10 +3938,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
     }
     while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {
-      if (bossNoSpawn || hallsNoPassiveSpawn) spawnState.spawnScheduled.shift();
+      if (bossNoSpawn) spawnState.spawnScheduled.shift();
       else spawnState.spawnScheduled.shift()?.fn();
     }
-    if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn && !hallsNoPassiveSpawn) advanceSpawnWave();
+    if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn) advanceSpawnWave();
 
     if (bossNoSpawn && depthsPathActive()) {
       let hasEldritch = false;

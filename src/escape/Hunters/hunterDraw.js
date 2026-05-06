@@ -272,6 +272,21 @@ function drawHallsChessCoin(ctx, h, opts) {
     ctx.fill();
   }
 
+  if (h.hallsPathwayCreamEnemy) {
+    ctx.save();
+    ctx.globalCompositeOperation = "soft-light";
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, TAU);
+    ctx.fillStyle = "rgba(255, 250, 242, 0.55)";
+    ctx.fill();
+    ctx.globalCompositeOperation = "multiply";
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, TAU);
+    ctx.fillStyle = "rgba(210, 196, 172, 0.38)";
+    ctx.fill();
+    ctx.restore();
+  }
+
   ctx.restore();
 }
 
@@ -1520,9 +1535,12 @@ export function drawHunterBody(ctx, h, opts = {}) {
   const swampMudFast = h.type === "fast" && !!h.swampMudSpawn;
   const colourblind = !!opts.colourblind;
   const depthsSniperPal = h.type === "sniper" && !!opts.depthsPath;
+  const hallsPathwayCream = !!h.hallsPathwayCreamEnemy;
   const pal = colourblind
     ? { light: "#9ca89a", core: "#5a6658", shadow: "#3a4239", rim: "#6b7569", mark: "#b4c0b0" }
-    : boneSwarmGhostFast
+    : hallsPathwayCream
+      ? { light: "#faf6f0", core: "#ebe3d6", shadow: "#c4b8a4", rim: "#fffefb", mark: "#ddd2c4" }
+      : boneSwarmGhostFast
       ? { light: "#f8fafc", core: "#cbd5e1", shadow: "#64748b", rim: "#e2e8f0", mark: "#ffffff" }
       : depthsBoltFast
         ? hunterPalette("depthsBoltMinion")
