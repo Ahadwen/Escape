@@ -4,15 +4,17 @@ import {
   ELDRITCH_BLOOD_BETWEEN_PHASE_INTERLUDE_SEC,
   ELDRITCH_BLOOD_PHASE3_END_FLASH_SEC,
 } from "../specials/EldritchBlood.js";
-import depthsEldritchBossUrl from "../../assets/Cthulu.png";
-import depthsEldritchLightningUrl from "../../assets/lightning.png";
-import hallsKingUrl from "../../assets/king.png";
-import hallsQueenUrl from "../../assets/queen.png";
-import hallsRookUrl from "../../assets/rook.png";
-import hallsBishopUrl from "../../assets/bishop.png";
-import hallsKnightUrl from "../../assets/knight.png";
-import hallsPawnUrl from "../../assets/pawn.png";
 import { HALLS_COIN_HIT_RADIUS_PX } from "./hallsLogic.js";
+
+/** Asset URLs via `URL` avoid native ES module loaders fetching `.png` as JavaScript when not using Vite. */
+const depthsEldritchBossUrl = new URL("../../assets/Cthulu.png", import.meta.url).href;
+const depthsEldritchLightningUrl = new URL("../../assets/lightning.png", import.meta.url).href;
+const hallsKingUrl = new URL("../../assets/king.png", import.meta.url).href;
+const hallsQueenUrl = new URL("../../assets/queen.png", import.meta.url).href;
+const hallsRookUrl = new URL("../../assets/rook.png", import.meta.url).href;
+const hallsBishopUrl = new URL("../../assets/bishop.png", import.meta.url).href;
+const hallsKnightUrl = new URL("../../assets/knight.png", import.meta.url).href;
+const hallsPawnUrl = new URL("../../assets/pawn.png", import.meta.url).href;
 
 /** Preloaded boss PNG (2D canvas). */
 const depthsEldritchBossImg = new Image();
