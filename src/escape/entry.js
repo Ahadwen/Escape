@@ -130,9 +130,9 @@ import {
 } from "./specials/EldritchBlood.js";
 import { createEventHexController } from "./WorldGeneration/eventTiles/eventController.js";
 import { dropJokerRewardFromSpecialEvent } from "./items/jokerEventReward.js";
-import { createHunterRuntime } from "./Hunters/hunterRuntime.js";
-import { clamp, pointToSegmentDistance } from "./Hunters/hunterGeometry.js";
-import creditsRaw from "../assets/credits.txt?raw";
+import { createHunterRuntime } from "./hunters/hunterRuntime.js";
+import { clamp, pointToSegmentDistance } from "./hunters/hunterGeometry.js";
+import creditsRaw from "../assets/creditsContent.js";
 import { tickAttackRings, drawAttackRings, pushAttackRing } from "./fx/attackRings.js";
 import {
   tickLunaticSprintTierFx,
@@ -343,7 +343,7 @@ const DEPTHS_VICTORY_CREDITS_EMPTY_LINE_FRAC = 0.52;
 const DEPTHS_VICTORY_CREDITS_WRAP_FRAC_OF_VIEW_W = 0.84;
 
 /**
- * Wrap `src/assets/credits.txt` lines to fit the viewport width (world-drawn at ascent start).
+ * Wrap `src/assets/creditsContent.js` lines to fit the viewport width (world-drawn at ascent start).
  * @param {string} raw
  * @param {CanvasRenderingContext2D} ctx
  * @param {number} wrapWidthPx
@@ -1010,7 +1010,7 @@ function boot() {
   /** World target for the victory ascent pull (above anchor, same X as start). */
   let depthsVictoryBeaconX = 0;
   let depthsVictoryBeaconY = 0;
-  /** Wrapped lines from `credits.txt`; rebuilt when ascent begins. */
+  /** Wrapped lines from credits export; rebuilt when ascent begins. */
   let depthsVictoryAscentCreditsDisplayLines = /** @type {string[]} */ ([]);
   /** Per-line scroll offsets (indexes match `depthsVictoryAscentCreditsDisplayLines`). */
   let depthsVictoryCreditsOffsPx = /** @type {number[]} */ ([]);

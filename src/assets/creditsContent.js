@@ -1,3 +1,8 @@
+/**
+ * Rolling credits body (formerly credits.txt).
+ * Kept as .js so production never requests a .txt URL as a script/module.
+ */
+export default `
 
 Credits
 
@@ -42,7 +47,8 @@ My alpha testers
 My plants for keeping me company
 Me! Alastair Hadwen, for doing the work
 
-And YOU! The player, likely a personal friend of mine who I specifically asked to play this game! 
-Few will reach this point, you the realest of ones <3 
+And YOU! The player, likely a personal friend of mine who I specifically asked to play this game!
+Few will reach this point, you the realest of ones <3
 
 Until next time…
+`.trim();
