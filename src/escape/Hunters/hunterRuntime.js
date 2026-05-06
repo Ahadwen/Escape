@@ -252,15 +252,30 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_KING_ROOK_LINE_COUNT = 6;
   const HALLS_KING_ROOK_LINE_SPAN = HEX_SIZE * 1.7;
   const HALLS_KING_ROOK_LINE_START_OFF = HEX_SIZE * 1.55;
-  const HALLS_KING_ROOK_LINE_SPEED = 620;
+  const HALLS_KING_ROOK_LINE_SPEED = 710;
   const HALLS_KING_ROOK_LINE_LIFE = 3.4;
   const HALLS_KING_BISHOP_LINE_COUNT = 5;
   const HALLS_KING_BISHOP_LINE_SPAN = HEX_SIZE * 1.7;
   const HALLS_KING_BISHOP_LINE_START_OFF = HEX_SIZE * 1.65;
-  const HALLS_KING_BISHOP_LINE_SPEED = 620;
+  const HALLS_KING_BISHOP_LINE_SPEED = 710;
   const HALLS_KING_BISHOP_LINE_LIFE = 3.4;
+  /** Orthogonal rook waves (file then rank); bishop second diagonal follows this gap. */
+  const HALLS_KING_LINE_DOUBLE_GAP_SEC = 0.36;
+  /** King line “coin” uses full art radius; player hit uses this cap (see `updateCollisions`). */
+  const HALLS_KING_LINE_HIT_R = 18;
+  const HALLS_KING_SPIRAL_BOLT_TOTAL = 72;
+  const HALLS_KING_SPIRAL_DURATION_SEC = 2;
+  const HALLS_KING_SPIRAL_REVOLUTIONS = 3;
+  const HALLS_KING_SPIRAL_SPEED = 520;
+  const HALLS_KING_SPIRAL_LIFE = 2.85;
+  const HALLS_KING_SPIRAL_BOLT_R = 8;
+  /** King-summoned queen: orbit / charge pacing (wave queens use full speed). */
+  const HALLS_QUEEN_EVENT_ORBIT_SPEED_MULT = 0.76;
+  const HALLS_QUEEN_EVENT_CHARGE_GLIDE_MULT = 0.82;
+  const HALLS_PAWN_EVENT_COOLDOWN_MULT = 1.38;
+  const HALLS_PAWN_EVENT_DIAG_VOLLEY_MULT = 1.42;
   const HALLS_KING_PAWN_RAIN_COUNT = 4;
-  const HALLS_KING_PAWN_RAIN_STEP_SEC = 0.2;
+  const HALLS_KING_PAWN_RAIN_STEP_SEC = 0.34;
   const HALLS_KING_PAWN_RAIN_LIFE_SEC = 6;
   const HALLS_KING_QUEEN_SUMMON_LIFE_SEC = 6;
   const DEPTHS_SHARD_SPREAD_RAD = (20 * Math.PI) / 180;
@@ -704,6 +719,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (isHallsChessPieceType(type)) h.hallsPieceType = type;
     else if (opts?.hallsPieceType) h.hallsPieceType = opts.hallsPieceType;
     if (opts?.hallsEventSpawn) h.hallsEventSpawn = true;
+    if (opts?.hallsKingSummonedQueen) h.hallsKingSummonedQueen = true;
+    if (opts?.hallsKingPawnSummon) h.hallsKingPawnSummon = true;
 
     if (type === "sniper") {
       r = 12;
@@ -913,7 +930,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsGliding = false;
       h.hallsKnightStage = null;
       h.hallsNextThinkAt = elapsed;
-      h.hallsPawnVolleyNextAt = elapsed + rand(0.25, 0.9);
+      h.hallsPawnVolleyNextAt =
+        elapsed + rand(0.25, 0.9) + (opts?.hallsKingPawnSummon && type === HALLS_PIECE_IDS.PAWN ? rand(0.35, 0.75) : 0);
       h.hallsPawnDiagImpactPending = false;
       if (type === HALLS_PIECE_IDS.BISHOP) {
         h.hallsBishopPhase = "approach";
@@ -969,6 +987,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsKingSpellBag = [];
         h.hallsKingCastsSinceQueen = 0;
         h.hallsKingLastSpellId = "";
+        h.hallsKingCastFollowups = [];
+        h.hallsKingGlowVoid = false;
+        h.hallsKingSpiralStartAt = 0;
+        h.hallsKingSpiralSpawned = 0;
+        h.hallsKingSpiralBase = 0;
       }
     }
     if (opts?.hallsKingLineProjectile) {
@@ -1768,10 +1791,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
     const faceTargetX = Number(target.x ?? cx);
     const faceTargetY = Number(target.y ?? cy);
+    const summonedQueen = !!h.hallsKingSummonedQueen;
+    const orbitSpd = HALLS_QUEEN_ORBIT_SPEED * (summonedQueen ? HALLS_QUEEN_EVENT_ORBIT_SPEED_MULT : 1);
+    const chargeGlideMul = HALLS_QUEEN_CHARGE_SPEED_MUL * (summonedQueen ? HALLS_QUEEN_EVENT_CHARGE_GLIDE_MULT : 1);
     hallsChessFaceToward(h, faceTargetX, faceTargetY);
 
     if ((h.hallsQueenState ?? "orbit") === "charge") {
-      const st = hallsChessGlideToward(h, Number(h.hallsDestX), Number(h.hallsDestY), glide * HALLS_QUEEN_CHARGE_SPEED_MUL, spDt);
+      const st = hallsChessGlideToward(h, Number(h.hallsDestX), Number(h.hallsDestY), glide * chargeGlideMul, spDt);
       const insideNow = distSq(h, { x: cx, y: cy }) <= HALLS_QUEEN_BOUNDARY_R * HALLS_QUEEN_BOUNDARY_R;
       if (insideNow !== !!h.hallsQueenWasInside) {
         hallsEmitQueenBoundaryArc(h, elapsed, faceTargetX, faceTargetY);
@@ -1789,7 +1815,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
 
     const orbitDir = Number(h.hallsQueenOrbitDir ?? 1) >= 0 ? 1 : -1;
-    const orbitAng = Number(h.hallsQueenOrbitAng ?? 0) + (orbitDir * HALLS_QUEEN_ORBIT_SPEED * spDt) / Math.max(1, HALLS_QUEEN_ORBIT_R);
+    const orbitAng =
+      Number(h.hallsQueenOrbitAng ?? 0) + (orbitDir * orbitSpd * spDt) / Math.max(1, HALLS_QUEEN_ORBIT_R);
     h.hallsQueenOrbitAng = orbitAng;
     h.x = cx + Math.cos(orbitAng) * HALLS_QUEEN_ORBIT_R;
     h.y = cy + Math.sin(orbitAng) * HALLS_QUEEN_ORBIT_R;
@@ -1809,12 +1836,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     h.hallsQueenState = "charge";
   }
 
-  function hallsKingCastRookLine(h, elapsed) {
+  function hallsKingSpawnRookLineWave(h, elapsed, nx, ny) {
     const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
     const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
-    const vertical = Math.random() < 0.5;
-    const nx = vertical ? 0 : 1;
-    const ny = vertical ? 1 : 0;
     const px = -ny;
     const py = nx;
     for (let i = 0; i < HALLS_KING_ROOK_LINE_COUNT; i++) {
@@ -1835,12 +1859,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
-  function hallsKingCastBishopLine(h, elapsed) {
+  function hallsKingSpawnBishopLineWave(h, elapsed, nx, ny) {
     const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
     const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
-    const sign = Math.random() < 0.5 ? 1 : -1;
-    const nx = Math.SQRT1_2;
-    const ny = sign * Math.SQRT1_2;
     const px = -ny;
     const py = nx;
     for (let i = 0; i < HALLS_KING_BISHOP_LINE_COUNT; i++) {
@@ -1861,7 +1882,95 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
+  function hallsKingCastRookLine(h, elapsed) {
+    const sy = Math.random() < 0.5 ? 1 : -1;
+    hallsKingSpawnRookLineWave(h, elapsed, 0, sy);
+    const sx = Math.random() < 0.5 ? 1 : -1;
+    if (!Array.isArray(h.hallsKingCastFollowups)) h.hallsKingCastFollowups = [];
+    h.hallsKingCastFollowups.push({
+      t: elapsed + HALLS_KING_LINE_DOUBLE_GAP_SEC,
+      kind: "rook",
+      nx: sx,
+      ny: 0,
+    });
+  }
+
+  function hallsKingCastBishopLine(h, elapsed) {
+    const sx = Math.random() < 0.5 ? 1 : -1;
+    const sy = Math.random() < 0.5 ? 1 : -1;
+    const nx0 = sx * Math.SQRT1_2;
+    const ny0 = sy * Math.SQRT1_2;
+    hallsKingSpawnBishopLineWave(h, elapsed, nx0, ny0);
+    const nx1 = sx * Math.SQRT1_2;
+    const ny1 = -sy * Math.SQRT1_2;
+    if (!Array.isArray(h.hallsKingCastFollowups)) h.hallsKingCastFollowups = [];
+    h.hallsKingCastFollowups.push({
+      t: elapsed + HALLS_KING_LINE_DOUBLE_GAP_SEC,
+      kind: "bishop",
+      nx: nx1,
+      ny: ny1,
+    });
+  }
+
+  function hallsKingBeginSpiralVolley(h, elapsed) {
+    h.hallsKingSpiralStartAt = elapsed;
+    h.hallsKingSpiralSpawned = 0;
+    h.hallsKingSpiralBase = Math.random() * Math.PI * 2;
+  }
+
+  function hallsKingPushSpiralBolt(cx, cy, elapsed, angleRad) {
+    const speedJ = rand(0.92, 1.05);
+    entities.projectiles.push({
+      x: cx,
+      y: cy,
+      vx: Math.cos(angleRad) * HALLS_KING_SPIRAL_SPEED * speedJ,
+      vy: Math.sin(angleRad) * HALLS_KING_SPIRAL_SPEED * speedJ,
+      r: HALLS_KING_SPIRAL_BOLT_R,
+      bornAt: elapsed,
+      life: HALLS_KING_SPIRAL_LIFE,
+      damage: 1,
+      hallsKingSpiralBolt: true,
+    });
+  }
+
+  /** Spawns spiral bolts over `HALLS_KING_SPIRAL_DURATION_SEC` with `HALLS_KING_SPIRAL_REVOLUTIONS` full turns. */
+  function hallsKingTickSpiralVolley(h, elapsed) {
+    const n = HALLS_KING_SPIRAL_BOLT_TOTAL;
+    let spawned = Number(h.hallsKingSpiralSpawned ?? 0);
+    if (spawned >= n) return;
+    const t0 = Number(h.hallsKingSpiralStartAt ?? 0);
+    if (!(t0 > 0)) return;
+    const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
+    const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
+    const base = Number(h.hallsKingSpiralBase ?? 0);
+    const dur = HALLS_KING_SPIRAL_DURATION_SEC;
+    const rev = HALLS_KING_SPIRAL_REVOLUTIONS * Math.PI * 2;
+    while (spawned < n) {
+      const fireAt = t0 + (spawned / n) * dur;
+      if (elapsed + 1e-5 < fireAt) break;
+      const u = n <= 1 ? 0.5 : spawned / (n - 1);
+      const a = base + u * rev;
+      hallsKingPushSpiralBolt(cx, cy, elapsed, a);
+      spawned += 1;
+    }
+    h.hallsKingSpiralSpawned = spawned;
+  }
+
+  function hallsKingProcessCastFollowups(h, elapsed) {
+    const q = h.hallsKingCastFollowups;
+    if (!Array.isArray(q) || q.length === 0) return;
+    while (q.length > 0 && elapsed + 1e-5 >= Number(q[0].t ?? 0)) {
+      const job = q.shift();
+      if (!job || typeof job !== "object") continue;
+      if (job.kind === "rook") hallsKingSpawnRookLineWave(h, elapsed, Number(job.nx), Number(job.ny));
+      else if (job.kind === "bishop")
+        hallsKingSpawnBishopLineWave(h, elapsed, Number(job.nx), Number(job.ny));
+    }
+  }
+
   function hallsTickKingChess(h, elapsed, target) {
+    hallsKingProcessCastFollowups(h, elapsed);
+    hallsKingTickSpiralVolley(h, elapsed);
     const cx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : Number(h.x);
     const cy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : Number(h.y);
     const aliveSec = Math.max(0, elapsed - Number(h.bornAt ?? elapsed));
@@ -1873,8 +1982,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         ? HALLS_KING_CAST_INTERVAL_PHASE2_SEC
         : HALLS_KING_CAST_INTERVAL_PHASE1_SEC;
     const spellIds = phase3
-      ? ["rookLine", "bishopLine", "queenSummon"]
-      : ["rookLine", "bishopLine", "pawnRain", "queenSummon"];
+      ? ["rookLine", "bishopLine", "spiralVolley", "queenSummon"]
+      : ["rookLine", "bishopLine", "pawnRain", "spiralVolley", "queenSummon"];
     hallsChessFaceToward(h, Number(target.x ?? h.x), Number(target.y ?? h.y));
     h.hallsGliding = false;
     h.hallsDestX = h.x;
@@ -1886,6 +1995,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       spawnHunter(HALLS_PIECE_IDS.PAWN, cx + Math.cos(a) * r, cy + Math.sin(a) * r, {
         hallsPieceType: HALLS_PIECE_IDS.PAWN,
         hallsEventSpawn: true,
+        hallsKingPawnSummon: true,
         allowInsideSpecialTile: true,
         forceExactPosition: true,
         dieAtOverride: Number(h.hallsKingPawnRainExpireAt ?? (elapsed + HALLS_KING_PAWN_RAIN_LIFE_SEC)),
@@ -1910,7 +2020,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
     const forceQueen = Number(h.hallsKingCastsSinceQueen ?? 0) >= 2;
     let spellId = forceQueen ? "queenSummon" : String(h.hallsKingSpellBag.pop() ?? "rookLine");
-    if (phase3 && spellId === "pawnRain") spellId = "rookLine";
+    if (phase3 && spellId === "pawnRain") spellId = "spiralVolley";
     const lastSpellId = String(h.hallsKingLastSpellId ?? "");
     if (!forceQueen && spellId === lastSpellId) {
       const bag = Array.isArray(h.hallsKingSpellBag) ? h.hallsKingSpellBag : [];
@@ -1923,6 +2033,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
     }
     if (spellId === "rookLine") {
+      h.hallsKingGlowVoid = false;
       h.hallsKingGlowColor = "#93c5fd";
       h.hallsKingGlowStartAt = elapsed;
       h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
@@ -1932,6 +2043,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       return;
     }
     if (spellId === "bishopLine") {
+      h.hallsKingGlowVoid = false;
       h.hallsKingGlowColor = "#ffffff";
       h.hallsKingGlowStartAt = elapsed;
       h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
@@ -1941,6 +2053,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       return;
     }
     if (spellId === "pawnRain") {
+      h.hallsKingGlowVoid = false;
       h.hallsKingGlowColor = "#fb923c";
       h.hallsKingGlowStartAt = elapsed;
       h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
@@ -1951,7 +2064,18 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsKingLastSpellId = spellId;
       return;
     }
+    if (spellId === "spiralVolley") {
+      h.hallsKingGlowVoid = true;
+      h.hallsKingGlowColor = "#09090d";
+      h.hallsKingGlowStartAt = elapsed;
+      h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
+      hallsKingBeginSpiralVolley(h, elapsed);
+      h.hallsKingCastsSinceQueen = Number(h.hallsKingCastsSinceQueen ?? 0) + 1;
+      h.hallsKingLastSpellId = spellId;
+      return;
+    }
     if (spellId === "queenSummon") {
+      h.hallsKingGlowVoid = false;
       h.hallsKingGlowColor = "#f9a8d4";
       h.hallsKingGlowStartAt = elapsed;
       h.hallsKingGlowUntil = elapsed + HALLS_KING_GLOW_FALLOFF_SEC;
@@ -1960,6 +2084,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       spawnHunter(HALLS_PIECE_IDS.QUEEN, cx + Math.cos(ang) * spawnR, cy + Math.sin(ang) * spawnR, {
         hallsPieceType: HALLS_PIECE_IDS.QUEEN,
         hallsEventSpawn: true,
+        hallsKingSummonedQueen: true,
         hallsLockCenterX: cx,
         hallsLockCenterY: cy,
         allowInsideSpecialTile: true,
@@ -2374,7 +2499,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           h.hallsGliding = true;
           h.hallsPawnDiagImpactPending = true;
         }
-        h.hallsPawnVolleyNextAt = elapsed + HALLS_PAWN_DIAG_VOLLEY_COOLDOWN_SEC;
+        const diagCd =
+          HALLS_PAWN_DIAG_VOLLEY_COOLDOWN_SEC *
+          (h.hallsKingPawnSummon ? HALLS_PAWN_EVENT_DIAG_VOLLEY_MULT : 1);
+        h.hallsPawnVolleyNextAt = elapsed + diagCd;
       }
     }
 
@@ -2399,7 +2527,9 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsKnightStage = null;
       h.hallsDestX = null;
       h.hallsDestY = null;
-      h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(piece);
+      const cdMult =
+        piece === HALLS_PIECE_IDS.PAWN && h.hallsKingPawnSummon ? HALLS_PAWN_EVENT_COOLDOWN_MULT : 1;
+      h.hallsNextThinkAt = elapsed + hallsChessCooldownFor(piece) * cdMult;
     };
 
     if (h.hallsGliding && h.hallsDestX != null && h.hallsDestY != null) {
@@ -2520,6 +2650,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const spDt = dt * spades13AuraEnemyDtMult();
 
       if (h.hallsKingLineProjectile) {
+        h.hallsKingLinePrevX = h.x;
+        h.hallsKingLinePrevY = h.y;
         moveCircleWithCollisions(h, Number(h.hallsScriptedVx ?? 0), Number(h.hallsScriptedVy ?? 0), spDt, {
           ignoreObstacles: true,
         });
@@ -3433,7 +3565,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         p.r = 4 + (p.rEnd - 4) * ageU;
       }
       let hitBarrier = false;
-      const ignoreArenaBarriers = !!p.hallsKnightLandBolt || !!p.hallsQueenArcBolt;
+      const ignoreArenaBarriers =
+        !!p.hallsKnightLandBolt || !!p.hallsQueenArcBolt || !!p.hallsKingSpiralBolt;
       for (let s = 0; s <= 5; s++) {
         const u = s / 5;
         const sx = prevX + (p.x - prevX) * u;
@@ -3461,7 +3594,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
 
       const circle = { x: p.x, y: p.y, r: p.r };
-      const hitObstacle = !p.hallsQueenArcBolt && collidesAnyObstacle(circle);
+      const hitObstacle =
+        !p.hallsQueenArcBolt && !p.hallsKingSpiralBolt && collidesAnyObstacle(circle);
       if (elapsed - p.bornAt > p.life || outOfBoundsCircle(circle) || hitObstacle) {
         entities.projectiles.splice(i, 1);
         continue;
@@ -3741,13 +3875,21 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     for (const h of entities.hunters) {
       if (h.type === "depthsTentacle" || h.type === "depthsEldritchBloom") continue;
       if (elapsed < h.hitLockUntil) continue;
-      if (hitDecoyIfAny(h, h.r + 2)) {
+      const hitR = h.hallsKingLineProjectile ? Math.min(h.r, HALLS_KING_LINE_HIT_R) : h.r;
+      if (hitDecoyIfAny(h, hitR + 2)) {
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
         continue;
       }
-      const hitR = h.hallsKingLineProjectile ? Math.min(h.r, 14) : h.r;
       const rr = hitR + player.r;
-      if (distSq(h, player) <= rr * rr) {
+      let hitPlayer = distSq(h, player) <= rr * rr;
+      if (!hitPlayer && h.hallsKingLineProjectile) {
+        const px = Number(h.hallsKingLinePrevX);
+        const py = Number(h.hallsKingLinePrevY);
+        if (Number.isFinite(px) && Number.isFinite(py)) {
+          hitPlayer = pointToSegmentDistance(player.x, player.y, px, py, h.x, h.y) <= rr;
+        }
+      }
+      if (hitPlayer) {
         damagePlayer(1, {
           sourceX: h.x,
           sourceY: h.y,

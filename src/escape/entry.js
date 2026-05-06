@@ -507,6 +507,20 @@ function isLocalDebugHost(win = window) {
 function boot() {
   const runLogger = createRunLogger(30);
   const pathRuntime = createPathRuntime({ rng: Math.random });
+
+  function applyUrlRunOverrides() {
+    const { forcedPathId, forcedRunLevel } = URL_RUN_OVERRIDES;
+    if (forcedRunLevel != null) runLevel = forcedRunLevel;
+    if (forcedPathId) pathRuntime.setForcedPathId(forcedPathId);
+    if (runLevel < 1 && !pathRuntime.getForcedPathId()) {
+      pathRuntime.resetRun();
+    } else {
+      pathRuntime.ensurePathAssignedForLevel(runLevel);
+    }
+  }
+  /** Before tile cache: URL `path` / `level` must be active so halls → empty hex terrain, etc. */
+  applyUrlRunOverrides();
+
   mountCharacterRoster(document);
   const debugAllowed = isLocalDebugHost(window);
   let devPanelEl = document.getElementById("special-test-west-panel");
@@ -4690,17 +4704,6 @@ function boot() {
     refreshDebugRunProgressUi();
   }
 
-  function applyUrlRunOverrides() {
-    const { forcedPathId, forcedRunLevel } = URL_RUN_OVERRIDES;
-    if (forcedRunLevel != null) runLevel = forcedRunLevel;
-    if (forcedPathId) pathRuntime.setForcedPathId(forcedPathId);
-    if (runLevel < 1 && !pathRuntime.getForcedPathId()) {
-      pathRuntime.resetRun();
-    } else {
-      pathRuntime.ensurePathAssignedForLevel(runLevel);
-    }
-  }
-
   function populateRandomDebugBuild(logLabel = "populate build") {
     for (let r = 1; r <= 13; r++) {
       inventory.deckByRank[r] = Math.random() < 0.1 ? null : makeRandomDebugBuildCard(r, `deck${r}`);
@@ -4723,7 +4726,6 @@ function boot() {
     }, 2500);
   }
 
-  applyUrlRunOverrides();
   applyUrlBuildOverrides();
 
   if (debugPathSelectEl && "value" in debugPathSelectEl) {

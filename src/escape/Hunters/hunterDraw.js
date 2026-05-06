@@ -1352,6 +1352,48 @@ export function drawHunterBody(ctx, h, opts = {}) {
       const arenaCx = Number.isFinite(Number(h.hallsLockCenterX)) ? Number(h.hallsLockCenterX) : x;
       const arenaCy = Number.isFinite(Number(h.hallsLockCenterY)) ? Number(h.hallsLockCenterY) : y;
 
+      if (h.hallsKingGlowVoid) {
+        ctx.save();
+        ctx.globalCompositeOperation = "source-over";
+        const voidR = r + 58 + pulseSlow * 22 + burst * 30;
+        const gVoid = ctx.createRadialGradient(x, y, r * 0.15, x, y, voidR);
+        gVoid.addColorStop(0, `rgba(12, 10, 18, ${0.55 * intensity + 0.2 * burst})`);
+        gVoid.addColorStop(0.35, `rgba(8, 8, 14, ${0.42 * intensity})`);
+        gVoid.addColorStop(0.72, `rgba(30, 27, 45, ${0.22 * intensity})`);
+        gVoid.addColorStop(1, "rgba(12, 12, 20, 0)");
+        ctx.fillStyle = gVoid;
+        ctx.beginPath();
+        ctx.arc(x, y, voidR, 0, TAU);
+        ctx.fill();
+
+        const tileVoidR = r * 6.2 + pulseSlow * 36 + burst * 26;
+        const gTile = ctx.createRadialGradient(arenaCx, arenaCy, 2, arenaCx, arenaCy, tileVoidR);
+        gTile.addColorStop(0, `rgba(6, 6, 10, ${0.5 * intensity + 0.18 * burst})`);
+        gTile.addColorStop(0.5, `rgba(24, 20, 38, ${0.28 * intensity})`);
+        gTile.addColorStop(1, "rgba(10, 10, 16, 0)");
+        ctx.fillStyle = gTile;
+        ctx.beginPath();
+        ctx.arc(arenaCx, arenaCy, tileVoidR, 0, TAU);
+        ctx.fill();
+
+        ctx.globalCompositeOperation = "lighter";
+        ctx.strokeStyle = `rgba(167, 139, 250, ${0.22 * intensity + 0.12 * pulseFast})`;
+        ctx.lineWidth = 2.2;
+        ctx.setLineDash([5, 9]);
+        ctx.lineDashOffset = -tNow * 88;
+        ctx.beginPath();
+        ctx.arc(arenaCx, arenaCy, tileVoidR * (0.56 + 0.04 * pulseSlow), 0, TAU);
+        ctx.stroke();
+        ctx.setLineDash([3, 11]);
+        ctx.lineDashOffset = tNow * 102;
+        ctx.strokeStyle = `rgba(226, 232, 240, ${0.14 * intensity + 0.1 * burst})`;
+        ctx.beginPath();
+        ctx.arc(x, y, r + 40 + pulseFast * 6, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+      } else {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
 
@@ -1428,6 +1470,7 @@ export function drawHunterBody(ctx, h, opts = {}) {
         const py = y + Math.sin(a * 1.12) * ringR * 0.8;
         const pr = 1.3 + (i % 4) * 0.5 + pulseFast * 0.35;
         drawCircle(ctx, px, py, pr, glow, (0.14 + 0.1 * pulseFast + 0.12 * burst) * intensity);
+      }
       }
     }
     if (h.hallsHolyGlow) {
@@ -1594,6 +1637,27 @@ function drawCircle(ctx, x, y, r, color, alpha = 1) {
 }
 
 export function drawProjectileBody(ctx, p) {
+  if (p.hallsKingSpiralBolt) {
+    const ang = Math.atan2(Number(p.vy ?? 0), Number(p.vx ?? 1));
+    const rad = p.r ?? 8;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(ang);
+    const g = ctx.createRadialGradient(-rad * 0.4, 0, 0.3, 0, 0, rad * 1.35);
+    g.addColorStop(0, "rgba(250, 250, 250, 0.95)");
+    g.addColorStop(0.25, "rgba(100, 90, 130, 0.88)");
+    g.addColorStop(0.55, "rgba(28, 26, 38, 0.92)");
+    g.addColorStop(1, "rgba(6, 6, 10, 0.35)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, rad * 1.15, rad * 0.62, 0, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(196, 181, 253, 0.55)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   if (p.hallsQueenArcBolt) {
     const ang = Math.atan2(Number(p.vy ?? 0), Number(p.vx ?? 1));
     const len = (p.r ?? 8) * 2.35;
