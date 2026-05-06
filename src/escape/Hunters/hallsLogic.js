@@ -1,6 +1,6 @@
 /**
  * Halls-specific wave pacing and piece-based enemy composition.
- * Keeps all "chess identity" spawn decisions centralized.
+ * Keeps all "chess identity" spawn decisions centralized..
  */
 
 export const HALLS_PIECE_IDS = Object.freeze({
