@@ -3960,7 +3960,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         });
         h.hitLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
       }
-      if (h.type === HALLS_PIECE_IDS.ROOK && elapsed >= Number(h.hallsRookAuraNextAt ?? 0)) {
+      if (
+        h.type === HALLS_PIECE_IDS.ROOK &&
+        !isHallsBossPathwaySpawnYConstrained() &&
+        elapsed >= Number(h.hallsRookAuraNextAt ?? 0)
+      ) {
         if (h.hallsKingLineProjectile) continue;
         h.hallsRookAuraNextAt = elapsed + HALLS_ROOK_AURA_TICK_SEC;
         const auraR = HALLS_ROOK_AURA_R + player.r;
