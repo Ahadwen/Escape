@@ -54,12 +54,14 @@ import {
   hexKey,
 } from "./hexMath.js";
 import { createGeneratedTilesManager } from "./WorldGeneration/generatedTiles.js";
+import { createTerrainHexCollapseRuntime, isNorthwardStep } from "./WorldGeneration/terrainHexCollapse.js";
 import { createSpecialHexRuntime } from "./WorldGeneration/specialHexState.js";
 import { generateHexTileObstacles } from "./tiles.js";
 import {
   drawObstacles,
   fillPointyHexCell,
   fillHallsMarbleHexCell,
+  fillHallsHexVoidPit,
   drawPlayerBody,
   drawPlayerHpHud,
   drawKnightBurstAura,
@@ -309,6 +311,8 @@ const DISPLAY_LEVEL_FIVE_RUN_LEVEL = 4;
 const DEPTHS_BOSS_CHASE_RUN_LEVEL = DISPLAY_LEVEL_FIVE_RUN_LEVEL;
 /** Halls display level 5 — boss race-to-exit floor (`runLevel` after four sanctuary ups). */
 const HALLS_BOSS_PATHWAY_RUN_LEVEL = DISPLAY_LEVEL_FIVE_RUN_LEVEL;
+/** Halls display L5: survive this long on the boss pathway, then the Depths-style sun ascent + win fires. */
+const HALLS_BOSS_VICTORY_SUN_ASCENT_DELAY_SEC = 4 * 60;
 /** Display depth 4 (`runLevel === 3`) — storm whirlpool roll + mid-wash tentacle burst **only** here (not L1–3 or boss L5). */
 const DEPTHS_WHIRLPOOL_RUN_LEVEL = 3;
 /** Rising flood: slightly faster than base walk so walking alone cannot outrun it. */
@@ -673,6 +677,7 @@ function boot() {
       rouletteModal?.closeUi();
       forgeWorldModal?.closeUi();
       tiles.clearCache();
+      terrainHexCollapse.reset();
       obstacles = [];
       activeHexes = [];
       lastPlayerHexKey = "";
@@ -775,6 +780,56 @@ function boot() {
     lastPlayerHexKey,
   }));
 
+  const terrainHexCollapse = createTerrainHexCollapseRuntime({
+    hexKey,
+    worldToHex,
+    hexToWorld,
+    hexVertexRadius: HEX_SIZE,
+    getSimElapsed: () => simElapsed,
+    getPlayer: () => player,
+    getPlayerRadius: () => player.r,
+    getShouldTrackCollapse: () => isHallsBossPathwayLevel(),
+    isHexExcludedFromCollapse: (q, r) => specials.isSpecialTile(q, r),
+    isHexGroundVoided: (q, r) => tiles.isHexGroundVoided(q, r),
+    onVoidRow: (rowR) => {
+      const voided = tiles.voidRowAtR(rowR, { inaccessiblePit: true });
+      lastPlayerHexKey = "";
+      ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+        player,
+        obstacles,
+        activePlayerHex,
+        activeHexes,
+        lastPlayerHexKey,
+      }));
+      return voided;
+    },
+    onVoidRowExcept: (rowR, spareQ, spareR) => {
+      const voided = tiles.voidRowAtRExcept(rowR, spareQ, spareR, { inaccessiblePit: true });
+      lastPlayerHexKey = "";
+      ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+        player,
+        obstacles,
+        activePlayerHex,
+        activeHexes,
+        lastPlayerHexKey,
+      }));
+      return voided;
+    },
+    tryFinalizeSparedRowHexNorthStep: (fromQ, fromR, toQ, toR) => {
+      if (!isNorthwardStep(toQ - fromQ, toR - fromR)) return false;
+      if (!tiles.finalizeSparedHallsRowHex(fromQ, fromR)) return false;
+      lastPlayerHexKey = "";
+      ({ obstacles, activePlayerHex, activeHexes, lastPlayerHexKey } = tiles.ensureTilesForPlayer({
+        player,
+        obstacles,
+        activePlayerHex,
+        activeHexes,
+        lastPlayerHexKey,
+      }));
+      return true;
+    },
+  });
+
   activeCharacterId = KNIGHT_ONLY_MODE ? "knight" : resolveImplementedHeroId(activeCharacterId);
 
   const inventory = createEmptyInventory();
@@ -802,6 +857,15 @@ function boot() {
     },
   );
 
+  /** Voided / pit hexes use `collisionOnly` rects; clubs terrain phase still must not walk on destroyed floor. */
+  function pitCollisionObstaclesOnly() {
+    const out = [];
+    for (const o of obstacles) {
+      if (o.collisionOnly === true) out.push(o);
+    }
+    return out;
+  }
+
   function obstaclesForPlayerCollision() {
     if (
       depthsVictoryAscentActive &&
@@ -814,7 +878,7 @@ function boot() {
       activeCharacterId === "rogue" &&
       rogueWorld.clubsPhaseThroughObstacles(inventory, player.x, player.y, simElapsed)
     ) {
-      return [];
+      return pitCollisionObstaclesOnly();
     }
     if (
       activeCharacterId === "knight" &&
@@ -822,7 +886,7 @@ function boot() {
       typeof character.getBurstVisualUntil === "function" &&
       simElapsed < character.getBurstVisualUntil(simElapsed)
     ) {
-      return [];
+      return pitCollisionObstaclesOnly();
     }
     if (
       activeCharacterId === "valiant" &&
@@ -830,7 +894,7 @@ function boot() {
       typeof character.getValiantSurgeUntil === "function" &&
       simElapsed < character.getValiantSurgeUntil()
     ) {
-      return [];
+      return pitCollisionObstaclesOnly();
     }
     if (isDepthsBossFightLevel() && eldritchBlood?.isFloatingCageTerrainCollisionSuppressedNow?.()) {
       return [];
@@ -1050,6 +1114,8 @@ function boot() {
   let depthsVictoryCreditsStartUpPx = 0;
   /** Minimum `anchorY − player.y` before win activates (credits done + post-credits walk). */
   let depthsVictoryAscentCreditsMinUpPx = 0;
+  /** `simElapsed` deadline for Halls L5 sun ascent; set when the boss pathway first becomes active. */
+  let hallsBossSunAscentTriggerSim = /** @type {number | null} */ (null);
   /** Path ids visited this run (L2+), for end stats. */
   const pathsVisitedThisRun = /** @type {Set<string>} */ (new Set());
   /** Heal crystals actually picked up this run (world collectibles `kind === "heal"`). */
@@ -1354,6 +1420,7 @@ function boot() {
     depthsVictoryCreditsWorldX = 0;
     depthsVictoryCreditsStartUpPx = 0;
     depthsVictoryAscentCreditsMinUpPx = 0;
+    hallsBossSunAscentTriggerSim = null;
     eldritchBlood?.reset();
   }
 
@@ -2592,14 +2659,17 @@ function boot() {
     ctx.restore();
   }
 
-  function beginDepthsVictoryAscent(/** @type {{ debug?: boolean }} */ opts = {}) {
+  function beginDepthsVictoryAscent(/** @type {{ debug?: boolean; hallsBossPathway?: boolean }} */ opts = {}) {
     if (runVictory || runDead || depthsVictoryAscentActive) return;
-    if (!opts.debug) {
+    if (opts.hallsBossPathway) {
+      if (!isHallsBossPathwayLevel()) return;
+    } else if (!opts.debug) {
       const bloom = findDepthsEldritchBloomHunter();
       if (!bloom?.depthsEldritchP3BossHidden) return;
     } else if (!isDepthsBossFightLevel()) {
       return;
     }
+    hallsBossSunAscentTriggerSim = null;
     depthsVictoryAscentActive = true;
     depthsVictoryAscentAnchorY = player.y;
     depthsVictoryBeaconX = player.x;
@@ -3733,6 +3803,7 @@ function boot() {
     depthsVictoryCreditsWorldX = 0;
     depthsVictoryCreditsStartUpPx = 0;
     depthsVictoryAscentCreditsMinUpPx = 0;
+    hallsBossSunAscentTriggerSim = null;
     manualPause = false;
     handsResetPause = false;
     playerDamage.resetCombatState();
@@ -3784,6 +3855,7 @@ function boot() {
       specials.setTestWestKind(specialTestWestEl.value);
     }
     tiles.clearCache();
+    terrainHexCollapse.reset();
     obstacles = [];
     activeHexes = [];
     lastPlayerHexKey = "";
@@ -3934,6 +4006,7 @@ function boot() {
             }
             hallsChessTriggerSpentTiles.clear();
             tiles.clearCache();
+            terrainHexCollapse.reset();
             obstacles = [];
             activeHexes = [];
             lastPlayerHexKey = "";
@@ -4072,6 +4145,20 @@ function boot() {
       !(rouletteModal?.isPaused() ?? false) &&
       !(forgeWorldModal?.isForgePaused() ?? false)
     );
+  }
+
+  /**
+   * Halls boss collapse: if axial cell is void, nudge **one player radius** screen-north (−y) — tiny
+   * unstuck without snapping to another hex center.
+   * @returns {boolean} true if the player was moved
+   */
+  function nudgePlayerFromHallsVoidNorthOneRadius() {
+    if (!isHallsBossPathwayLevel() || !specialsSimUnpaused()) return false;
+    const h = worldToHex(player.x, player.y);
+    if (!tiles.isHexGroundVoided(h.q, h.r)) return false;
+    const step = Math.max(1, player.r);
+    player.y -= step;
+    return true;
   }
 
   /**
@@ -4256,11 +4343,15 @@ function boot() {
     const select = /** @type {HTMLSelectElement | null} */ (document.getElementById("debug-depths-boss-spell-select"));
     const spellId = select?.value ?? "";
     if (spellId === "victory_ascent") {
-      const ok = !!(isDepthsBossFightLevel() && huntersEnabled && !runDead && !runVictory);
-      if (ok) {
+      const okDepths = !!(isDepthsBossFightLevel() && huntersEnabled && !runDead && !runVictory);
+      const okHalls = !!(isHallsBossPathwayLevel() && !runDead && !runVictory);
+      if (okDepths) {
         beginDepthsVictoryAscent({ debug: true });
-        runLogger.log("debug", "forced victory ascent");
-      } else runLogger.log("debug", "victory ascent not started", "boss_chase_only");
+        runLogger.log("debug", "forced victory ascent (depths)");
+      } else if (okHalls) {
+        beginDepthsVictoryAscent({ hallsBossPathway: true });
+        runLogger.log("debug", "forced victory ascent (halls)");
+      } else runLogger.log("debug", "victory ascent not started", "boss_path_only");
       return;
     }
     const res = eldritchBlood?.debugForceEldritchSpell?.(spellId);
@@ -4319,6 +4410,7 @@ function boot() {
     depthsVictoryCreditsWorldX = 0;
     depthsVictoryCreditsStartUpPx = 0;
     depthsVictoryAscentCreditsMinUpPx = 0;
+    hallsBossSunAscentTriggerSim = null;
     manualPause = false;
     handsResetPause = false;
     simElapsed = 0;
@@ -4404,6 +4496,7 @@ function boot() {
       specials.setTestWestKind(specialTestWestEl.value);
     }
     tiles.clearCache();
+    terrainHexCollapse.reset();
     obstacles = [];
     activeHexes = [];
     lastPlayerHexKey = "";
@@ -4719,6 +4812,7 @@ function boot() {
     resetSwampInfection();
     if (prevPathId !== pathRuntime.getCurrentPathId()) {
       tiles.clearCache();
+      terrainHexCollapse.reset();
       obstacles = [];
       activeHexes = [];
       lastPlayerHexKey = "";
@@ -4735,6 +4829,7 @@ function boot() {
       }
       hallsChessTriggerSpentTiles.clear();
       tiles.clearCache();
+      terrainHexCollapse.reset();
       obstacles = [];
       activeHexes = [];
       lastPlayerHexKey = "";
@@ -4792,6 +4887,7 @@ function boot() {
       }
       if (prevPathId !== pathRuntime.getCurrentPathId()) {
         tiles.clearCache();
+        terrainHexCollapse.reset();
         obstacles = [];
         activeHexes = [];
         lastPlayerHexKey = "";
@@ -5323,6 +5419,13 @@ function boot() {
         hexEventRuntime?.clampPlayer(player);
       }
       pathRuntime.applyDebuffHooks({ dt, simElapsed, runLevel, player, inventory, activeCharacterId });
+      if (isHallsBossPathwayLevel()) {
+        if (!depthsVictoryAscentActive && hallsBossSunAscentTriggerSim == null) {
+          hallsBossSunAscentTriggerSim = simElapsed + HALLS_BOSS_VICTORY_SUN_ASCENT_DELAY_SEC;
+        }
+      } else {
+        hallsBossSunAscentTriggerSim = null;
+      }
       const swampPathActive = pathRuntime.getCurrentPathId() === "swamp";
       const firePathActive = pathRuntime.getCurrentPathId() === "fire";
       const hallsPathForIgnite = pathRuntime.getCurrentPathId() === "halls";
@@ -5545,6 +5648,17 @@ function boot() {
       } else {
         touchedObstacle = lunaticMove.touchedObstacle;
       }
+
+      terrainHexCollapse.tick(dt);
+      if (!depthsVictoryAscentActive && nudgePlayerFromHallsVoidNorthOneRadius()) {
+        if (!lunaticMove && !depthsBossSurfTerrainGhostNow()) {
+          const obsBump = obstaclesForPlayerCollision();
+          const wr = resolvePlayerAgainstRects(player.x, player.y, player.r, obsBump);
+          player.x = wr.x;
+          player.y = wr.y;
+        }
+      }
+
       if (touchedObstacle && (player.terrainTouchMult ?? 1) > 1) {
         inventory.spadesObstacleBoostUntil = simElapsed + TERRAIN_SPEED_BOOST_LINGER;
       }
@@ -5569,7 +5683,13 @@ function boot() {
         });
       }
 
-      if (!runDead && !runVictory && specialsSimUnpaused() && !isDepthsBossFightLevel()) {
+      if (
+        !runDead &&
+        !runVictory &&
+        specialsSimUnpaused() &&
+        !isDepthsBossFightLevel() &&
+        !(isHallsBossPathwayLevel() && depthsVictoryAscentActive)
+      ) {
         hexEventRuntime?.clampPlayer(player);
       }
 
@@ -5743,7 +5863,13 @@ function boot() {
         maybeCompleteDepthsVictoryAscent();
       }
 
-      if (!runDead && !runVictory && specialsSimUnpaused() && !isDepthsBossFightLevel()) {
+      if (
+        !runDead &&
+        !runVictory &&
+        specialsSimUnpaused() &&
+        !isDepthsBossFightLevel() &&
+        !(isHallsBossPathwayLevel() && depthsVictoryAscentActive)
+      ) {
         // Final authority clamp after all movement sources in this frame.
         hexEventRuntime?.clampPlayer(player);
       }
@@ -5854,6 +5980,19 @@ function boot() {
             beginDepthsVictoryAscent();
           }
         }
+      }
+
+      if (
+        !paused &&
+        !runDead &&
+        !runVictory &&
+        specialsSimUnpaused() &&
+        isHallsBossPathwayLevel() &&
+        !depthsVictoryAscentActive &&
+        hallsBossSunAscentTriggerSim != null &&
+        simElapsed >= hallsBossSunAscentTriggerSim
+      ) {
+        beginDepthsVictoryAscent({ hallsBossPathway: true });
       }
     }
 
@@ -6392,7 +6531,9 @@ function boot() {
     }
     for (const h of activeHexes) {
       const { x: cx, y: cy } = hexToWorld(h.q, h.r);
-      if (hallsPathActive) {
+      if (tiles.isHexGroundVoided(h.q, h.r)) {
+        fillHallsHexVoidPit(ctx, cx, cy, HEX_SIZE);
+      } else if (hallsPathActive) {
         fillHallsMarbleHexCell(ctx, cx, cy, HEX_SIZE, h.q, h.r, simElapsed, player.x, player.y);
       } else {
         fillPointyHexCell(ctx, cx, cy, HEX_SIZE, floorHexFill, null);
@@ -6447,6 +6588,7 @@ function boot() {
                   }
                 : undefined,
     );
+    terrainHexCollapse.draw(ctx, activeHexes);
     if (depthsPathActive) drawDepthsWhirlpoolWorld(ctx);
     if (hallsPathActive) drawHallsAtmosphereWorld(ctx, viewW, viewH);
     if (swampPathActive) drawSwampAtmosphereForegroundWorld(ctx, viewW, viewH);
@@ -6532,6 +6674,8 @@ function boot() {
       }
       drawDepthsVictoryAscentWorld(ctx, viewW, viewH);
       eldritchBlood?.drawUnderHunters(ctx);
+    } else if (hallsPathActive && isHallsBossPathwayLevel()) {
+      drawDepthsVictoryAscentWorld(ctx, viewW, viewH);
     }
     if (hallsPathActive) drawHallsReflectionsWorld(ctx);
     if (huntersEnabled) {

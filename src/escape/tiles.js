@@ -142,8 +142,98 @@ export function generateTileObstacles(tileIndex, d) {
   return rects;
 }
 
-/** @param {number} q @param {number} r @param {{ TILE_COLS: number; TILE_ROWS: number; TILE_W: number; BLOCK: number; centerX: number; centerY: number; hexSize: number; emptyTerrain?: boolean }} d */
+/**
+ * Pointy-top hex (vertex radius `radius`); matches `beginHexPathAt`-style winding for collision inset.
+ */
+function pointInPointyHex(px, py, cx, cy, radius) {
+  if (radius <= 1e-6) return false;
+  const x = px - cx;
+  const y = py - cy;
+  let sign = 0;
+  for (let i = 0; i < 6; i++) {
+    const a0 = -Math.PI / 2 + (Math.PI / 3) * i;
+    const a1 = -Math.PI / 2 + (Math.PI / 3) * ((i + 1) % 6);
+    const x0 = Math.cos(a0) * radius;
+    const y0 = Math.sin(a0) * radius;
+    const x1 = Math.cos(a1) * radius;
+    const y1 = Math.sin(a1) * radius;
+    const ex = x1 - x0;
+    const ey = y1 - y0;
+    const cross = ex * (y - y0) - ey * (x - x0);
+    if (Math.abs(cross) < 1e-9) continue;
+    const s = cross > 0 ? 1 : -1;
+    if (sign === 0) sign = s;
+    else if (s !== sign) return false;
+  }
+  return sign !== 0;
+}
+
+/** Pull pit collision slightly inward so void vs solid edges don’t stack into “invisible walls”. */
+const PIT_HEX_COLLISION_INSET_PX = 7;
+
+/**
+ * Solid AABB tiles covering the hex footprint — walkable surface is gone but the cell stays impassable.
+ * @param {number} q
+ * @param {number} r
+ * @param {{ BLOCK: number; centerX: number; centerY: number; hexSize: number }} d
+ */
+export function generateSolidHexCollisionRects(q, r, d) {
+  const { BLOCK, centerX, centerY, hexSize } = d;
+  const SQRT3 = Math.sqrt(3);
+  const halfW = (SQRT3 * hexSize) / 2;
+  const halfH = hexSize;
+  const TILE_COLS = Math.max(8, Math.ceil((halfW * 2) / BLOCK));
+  const TILE_ROWS = Math.max(8, Math.ceil((halfH * 2) / BLOCK));
+  const baseX = centerX - halfW;
+  const baseY = centerY - halfH;
+  const minRow = 0;
+  const maxRow = TILE_ROWS - 1;
+  const inHex = Array.from({ length: TILE_ROWS }, () => Array(TILE_COLS).fill(false));
+
+  function worldToHexRounded(x, y) {
+    const qf = ((SQRT3 / 3) * x - (1 / 3) * y) / hexSize;
+    const rf = ((2 / 3) * y) / hexSize;
+    let xCube = qf;
+    let zCube = rf;
+    let yCube = -xCube - zCube;
+    let rx = Math.round(xCube);
+    let ry = Math.round(yCube);
+    let rz = Math.round(zCube);
+    const xDiff = Math.abs(rx - xCube);
+    const yDiff = Math.abs(ry - yCube);
+    const zDiff = Math.abs(rz - zCube);
+    if (xDiff > yDiff && xDiff > zDiff) rx = -ry - rz;
+    else if (yDiff > zDiff) ry = -rx - rz;
+    else rz = -rx - ry;
+    return { q: rx, r: rz };
+  }
+
+  const pitInsetR = Math.max(hexSize * 0.14, hexSize - PIT_HEX_COLLISION_INSET_PX);
+  for (let row = 0; row < TILE_ROWS; row++) {
+    for (let col = 0; col < TILE_COLS; col++) {
+      const cx = baseX + col * BLOCK + BLOCK * 0.5;
+      const cy = baseY + row * BLOCK + BLOCK * 0.5;
+      const owner = worldToHexRounded(cx, cy);
+      const owned = owner.q === q && owner.r === r;
+      inHex[row][col] = owned && pointInPointyHex(cx, cy, centerX, centerY, pitInsetR);
+    }
+  }
+
+  const rects = [];
+  for (let rr = minRow; rr <= maxRow; rr++) {
+    for (let c = 0; c < TILE_COLS; c++) {
+      if (!inHex[rr][c]) continue;
+      rects.push({ x: baseX + c * BLOCK, y: baseY + rr * BLOCK, w: BLOCK, h: BLOCK, collisionOnly: true });
+    }
+  }
+  return rects;
+}
+
+/** @param {number} q @param {number} r @param {{ TILE_COLS: number; TILE_ROWS: number; TILE_W: number; BLOCK: number; centerX: number; centerY: number; hexSize: number; emptyTerrain?: boolean; inaccessiblePit?: boolean }} d */
 export function generateHexTileObstacles(q, r, d) {
+  if (d.emptyTerrain && d.inaccessiblePit) {
+    return generateSolidHexCollisionRects(q, r, d);
+  }
   if (d.emptyTerrain) return [];
   const { BLOCK, centerX, centerY, hexSize } = d;
   const SQRT3 = Math.sqrt(3);

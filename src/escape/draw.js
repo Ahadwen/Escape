@@ -184,6 +184,7 @@ export function drawObstacles(ctx, obstacles, opts = {}) {
     ctx.shadowBlur = glowBlur;
   }
   for (const o of obstacles) {
+    if (o.collisionOnly) continue;
     ctx.fillRect(o.x, o.y, o.w, o.h);
     ctx.strokeRect(o.x, o.y, o.w, o.h);
   }
@@ -222,6 +223,45 @@ export function fillPointyHexCell(ctx, cx, cy, vertexRadius, fillStyle, strokeSt
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
+}
+
+/**
+ * Collapsed halls floor: no marble — reads as an open pit (void) clipped to the hex cell.
+ */
+export function fillHallsHexVoidPit(ctx, cx, cy, vertexRadius) {
+  const fillBleed = 0.85;
+  const R = vertexRadius + fillBleed;
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (Math.PI / 3) * i;
+    const x = cx + Math.cos(a) * R;
+    const y = cy + Math.sin(a) * R;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  const g = ctx.createRadialGradient(cx, cy - vertexRadius * 0.12, 0, cx, cy, vertexRadius * 1.35);
+  g.addColorStop(0, "rgba(6, 8, 14, 0.98)");
+  g.addColorStop(0.45, "rgba(12, 14, 22, 0.99)");
+  g.addColorStop(1, "rgba(2, 3, 8, 1)");
+  ctx.fillStyle = g;
+  ctx.fill();
+
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (Math.PI / 3) * i;
+    const x = cx + Math.cos(a) * vertexRadius;
+    const y = cy + Math.sin(a) * vertexRadius;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = "rgba(180, 150, 90, 0.38)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
 }
 
 /**
