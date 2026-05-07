@@ -4075,6 +4075,7 @@ function boot() {
   }
 
   function spawnHallsHealCrystal(q, r) {
+    const hallsBossPathway = isHallsBossPathwayLevel();
     const c = hexToWorld(q, r);
     for (let i = collectibles.length - 1; i >= 0; i--) {
       const it = collectibles[i];
@@ -4089,7 +4090,7 @@ function boot() {
       plusHalf: HEAL_PICKUP_PLUS_HALF,
       plusThick: HEAL_PICKUP_ARM_THICK,
       heal: HEAL_CRYSTAL_HP,
-      hallsMarbleCrystal: true,
+      hallsMarbleCrystal: !hallsBossPathway,
       bornAt: simElapsed,
       expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
     });
@@ -6034,7 +6035,7 @@ function boot() {
               plusThick: HEAL_PICKUP_ARM_THICK,
               heal: onSwamp ? SWAMP_BOOTLEG_CRYSTAL_HP : HEAL_CRYSTAL_HP,
               bootlegSwamp: onSwamp,
-              hallsMarbleCrystal: onHalls && !onSwamp,
+              hallsMarbleCrystal: onHalls && !onSwamp && !hallsBossHealSpawns,
               bornAt: simElapsed,
               expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
             });
@@ -6045,7 +6046,7 @@ function boot() {
           pathRuntime.getCurrentPathId() === "swamp"
             ? 1
             : onHallsHeal && isHallsBossPathwayLevel()
-              ? HALLS_BOSS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT
+              ? 1
               : onHallsHeal
                 ? HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT
                 : 1;
