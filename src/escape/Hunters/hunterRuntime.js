@@ -336,6 +336,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   ];
   const HALLS_CHESS_UPWARD_TELEPORT_TRIGGER_PX = 500;
   const HALLS_CHESS_UPWARD_TELEPORT_SHIFT_PX = 900;
+  const HALLS_CHESS_SIDE_TELEPORT_TRIGGER_PX = 500;
+  const HALLS_CHESS_SIDE_TELEPORT_SHIFT_PX = 850;
   const HALLS_CHESS_UPWARD_TELEPORT_FX_SEC = 0.36;
   const HALLS_CHESS_UPWARD_TELEPORT_SWAP_AT_SEC = 0.18;
 
@@ -2461,8 +2463,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (h.hallsUpTeleportActive) {
       const tRel = elapsed - Number(h.hallsUpTeleportStartAt ?? elapsed);
       if (!h.hallsUpTeleportSwapped && tRel >= HALLS_CHESS_UPWARD_TELEPORT_SWAP_AT_SEC) {
-        const teleY = Number(h.y) - HALLS_CHESS_UPWARD_TELEPORT_SHIFT_PX;
-        if (!hallsChessPlacementBlocked(h.x, teleY, h.r)) {
+        const teleX = Number(h.hallsUpTeleportTargetX ?? h.x);
+        const teleY = Number(h.hallsUpTeleportTargetY ?? h.y);
+        if (!hallsChessPlacementBlocked(teleX, teleY, h.r)) {
+          h.x = teleX;
           h.y = teleY;
           h.hallsGliding = false;
           h.hallsKnightStage = null;
@@ -2483,6 +2487,21 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsUpTeleportActive = true;
       h.hallsUpTeleportStartAt = elapsed;
       h.hallsUpTeleportSwapped = false;
+      h.hallsUpTeleportTargetX = h.x;
+      h.hallsUpTeleportTargetY = Number(h.y) - HALLS_CHESS_UPWARD_TELEPORT_SHIFT_PX;
+      h.hallsTeleportGhostX = h.x;
+      h.hallsTeleportGhostY = h.y;
+      h.hallsTeleportFxUntil = elapsed + HALLS_CHESS_UPWARD_TELEPORT_FX_SEC;
+      return;
+    }
+    const sideDx = h.x - player.x;
+    if (Math.abs(sideDx) >= HALLS_CHESS_SIDE_TELEPORT_TRIGGER_PX) {
+      h.hallsUpTeleportActive = true;
+      h.hallsUpTeleportStartAt = elapsed;
+      h.hallsUpTeleportSwapped = false;
+      h.hallsUpTeleportTargetX =
+        Number(h.x) + (sideDx < 0 ? HALLS_CHESS_SIDE_TELEPORT_SHIFT_PX : -HALLS_CHESS_SIDE_TELEPORT_SHIFT_PX);
+      h.hallsUpTeleportTargetY = h.y;
       h.hallsTeleportGhostX = h.x;
       h.hallsTeleportGhostY = h.y;
       h.hallsTeleportFxUntil = elapsed + HALLS_CHESS_UPWARD_TELEPORT_FX_SEC;
