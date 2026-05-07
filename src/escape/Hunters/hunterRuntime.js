@@ -322,6 +322,22 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     /** @type {{ at: number; fn: () => void }[]} */
     spawnScheduled: [],
   };
+  const hallsDisplayFiveChessBurstState = {
+    nextSpawnAt: 0,
+  };
+  const HALLS_DISPLAY_FIVE_CHESS_BURST_INTERVAL_SEC = 19;
+  const HALLS_DISPLAY_FIVE_CHESS_BURST_SIZE = 2;
+  const HALLS_DISPLAY_FIVE_CHESS_BURST_LIFETIME_SEC = 10;
+  const HALLS_DISPLAY_FIVE_CHESS_BURST_TYPES = [
+    HALLS_PIECE_IDS.PAWN,
+    HALLS_PIECE_IDS.BISHOP,
+    HALLS_PIECE_IDS.KNIGHT,
+    HALLS_PIECE_IDS.ROOK,
+  ];
+  const HALLS_CHESS_UPWARD_TELEPORT_TRIGGER_PX = 500;
+  const HALLS_CHESS_UPWARD_TELEPORT_SHIFT_PX = 900;
+  const HALLS_CHESS_UPWARD_TELEPORT_FX_SEC = 0.36;
+  const HALLS_CHESS_UPWARD_TELEPORT_SWAP_AT_SEC = 0.18;
 
   let spawnDifficultyAnchorSurvival = 0;
   let boneGhostNextSpawnAt = null;
@@ -1384,7 +1400,6 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     return (
       outOfBoundsCircle(c) ||
       isWorldPointOnForgeRouletteBarrierTile(cx, cy) ||
-      collidesAnyObstacle(c) ||
       !!collidesValiantEnemyShockFieldDep?.(c, t)
     );
   }
@@ -1424,7 +1439,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const prevDist = dist;
     const { touchedObstacle } = moveCircleWithCollisions(h, vx, vy, spDt, {
       blockValiantEnemyShockFields: true,
-      ignoreObstacles: !!h.boneSwarmPhasing,
+      ignoreObstacles: true,
     });
     const nd = Math.hypot(destX - h.x, destY - h.y);
     if (nd <= eps) {
@@ -1455,7 +1470,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       const prevAbs = Math.abs(dx);
       const { touchedObstacle } = moveCircleWithCollisions(h, vx, 0, spDt, {
         blockValiantEnemyShockFields: true,
-        ignoreObstacles: !!h.boneSwarmPhasing,
+        ignoreObstacles: true,
       });
       const nd = Math.abs(destX - h.x);
       if (nd <= eps) {
@@ -1475,7 +1490,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     const prevAbs = Math.abs(dy);
     const { touchedObstacle } = moveCircleWithCollisions(h, 0, vy, spDt, {
       blockValiantEnemyShockFields: true,
-      ignoreObstacles: !!h.boneSwarmPhasing,
+      ignoreObstacles: true,
     });
     const nd = Math.abs(destY - h.y);
     if (nd <= eps) {
@@ -2442,6 +2457,37 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   /** @param {any} h @param {{ x: number; y: number; r?: number }} target */
   function hallsTickChessPieceMovement(h, elapsed, spDt, target) {
     const piece = h.type;
+    const player = getPlayer();
+    if (h.hallsUpTeleportActive) {
+      const tRel = elapsed - Number(h.hallsUpTeleportStartAt ?? elapsed);
+      if (!h.hallsUpTeleportSwapped && tRel >= HALLS_CHESS_UPWARD_TELEPORT_SWAP_AT_SEC) {
+        const teleY = Number(h.y) - HALLS_CHESS_UPWARD_TELEPORT_SHIFT_PX;
+        if (!hallsChessPlacementBlocked(h.x, teleY, h.r)) {
+          h.y = teleY;
+          h.hallsGliding = false;
+          h.hallsKnightStage = null;
+          h.hallsDestX = null;
+          h.hallsDestY = null;
+          h.hallsNextThinkAt = elapsed;
+        }
+        h.hallsUpTeleportSwapped = true;
+      }
+      if (tRel >= HALLS_CHESS_UPWARD_TELEPORT_FX_SEC) {
+        h.hallsUpTeleportActive = false;
+        h.hallsTeleportFxUntil = 0;
+      } else {
+        return;
+      }
+    }
+    if (player.y <= h.y - HALLS_CHESS_UPWARD_TELEPORT_TRIGGER_PX) {
+      h.hallsUpTeleportActive = true;
+      h.hallsUpTeleportStartAt = elapsed;
+      h.hallsUpTeleportSwapped = false;
+      h.hallsTeleportGhostX = h.x;
+      h.hallsTeleportGhostY = h.y;
+      h.hallsTeleportFxUntil = elapsed + HALLS_CHESS_UPWARD_TELEPORT_FX_SEC;
+      return;
+    }
     const glide =
       HALLS_CHESS_GLIDE_SPEED_PX_S *
       runLevelEnemySpeedMult() *
@@ -3918,6 +3964,26 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     return !!(depthsPathActive() && getSuppressDepthsBossNormalSpawnsDep?.());
   }
 
+  function spawnHallsDisplayFiveChessBurst(atElapsed) {
+    if (!isHallsBossPathwaySpawnYConstrained()) return;
+    const p = getPlayer();
+    const pool = HALLS_DISPLAY_FIVE_CHESS_BURST_TYPES.slice();
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    for (let i = 0; i < HALLS_DISPLAY_FIVE_CHESS_BURST_SIZE && i < pool.length; i++) {
+      const pieceType = pool[i];
+      const ang = randomSpawnAngleAroundPlayer();
+      const d = rand(300, 780);
+      const x = p.x + Math.cos(ang) * d;
+      const y = p.y + Math.sin(ang) * d;
+      spawnHunter(pieceType, x, y, { dieAtOverride: atElapsed + HALLS_DISPLAY_FIVE_CHESS_BURST_LIFETIME_SEC });
+    }
+  }
+
   function tickSpawnWavesAndLifetime() {
     const elapsed = getSimElapsed();
     const bossNoSpawn = depthsBossSuppressNormalSpawns();
@@ -3942,6 +4008,17 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       else spawnState.spawnScheduled.shift()?.fn();
     }
     if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn) advanceSpawnWave();
+    if (isHallsBossPathwaySpawnYConstrained()) {
+      if (!(hallsDisplayFiveChessBurstState.nextSpawnAt > 0)) {
+        hallsDisplayFiveChessBurstState.nextSpawnAt = elapsed + HALLS_DISPLAY_FIVE_CHESS_BURST_INTERVAL_SEC;
+      }
+      while (elapsed >= hallsDisplayFiveChessBurstState.nextSpawnAt) {
+        spawnHallsDisplayFiveChessBurst(hallsDisplayFiveChessBurstState.nextSpawnAt);
+        hallsDisplayFiveChessBurstState.nextSpawnAt += HALLS_DISPLAY_FIVE_CHESS_BURST_INTERVAL_SEC;
+      }
+    } else {
+      hallsDisplayFiveChessBurstState.nextSpawnAt = 0;
+    }
 
     if (bossNoSpawn && depthsPathActive()) {
       let hasEldritch = false;
@@ -4112,6 +4189,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     spawnDifficultyAnchorSurvival = 0;
     const elapsed = getSimElapsed();
     spawnState.nextSpawnAt = elapsed + HUNTER_FIRST_WAVE_AT_SEC;
+    hallsDisplayFiveChessBurstState.nextSpawnAt = elapsed + HALLS_DISPLAY_FIVE_CHESS_BURST_INTERVAL_SEC;
   }
 
   /** Depths boss (display L5): strip ambient hunters / shells / bolts before the chase. */
@@ -4134,6 +4212,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     spawnState.spawnInterval = getSpawnIntervalFromRunTime();
     const elapsed = getSimElapsed();
     spawnState.nextSpawnAt = elapsed + spawnState.spawnInterval;
+    hallsDisplayFiveChessBurstState.nextSpawnAt = elapsed + HALLS_DISPLAY_FIVE_CHESS_BURST_INTERVAL_SEC;
   }
 
   function draw(ctx) {

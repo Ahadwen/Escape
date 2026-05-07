@@ -1318,6 +1318,39 @@ export function drawHunterBody(ctx, h, opts = {}) {
         ctx.restore();
       }
     }
+    const hallsTeleUntil = Number(h.hallsTeleportFxUntil ?? 0);
+    if (hallsTeleUntil > tNow) {
+      const gx = Number(h.hallsTeleportGhostX);
+      const gy = Number(h.hallsTeleportGhostY);
+      if (Number.isFinite(gx) && Number.isFinite(gy)) {
+        const rem = hallsTeleUntil - tNow;
+        const u = clamp(rem / 0.36, 0, 1);
+        const pulse = 0.5 + 0.5 * Math.sin(tNow * 28 + u * 6);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const R = r * 2.1 * (0.55 + (1 - u) * 0.5);
+        const grd = ctx.createRadialGradient(gx, gy, 2, gx, gy, R);
+        grd.addColorStop(0, `rgba(255, 250, 255, ${0.34 * (1 - u) * pulse})`);
+        grd.addColorStop(0.25, `rgba(120, 200, 255, ${0.4 * (1 - u * 0.5)})`);
+        grd.addColorStop(0.55, `rgba(40, 20, 80, ${0.52 * (1 - u * 0.3)})`);
+        grd.addColorStop(1, "rgba(4, 0, 10, 0)");
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(gx, gy, R, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = `rgba(224, 242, 255, ${0.52 * (1 - u * 0.4)})`;
+        ctx.lineWidth = 3 + (1 - u) * 4;
+        ctx.beginPath();
+        ctx.arc(gx, gy, R * (0.42 + 0.12 * pulse), 0, TAU);
+        ctx.stroke();
+        ctx.setLineDash([7, 11]);
+        ctx.beginPath();
+        ctx.arc(gx, gy, R * 0.72, -tNow * 2.2, -tNow * 2.2 + TAU * 0.88);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
     if (h.type === "hallsRook" && !h.hallsKingLineProjectile) {
       const pulse = 0.5 + 0.5 * Math.sin(tNow * 7.1 + Number(h.bornAt ?? 0) * 0.3);
       const auraR = r + 92 + pulse * 10;
