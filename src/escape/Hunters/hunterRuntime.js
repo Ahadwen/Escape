@@ -340,6 +340,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_CHESS_SIDE_TELEPORT_SHIFT_PX = 850;
   const HALLS_CHESS_UPWARD_TELEPORT_FX_SEC = 0.36;
   const HALLS_CHESS_UPWARD_TELEPORT_SWAP_AT_SEC = 0.18;
+  const HALLS_CHESS_TELEPORT_MIN_REMAINING_LIFE_SEC = 1.5;
 
   let spawnDifficultyAnchorSurvival = 0;
   let boneGhostNextSpawnAt = null;
@@ -2460,6 +2461,11 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function hallsTickChessPieceMovement(h, elapsed, spDt, target) {
     const piece = h.type;
     const player = getPlayer();
+    const teleportAllowed = Number(h.dieAt ?? 0) - elapsed > HALLS_CHESS_TELEPORT_MIN_REMAINING_LIFE_SEC;
+    if (!teleportAllowed && h.hallsUpTeleportActive) {
+      h.hallsUpTeleportActive = false;
+      h.hallsTeleportFxUntil = 0;
+    }
     if (h.hallsUpTeleportActive) {
       const tRel = elapsed - Number(h.hallsUpTeleportStartAt ?? elapsed);
       if (!h.hallsUpTeleportSwapped && tRel >= HALLS_CHESS_UPWARD_TELEPORT_SWAP_AT_SEC) {
@@ -2484,6 +2490,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
     }
     if (player.y <= h.y - HALLS_CHESS_UPWARD_TELEPORT_TRIGGER_PX) {
+      if (!teleportAllowed) return;
       h.hallsUpTeleportActive = true;
       h.hallsUpTeleportStartAt = elapsed;
       h.hallsUpTeleportSwapped = false;
@@ -2496,6 +2503,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
     const sideDx = h.x - player.x;
     if (Math.abs(sideDx) >= HALLS_CHESS_SIDE_TELEPORT_TRIGGER_PX) {
+      if (!teleportAllowed) return;
       h.hallsUpTeleportActive = true;
       h.hallsUpTeleportStartAt = elapsed;
       h.hallsUpTeleportSwapped = false;
