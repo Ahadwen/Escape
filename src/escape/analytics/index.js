@@ -59,32 +59,30 @@ export function createAnalytics(deps) {
 
     onSafehouseLevelUp() {
       const ctx = segmentContext();
-      ensureSupabaseClient().then(() => {
-        tracker.closeSegment({ ...ctx, outcome: "safehouse_level_up" });
-        tracker.startSegment();
+      const closed = tracker.takeSegmentClose({ ...ctx, outcome: "safehouse_level_up" });
+      tracker.startSegment();
+      ensureSupabaseClient().then((client) => {
+        tracker.flushSegmentClose(closed, client);
       });
     },
 
     onDeath() {
       const ctx = segmentContext();
-      ensureSupabaseClient().then(() => {
-        tracker.closeSegment({ ...ctx, outcome: "death" });
-        tracker.endRun("death");
+      const closed = tracker.takeSegmentClose({ ...ctx, outcome: "death" });
+      const ended = tracker.takeEndRun("death");
+      ensureSupabaseClient().then((client) => {
+        tracker.flushSegmentClose(closed, client);
+        tracker.flushEndRun(ended, client);
       });
     },
 
     onVictory() {
       const ctx = segmentContext();
-      ensureSupabaseClient().then(() => {
-        tracker.closeSegment({ ...ctx, outcome: "victory" });
-        tracker.endRun("victory");
-      });
-    },
-
-    onAbandon() {
-      const ctx = segmentContext();
-      ensureSupabaseClient().then(() => {
-        tracker.abandonOpenSegment(ctx.simElapsed, ctx.difficultyClockSec, ctx.wave, ctx.hunters);
+      const closed = tracker.takeSegmentClose({ ...ctx, outcome: "victory" });
+      const ended = tracker.takeEndRun("victory");
+      ensureSupabaseClient().then((client) => {
+        tracker.flushSegmentClose(closed, client);
+        tracker.flushEndRun(ended, client);
       });
     },
 
@@ -114,7 +112,6 @@ function createNoopAnalytics() {
     onSafehouseLevelUp: noop,
     onDeath: noop,
     onVictory: noop,
-    onAbandon: noop,
     recordDamageFromOpts: noop,
     notePlayerPosition: noop,
     flush: noop,

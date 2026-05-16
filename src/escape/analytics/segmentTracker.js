@@ -117,11 +117,14 @@ export function createSegmentTracker(deps) {
   }
 
   /**
+   * Snapshot segment close synchronously (before async Supabase flush).
    * @param {SegmentCloseContext} ctx
+   * @returns {{ segmentRow: object; achievementKeys: string[]; safehouseClockSec: number | null } | null}
    */
-  function closeSegment(ctx) {
-    if (!openSegment || !runId) return;
+  function takeSegmentClose(ctx) {
+    if (!openSegment || !runId) return null;
     const seg = openSegment;
+    const activeRunId = runId;
     openSegment = null;
 
     const simEndedAt = ctx.simElapsed;
@@ -149,9 +152,9 @@ export function createSegmentTracker(deps) {
       };
     }
 
-    const row = {
+    const segmentRow = {
       id: seg.id,
-      run_id: runId,
+      run_id: activeRunId,
       player_id: getPlayerId(),
       run_level: getRunLevel(),
       display_level: getRunLevel() + 1,
@@ -173,10 +176,22 @@ export function createSegmentTracker(deps) {
       game_version: getGameVersion(),
     };
 
-    const client = getClient();
-    enqueueAnalyticsJob(client, { table: "analytics_level_segments", op: "insert", row });
+    return {
+      segmentRow,
+      achievementKeys: achievementKeysFromSegment(segmentRow),
+      safehouseClockSec: ctx.outcome === "safehouse_level_up" ? difficultyClockSec : null,
+    };
+  }
 
-    const achievementKeys = achievementKeysFromSegment(row);
+  /**
+   * @param {{ segmentRow: object; achievementKeys: string[]; safehouseClockSec: number | null } | null} prepared
+   * @param {import('@supabase/supabase-js').SupabaseClient | null} client
+   */
+  function flushSegmentClose(prepared, client) {
+    if (!prepared) return;
+    const { segmentRow, achievementKeys, safehouseClockSec } = prepared;
+    enqueueAnalyticsJob(client, { table: "analytics_level_segments", op: "insert", row: segmentRow });
+    const unlockedAt = new Date().toISOString();
     for (const achievement_key of achievementKeys) {
       enqueueAnalyticsJob(client, {
         table: "analytics_player_achievements",
@@ -184,58 +199,60 @@ export function createSegmentTracker(deps) {
         row: {
           player_id: getPlayerId(),
           achievement_key,
-          unlocked_at: new Date().toISOString(),
+          unlocked_at: unlockedAt,
         },
       });
     }
-
-    if (ctx.outcome === "safehouse_level_up") {
-      prevSafehouseDifficultyClock = difficultyClockSec;
+    if (safehouseClockSec != null) {
+      prevSafehouseDifficultyClock = safehouseClockSec;
     }
   }
 
   /**
-   * @param {'victory' | 'death' | 'abandon'} outcome
+   * @param {'victory' | 'death'} outcome
+   * @returns {{ id: string; outcome: string; ended_at: string } | null}
    */
-  function endRun(outcome) {
-    if (!runId) return;
-    const client = getClient();
+  function takeEndRun(outcome) {
+    if (!runId) return null;
+    const prepared = {
+      id: runId,
+      outcome,
+      ended_at: new Date().toISOString(),
+    };
+    runId = null;
+    openSegment = null;
+    return prepared;
+  }
+
+  /**
+   * @param {{ id: string; outcome: string; ended_at: string } | null} prepared
+   * @param {import('@supabase/supabase-js').SupabaseClient | null} client
+   */
+  function flushEndRun(prepared, client) {
+    if (!prepared) return;
     enqueueAnalyticsJob(client, {
       table: "analytics_runs",
       op: "update",
       matchColumn: "id",
       row: {
-        id: runId,
+        id: prepared.id,
         patch: {
-          ended_at: new Date().toISOString(),
-          outcome,
+          ended_at: prepared.ended_at,
+          outcome: prepared.outcome,
         },
       },
     });
-    runId = null;
-    openSegment = null;
-  }
-
-  function abandonOpenSegment(simElapsed, difficultyClockSec, wave, hunters) {
-    if (!openSegment) return;
-    closeSegment({
-      outcome: "abandon",
-      simElapsed,
-      difficultyClockSec,
-      wave,
-      hunters,
-    });
-    endRun("abandon");
   }
 
   return {
     beginRun,
     startSegment,
-    closeSegment,
-    endRun,
+    takeSegmentClose,
+    flushSegmentClose,
+    takeEndRun,
+    flushEndRun,
     recordDamage,
     notePlayerPositionForDeath,
-    abandonOpenSegment,
     getRunId: () => runId,
     hasOpenSegment: () => !!openSegment,
   };

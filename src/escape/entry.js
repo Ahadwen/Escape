@@ -7230,12 +7230,6 @@ function boot() {
 
   raf = window.requestAnimationFrame(frame);
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && !runDead && !runVictory && analytics) {
-      analytics.onAbandon();
-    }
-  });
-
   window.addEventListener(
     "beforeunload",
     () => {
