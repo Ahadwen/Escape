@@ -1,3 +1,4 @@
+import { ensureSupabaseClient, getSupabaseClient } from "./client.js";
 import { isPlayerSyncedToSupabase, markPlayerSyncedToSupabase } from "./session.js";
 
 const QUEUE_LS_KEY = "escape-analytics-queue";
@@ -170,20 +171,30 @@ export async function flushAnalyticsQueue(client) {
  * @param {object} job
  */
 export function enqueueAnalyticsJob(client, job) {
-  if (!client) {
-    const q = readQueue();
-    q.push(job);
-    writeQueue(q);
-    return;
-  }
-
-  flushChain = flushChain
-    .then(() => executeJob(client, job))
-    .catch((err) => {
-      if (shouldDropFailedJob(err)) return;
-      logAnalyticsError(job, err);
+  const run = (resolvedClient) => {
+    if (!resolvedClient) {
       const q = readQueue();
       q.push(job);
       writeQueue(q);
-    });
+      return;
+    }
+    flushChain = flushChain
+      .then(() => executeJob(resolvedClient, job))
+      .catch((err) => {
+        if (shouldDropFailedJob(err)) return;
+        logAnalyticsError(job, err);
+        const q = readQueue();
+        q.push(job);
+        writeQueue(q);
+      });
+  };
+
+  if (client) {
+    run(client);
+    return;
+  }
+
+  flushChain = flushChain.then(() =>
+    ensureSupabaseClient().then((resolved) => run(resolved ?? getSupabaseClient())),
+  );
 }

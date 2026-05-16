@@ -1,9 +1,8 @@
-import { getSupabaseClient } from "./client.js";
+import { ensureSupabaseClient, getSupabaseClient } from "./client.js";
 import { flushAnalyticsQueue, migrateAnalyticsQueue } from "./flush.js";
 import { resolveDamageSourceKey } from "./damageSource.js";
 import { getOrCreatePlayerId } from "./session.js";
 import { createSegmentTracker } from "./segmentTracker.js";
-import { isAnalyticsConfigured } from "./platform.js";
 
 /** Gate for future opt-in banner. */
 export const ANALYTICS_ENABLED = true;
@@ -22,17 +21,15 @@ export const ANALYTICS_ENABLED = true;
  * @property {(x: number, y: number) => string | null} [deps.resolveSpecialHexAt]
  */
 export function createAnalytics(deps) {
-  if (!ANALYTICS_ENABLED || !isAnalyticsConfigured()) {
+  if (!ANALYTICS_ENABLED) {
     return createNoopAnalytics();
   }
 
   const playerId = getOrCreatePlayerId();
-  const client = getSupabaseClient();
   migrateAnalyticsQueue();
-  flushAnalyticsQueue(client).catch(() => {});
 
   const tracker = createSegmentTracker({
-    getClient: () => client,
+    getClient: () => getSupabaseClient(),
     getPlayerId: () => playerId,
     getHero: deps.getHero,
     getRunLevel: deps.getRunLevel,
@@ -40,6 +37,10 @@ export function createAnalytics(deps) {
     getInventory: deps.getInventory,
     getPendingCard: deps.getPendingCard,
     resolveSpecialHexAt: deps.resolveSpecialHexAt,
+  });
+
+  ensureSupabaseClient().then((client) => {
+    if (client) flushAnalyticsQueue(client).catch(() => {});
   });
 
   function segmentContext() {
@@ -53,30 +54,38 @@ export function createAnalytics(deps) {
 
   return {
     beginRun() {
-      tracker.beginRun();
+      ensureSupabaseClient().then(() => tracker.beginRun());
     },
 
     onSafehouseLevelUp() {
       const ctx = segmentContext();
-      tracker.closeSegment({ ...ctx, outcome: "safehouse_level_up" });
-      tracker.startSegment();
+      ensureSupabaseClient().then(() => {
+        tracker.closeSegment({ ...ctx, outcome: "safehouse_level_up" });
+        tracker.startSegment();
+      });
     },
 
     onDeath() {
       const ctx = segmentContext();
-      tracker.closeSegment({ ...ctx, outcome: "death" });
-      tracker.endRun("death");
+      ensureSupabaseClient().then(() => {
+        tracker.closeSegment({ ...ctx, outcome: "death" });
+        tracker.endRun("death");
+      });
     },
 
     onVictory() {
       const ctx = segmentContext();
-      tracker.closeSegment({ ...ctx, outcome: "victory" });
-      tracker.endRun("victory");
+      ensureSupabaseClient().then(() => {
+        tracker.closeSegment({ ...ctx, outcome: "victory" });
+        tracker.endRun("victory");
+      });
     },
 
     onAbandon() {
       const ctx = segmentContext();
-      tracker.abandonOpenSegment(ctx.simElapsed, ctx.difficultyClockSec, ctx.wave, ctx.hunters);
+      ensureSupabaseClient().then(() => {
+        tracker.abandonOpenSegment(ctx.simElapsed, ctx.difficultyClockSec, ctx.wave, ctx.hunters);
+      });
     },
 
     /** @param {number} appliedAmount HP/temp HP actually removed */
@@ -91,7 +100,9 @@ export function createAnalytics(deps) {
     },
 
     flush() {
-      flushAnalyticsQueue(client).catch(() => {});
+      ensureSupabaseClient().then((client) => {
+        if (client) flushAnalyticsQueue(client).catch(() => {});
+      });
     },
   };
 }

@@ -30,11 +30,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify Supabase build secrets
+      - name: Require Supabase secrets
         run: |
           if [ -z "${{ secrets.VITE_SUPABASE_URL }}" ] || [ -z "${{ secrets.VITE_SUPABASE_ANON_KEY }}" ]; then
-            echo "::warning::Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Settings → Secrets and variables → Actions"
+            echo "::error::Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Settings → Secrets and variables → Actions"
+            exit 1
           fi
+
+      - name: Write escape-analytics.json for production bundle
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          node -e "const fs=require('fs'); fs.mkdirSync('public',{recursive:true}); fs.writeFileSync('public/escape-analytics.json', JSON.stringify({ url: process.env.SUPABASE_URL, key: process.env.SUPABASE_KEY }));"
 
       - name: Build
         run: npm run build

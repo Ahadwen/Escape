@@ -4,6 +4,7 @@ dist/
 .env
 .env.local
 .env.*.local
+public/escape-analytics.json
 
 # gh-pages writes a nested git clone here; committing it registers a broken submodule (git exits 128 in CI).
 **/node_modules/.cache/gh-pages/

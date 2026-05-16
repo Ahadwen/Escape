@@ -1,4 +1,4 @@
-import { makeDefaultCardEffect } from "./defaultCardEffects.js";
+import { getItemRulesForCharacter } from "./itemRulesRegistry.js";
 
 /**
  * Marks cards granted only by arena / gauntlet (and future) **special hex events** — not random map drops.
@@ -16,16 +16,13 @@ export function makeJokerEventRewardCard(characterId = "knight") {
   const rank = ranks[Math.floor(Math.random() * ranks.length)];
   const sourceSuits = ["diamonds", "hearts", "clubs", "spades"];
   const effectBorrowedSuit = sourceSuits[Math.floor(Math.random() * sourceSuits.length)];
-  const ctx = {
-    characterId,
-    diamondCooldownAbilityIds: ["dash", "burst", "decoy"],
-  };
+  const itemRules = getItemRulesForCharacter(characterId);
   return {
     id: `joker-event-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
     suit: "joker",
     rank,
     effectBorrowedSuit,
-    effect: makeDefaultCardEffect(effectBorrowedSuit, rank, ctx),
+    effect: itemRules.makeCardEffect(effectBorrowedSuit, rank),
     pickupSource: JOKER_REWARD_PICKUP_SOURCE,
   };
 }
