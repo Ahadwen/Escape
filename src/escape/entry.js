@@ -158,6 +158,7 @@ import { createPlayerDamage } from "./playerDamage.js";
 import { createRunLogger, instrumentObjectMethods } from "./debug/runLogger.js";
 import { createPathRuntime } from "./run/pathRuntime.js";
 import { applyPathShellTheme } from "./hud/pathShellTheme.js";
+import { createAnalytics } from "./analytics/index.js";
 
 /** Procedural hex floor — near REFERENCE slate fill (`rgba(15,23,42,…)` family). */
 const FLOOR_HEX_FILL = "#0f172a";
@@ -845,6 +846,29 @@ function boot() {
   inventory.heartsRegenPerSec = 0;
   inventory.heartsRegenBank = 0;
 
+  /** @type {ReturnType<typeof createAnalytics>} */
+  let analytics = createAnalytics({
+    getHero: () => activeCharacterId,
+    getRunLevel: () => runLevel,
+    getPathId: () => pathRuntime.getCurrentPathId(),
+    getInventory: () => inventory,
+    getSimElapsed: () => simElapsed,
+    getDifficultyClockSec: () => safehouseHexFlow.getDifficultyClockSec(simElapsed),
+    getWave: () => hunterRuntime?.spawnState?.wave ?? 0,
+    getHunterCount: () => hunterRuntime?.entities?.hunters?.length ?? 0,
+    getPendingCard: () => cardPickup?.getPendingCard() ?? null,
+    resolveSpecialHexAt: (x, y) => {
+      const h = worldToHex(x, y);
+      if (specials.isSafehouseHexTile(h.q, h.r)) return "safehouse";
+      if (specials.isArenaHexTile(h.q, h.r)) return "arena";
+      if (specials.isSurgeHexTile(h.q, h.r)) return "gauntlet";
+      if (specials.isRouletteHexTile(h.q, h.r)) return "roulette";
+      if (specials.isForgeHexTile(h.q, h.r)) return "forge";
+      if (specials.isHallsEventHexTile?.(h.q, h.r)) return "halls_event";
+      return null;
+    },
+  });
+
   const rogueWorld = createRogueWorld();
   rogueWorld.reset(0, player);
 
@@ -1186,6 +1210,7 @@ function boot() {
    * @param {{ pathsLabel: string; timeSec: number; totalWaves: number; healCrystals: number }} stats
    */
   function showVictoryScreen(stats) {
+    analytics.onVictory();
     if (victoryStatPathsEl) victoryStatPathsEl.textContent = stats.pathsLabel;
     if (victoryStatTimeEl) victoryStatTimeEl.textContent = `${stats.timeSec.toFixed(1)}s`;
     if (victoryStatWavesEl) victoryStatWavesEl.textContent = String(stats.totalWaves);
@@ -1211,7 +1236,7 @@ function boot() {
       typeof character.getLunaticSprintDamageImmune === "function" &&
       character.getLunaticSprintDamageImmune(),
     getIsValiant: () => activeCharacterId === "valiant",
-    applyValiantIncomingDamage: (amount, opts) => {
+    applyValiantIncomingDamage: (amount, opts) =>
       valiantWorld.applyDamage(amount, opts, {
         getSimElapsed: () => simElapsed,
         getPlayer: () => player,
@@ -1232,8 +1257,7 @@ function boot() {
           }
         },
         onWillDeath: () => playerDamage.killPlayerImmediate(),
-      });
-    },
+      }),
     isDashCoolingDown: () => (typeof character.isDashCoolingDown === "function" ? character.isDashCoolingDown(simElapsed) : false),
     getBulwarkParryActive: () =>
       activeCharacterId === "bulwark" &&
@@ -1252,6 +1276,7 @@ function boot() {
       }
     },
     onPlayerDeath: () => {
+      analytics.onDeath();
       manualPause = false;
       handsResetPause = false;
       runDead = true;
@@ -3634,24 +3659,30 @@ function boot() {
       dmgToApply += getSwampBootlegFragileExtra(inventory, simElapsed);
     }
     const damageBonus = Math.max(0, dmgToApply - baseDamage);
-    playerDamage.damagePlayer(dmgToApply, finalOpts);
-    if (dmgToApply > 0 && !finalOpts?.swampBootlegBloodTax) {
+    const appliedDamage = playerDamage.damagePlayer(dmgToApply, finalOpts);
+    if (appliedDamage > 0) {
+      analytics.recordDamageFromOpts(appliedDamage, finalOpts);
+      const noteX = Number.isFinite(finalOpts?.sourceX) ? finalOpts.sourceX : player.x;
+      const noteY = Number.isFinite(finalOpts?.sourceY) ? finalOpts.sourceY : player.y;
+      analytics.notePlayerPosition(noteX, noteY);
+    }
+    if (appliedDamage > 0 && !finalOpts?.swampBootlegBloodTax) {
       onSwampBootlegPlayerDamageHit(inventory, simElapsed);
     }
-    if (pathRuntime.getCurrentPathId() === "swamp" && runLevel >= 2 && Number(dmgToApply) > 0) {
+    if (pathRuntime.getCurrentPathId() === "swamp" && runLevel >= 2 && appliedDamage > 0) {
       playerDamage.applySwampHitSlow();
     }
-    if (pathRuntime.getCurrentPathId() === "bone" && Number(finalAmount) > 0) {
+    if (pathRuntime.getCurrentPathId() === "bone" && appliedDamage > 0) {
       boneBlindDebuffPeakEnd = simElapsed + BONE_BLIND_DEBUFF_PEAK_SEC;
       boneBlindDebuffFadeEnd = boneBlindDebuffPeakEnd + BONE_BLIND_DEBUFF_FADE_SEC;
       boneBlindDebuffFromBlueLaser = !!finalOpts?.laserBlueSlow;
     }
-    if (dmgToApply > 0) spawnDamagePopup(dmgToApply, damageBonus, finalOpts);
+    if (appliedDamage > 0) spawnDamagePopup(appliedDamage, damageBonus, finalOpts);
     if (
       pathRuntime.getCurrentPathId() === "swamp" &&
       !finalOpts?.swampInfectionBurst &&
       !finalOpts?.swampBootlegBloodTax &&
-      (finalOpts?.swampApplyInfection || dmgToApply > 0) &&
+      (finalOpts?.swampApplyInfection || appliedDamage > 0) &&
       simElapsed >= swampInfectionChainLockUntil
     ) {
       const instanceId = finalOpts?.swampDamageInstanceId;
@@ -3900,6 +3931,7 @@ function boot() {
     prevKnightClubsInvisActive = false;
     prevKnightBurstTerrainPhase = false;
     syncDeckHud();
+    analytics.beginRun();
   }
 
   const devHeroSelect = mountDevActiveHeroSelect(document, {
@@ -3993,6 +4025,7 @@ function boot() {
       safehouseHexFlow.closeLevelModal(safehouseLevelModalEl, () => clearMovementKeys());
       safehouseHexFlow.applyLevelUpAccepted({
         onRunLevelIncrement: () => {
+          analytics.onSafehouseLevelUp();
           runLevel += 1;
           pathRuntime.ensurePathAssignedForLevel(runLevel);
           notePathVisitedForRun();
@@ -4402,6 +4435,10 @@ function boot() {
     isCardPickupPaused: () => cardPickup?.isPaused() ?? false,
   }), "events", runLogger, { skip: ["tick", "postHunterTick", "getArenaDrawState", "getSurgeDrawState"] });
 
+  if (hasLockedInitialHeroFromModal) {
+    analytics.beginRun();
+  }
+
   function performFullRunResetFromGameOverOverlay() {
     if ((!runDead && !runVictory) || !hunterRuntime) return;
     hideDeathScreen();
@@ -4536,6 +4573,7 @@ function boot() {
     snapCameraToPlayer();
     pathsVisitedThisRun.clear();
     runHealCrystalsCollected = 0;
+    analytics.beginRun();
   }
 
   function performFullRunResetAfterDeath() {
@@ -6235,6 +6273,7 @@ function boot() {
           onOuterPenalty: () => {
             damagePlayerThroughPath(ROULETTE_OUTER_PENALTY_HP, {
               rouletteHexOuterPenalty: true,
+              envKind: "roulette_outer",
               floorHpAtMin: 1,
             });
             rouletteHexFlow.setScreenFlashUntil(simElapsed + 0.4);
@@ -6265,6 +6304,7 @@ function boot() {
           onOuterPenalty: () => {
             damagePlayerThroughPath(FORGE_OUTER_PENALTY_HP, {
               rouletteHexOuterPenalty: true,
+              envKind: "forge_outer",
               floorHpAtMin: 1,
             });
             forgeHexFlow.setScreenFlashUntil(simElapsed + 0.4);
@@ -7190,9 +7230,16 @@ function boot() {
 
   raf = window.requestAnimationFrame(frame);
 
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && !runDead && !runVictory && analytics) {
+      analytics.onAbandon();
+    }
+  });
+
   window.addEventListener(
     "beforeunload",
     () => {
+      analytics.flush();
       window.cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onDeathRetryKeydown);
       window.removeEventListener("keydown", onManualPauseKeydown);

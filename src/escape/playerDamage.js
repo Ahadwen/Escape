@@ -122,6 +122,7 @@ export function createPlayerDamage(deps) {
    * @param {boolean} [opts.laserBlueSlow]
    * @param {boolean} [opts.surgeHexPulse] — gauntlet pulse (REFERENCE; Knight uses normal damage path)
    * @param {number} [opts.floorHpAtMin] — after damage, clamp `hp` to at least this (Escape roulette/forge ring floor)
+   * @returns {number} HP + temp HP actually removed (0 if blocked by i-frames, dodge, shield, etc.)
    */
   function damagePlayer(amount, opts = {}) {
     const elapsed = getSimElapsed();
@@ -130,13 +131,13 @@ export function createPlayerDamage(deps) {
 
     if (!rouletteHexOuter) {
       const invulnGate = Math.max(combat.playerInvulnerableUntil, getCharacterInvulnUntil());
-      if (elapsed < invulnGate) return;
-      if (elapsed < combat.playerUntargetableUntil) return;
-      if (rogueStealthBlocksDamage?.()) return;
-      if (getLunaticSprintDamageImmune?.() && !opts.lunaticCrash && !opts.lunaticRoarTerrain) return;
-      if (elapsed < (inventory.clubsInvisUntil ?? 0)) return;
-      if ((isDashCoolingDown?.() ?? false) && Math.random() < getDodgeChanceWhenDashCd()) return;
-      if (getBulwarkParryActive?.()) return;
+      if (elapsed < invulnGate) return 0;
+      if (elapsed < combat.playerUntargetableUntil) return 0;
+      if (rogueStealthBlocksDamage?.()) return 0;
+      if (getLunaticSprintDamageImmune?.() && !opts.lunaticCrash && !opts.lunaticRoarTerrain) return 0;
+      if (elapsed < (inventory.clubsInvisUntil ?? 0)) return 0;
+      if ((isDashCoolingDown?.() ?? false) && Math.random() < getDodgeChanceWhenDashCd()) return 0;
+      if (getBulwarkParryActive?.()) return 0;
 
       const arcDeg = getFrontShieldArcDeg();
       if (arcDeg > 0 && opts.sourceX != null && opts.sourceY != null) {
@@ -150,7 +151,7 @@ export function createPlayerDamage(deps) {
         const vl = Math.hypot(vx, vy) || 1;
         const dot = (nx * (vx / vl) + ny * (vy / vl));
         const halfArc = (arcDeg * Math.PI) / 360;
-        if (Math.acos(Math.max(-1, Math.min(1, dot))) <= halfArc) return;
+        if (Math.acos(Math.max(-1, Math.min(1, dot))) <= halfArc) return 0;
       }
 
       const heartsResistanceCount = getHeartsResistanceCardCount();
@@ -163,19 +164,20 @@ export function createPlayerDamage(deps) {
         const cd = getHeartsResistanceCooldown();
         inventory.heartsResistanceCooldownDuration = cd;
         inventory.heartsResistanceReadyAt = elapsed + cd;
-        return;
+        return 0;
       }
     }
 
-    if (amount <= 0) return;
+    if (amount <= 0) return 0;
 
     if (getIsValiant?.()) {
-      applyValiantIncomingDamage?.(amount, opts);
-      return;
+      return applyValiantIncomingDamage?.(amount, opts) ?? 0;
     }
 
+    const hpBefore = player.hp;
+    const tempBefore = player.tempHp ?? 0;
     let rem = amount;
-    const temp = player.tempHp ?? 0;
+    const temp = tempBefore;
     if (temp > 0) {
       const absorbed = Math.min(rem, temp);
       player.tempHp = temp - absorbed;
@@ -183,6 +185,7 @@ export function createPlayerDamage(deps) {
       if ((player.tempHp ?? 0) <= 0) clearTempHp(player);
     }
     if (rem > 0) player.hp = Math.max(0, player.hp - rem);
+    const applied = Math.max(0, tempBefore - (player.tempHp ?? 0)) + Math.max(0, hpBefore - player.hp);
     if (opts.floorHpAtMin != null) player.hp = Math.max(opts.floorHpAtMin, player.hp);
 
     if (rem > 0 && countSuitInRankDeck("clubs") >= SET_BONUS_SUIT_MAX) {
@@ -208,10 +211,12 @@ export function createPlayerDamage(deps) {
         player.hp = 5;
         combat.heartsDeathDefyReadyAt = elapsed + HEARTS_13_DEATH_DEFY_CD_SEC;
         combat.playerInvulnerableUntil = Math.max(combat.playerInvulnerableUntil, elapsed + 0.55);
-        return;
+        return applied;
       }
       onPlayerDeath?.();
     }
+
+    return applied;
   }
 
   function tickCombatPresentation(dt) {

@@ -1269,6 +1269,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
             damagePlayer(2, {
               sourceX: zone.x,
               sourceY: zone.y,
+              envKind: zone.hallsHolyZone ? "halls_holy_zone" : zone.firePath ? "artillery_fire" : "artillery",
               ...(zone.firePath ? { fireApplyIgnite: true } : {}),
             });
           }
@@ -1290,6 +1291,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
             damagePlayer(1, {
               sourceX: zone.x,
               sourceY: zone.y,
+              envKind: zone.hallsHolyZone ? "halls_holy_zone" : zone.firePath ? "artillery_fire" : "artillery",
               ...(zone.firePath ? { fireApplyIgnite: true } : {}),
             });
           }
@@ -1369,6 +1371,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         damagePlayer(1, {
           sourceX: wx,
           sourceY: wy,
+          envKind: "swamp_frog_blast",
           swampApplyInfection: true,
         });
       }
@@ -2206,7 +2209,12 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       if (elapsed >= Number(h.hallsBishopHeavenNextTickAt ?? 0)) {
         h.hallsBishopHeavenNextTickAt = elapsed + HALLS_BISHOP_HEAVEN_TICK_SEC;
         if (distSq({ x: h.hallsBishopHeavenX, y: h.hallsBishopHeavenY }, player) <= (HALLS_BISHOP_HEAVEN_CHASE_R + player.r) ** 2) {
-          damagePlayer(1, { sourceX: h.hallsBishopHeavenX, sourceY: h.hallsBishopHeavenY, hallsBishopHeavenLaser: true });
+          damagePlayer(1, {
+            sourceX: h.hallsBishopHeavenX,
+            sourceY: h.hallsBishopHeavenY,
+            enemyType: h.type,
+            hallsBishopHeavenLaser: true,
+          });
         }
       }
       chaseTarget = { x: h.hallsBishopHeavenX, y: h.hallsBishopHeavenY };
@@ -2831,7 +2839,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           if (elapsed >= (h.ghostDamageLockUntil ?? 0)) {
             const hitDist = pointToSegmentDistance(player.x, player.y, prevX, prevY, h.x, h.y);
             if (hitDist <= player.r + h.r * 0.9) {
-              damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+              damagePlayer(1, { sourceX: h.x, sourceY: h.y, enemyType: h.type });
               h.ghostDamageLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
             }
           }
@@ -2885,7 +2893,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
           if (traveledU <= 0.75 && elapsed >= (h.ghostDamageLockUntil ?? 0)) {
             const hitDist = pointToSegmentDistance(player.x, player.y, prevX, prevY, h.x, h.y);
             if (hitDist <= player.r + h.r * 0.9) {
-              damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+              damagePlayer(1, { sourceX: h.x, sourceY: h.y, enemyType: h.type });
               h.ghostDamageLockUntil = elapsed + ENEMY_HIT_COOLDOWN_SEC;
             }
           }
@@ -3013,7 +3021,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
               player.r + 12,
             );
             if (!h.depthsDamaged && (sectorHit || pivotNear)) {
-              damagePlayer(1, { sourceX: h.x, sourceY: h.y });
+              damagePlayer(1, { sourceX: h.x, sourceY: h.y, enemyType: h.type });
               h.depthsDamaged = true;
             }
 
@@ -3376,11 +3384,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
                         laserBlueSlow: true,
                         sourceX: aim.x1,
                         sourceY: aim.y1,
+                        enemyType: h.type,
                         swampDamageInstanceId: `laser-${laserDamageId}`,
                       }
                     : {
                         sourceX: aim.x1,
                         sourceY: aim.y1,
+                        enemyType: h.type,
                         swampDamageInstanceId: `laser-${laserDamageId}`,
                       },
                 );
@@ -3688,6 +3698,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         damagePlayer(p.damage || 1, {
           sourceX: p.x,
           sourceY: p.y,
+          envKind: p.fireApplyIgnite ? "projectile_fire" : "projectile",
           ...(p.fireApplyIgnite ? { fireApplyIgnite: true } : {}),
         });
         entities.projectiles.splice(i, 1);
@@ -3723,6 +3734,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         damagePlayer(1, {
           sourceX: arc.x + Math.cos(arc.a) * arc.radius,
           sourceY: arc.y + Math.sin(arc.a) * arc.radius,
+          envKind: "sniper_fire_arc",
           ...(arc.fireApplyIgnite ? { fireApplyIgnite: true } : {}),
         });
         arc.nextHitAt = elapsed + 0.22;
@@ -3933,11 +3945,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
                   laserBlueSlow: true,
                   sourceX: beam.x1,
                   sourceY: beam.y1,
+                  envKind: beam.hallsPawnGamma ? "halls_pawn_gamma_laser" : "laser_blue",
                   swampDamageInstanceId: `laser-${beam.damageId ?? beam.bornAt ?? 0}`,
                 }
               : {
                   sourceX: beam.x1,
                   sourceY: beam.y1,
+                  envKind: beam.hallsPawnGamma ? "halls_pawn_gamma_laser" : "laser",
                   swampDamageInstanceId: `laser-${beam.damageId ?? beam.bornAt ?? 0}`,
                 },
           );
@@ -3970,6 +3984,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         damagePlayer(1, {
           sourceX: h.x,
           sourceY: h.y,
+          enemyType: h.type,
           ...(h.depthsEldritchBarrageBolt ? { eldritchBloodAttack: "eldritchBarrageBolt" } : {}),
           ...(h.depthsEldritchCageLunge ? { eldritchBloodAttack: "eldritchCageLunge" } : {}),
         });
@@ -3984,7 +3999,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsRookAuraNextAt = elapsed + HALLS_ROOK_AURA_TICK_SEC;
         const auraR = HALLS_ROOK_AURA_R + player.r;
         if (distSq(h, player) <= auraR * auraR) {
-          damagePlayer(1, { sourceX: h.x, sourceY: h.y, hallsRookAura: true });
+          damagePlayer(1, { sourceX: h.x, sourceY: h.y, enemyType: h.type, hallsRookAura: true });
         }
       }
     }

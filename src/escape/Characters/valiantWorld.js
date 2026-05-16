@@ -137,15 +137,16 @@ export function createValiantWorld() {
    * @param {boolean} [opts.surgeHexPulse]
    * @param {boolean} [opts.laserBlueSlow]
    * @param {*} rt — runtime hooks (`getSimElapsed`, `getPlayer`, `combat`, stun/shake/kill callbacks)
+   * @returns {number} damage applied to a rabbit (0 if none hit)
    */
   function applyDamage(amount, opts, rt) {
-    if (amount <= 0) return;
+    if (amount <= 0) return 0;
     const elapsed = rt.getSimElapsed();
     const dmg = opts.surgeHexPulse ? 1 : amount;
     const idx = opts.surgeHexPulse ? lowestHpOccupiedSlot() : randomOccupiedRabbitIndex();
-    if (idx < 0) return;
+    if (idx < 0) return 0;
     const slot = rabbitSlots[idx];
-    if (!slot) return;
+    if (!slot) return 0;
     slot.hp -= dmg;
     if (opts.laserBlueSlow) {
       rt.combat.playerLaserSlowUntil = elapsed + LASER_BLUE_PLAYER_SLOW_SEC;
@@ -175,6 +176,7 @@ export function createValiantWorld() {
       rt.bumpScreenShake?.(16, 0.26);
       if (will <= 0) triggerDeathFromWill({ onWillDeath: rt.onWillDeath });
     }
+    return dmg;
   }
 
   function collidesEnemyShockField(circle, elapsed) {
