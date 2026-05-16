@@ -7,7 +7,9 @@ import {
   SPAWN_INTERVAL_FLOOR,
   HUNTER_FIRST_WAVE_AT_SEC,
   DANGER_RAMP_SECONDS,
+  LOOT_SPAWN_DANGER_RAMP_SEC,
   LATE_GAME_ELITE_SPAWN_SEC,
+  BLUE_LASER_SPAWN_SEC,
   ARENA_NEXUS_SIEGE_SEC,
   ARENA_NEXUS_RING_LO,
   ARENA_NEXUS_RING_HI,
@@ -353,6 +355,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     return clamp(relDifficultySurvivalSec() / DANGER_RAMP_SECONDS, 0, 1);
   }
 
+  function getLootDangerRamp01() {
+    return clamp(relDifficultySurvivalSec() / LOOT_SPAWN_DANGER_RAMP_SEC, 0, 1);
+  }
+
   function getSpawnIntervalFromRunTime() {
     const t = getDangerRamp01();
     return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_FLOOR - SPAWN_INTERVAL_START) * t;
@@ -564,7 +570,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
     if (hunter.type === "cutter") {
       const decoy = nearestDecoy(hunter);
-      if (decoy && distSq(hunter, decoy) < 240 * 240) return decoy;
+      const lureR = decoy?.lureR ?? 240;
+      if (decoy && distSq(hunter, decoy) < lureR * lureR) return decoy;
     }
     return target;
   }
@@ -625,7 +632,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     if (relDifficultySurvivalSec() >= LATE_GAME_ELITE_SPAWN_SEC) {
       const er = Math.random();
       if (er < 0.055) return "airSpawner";
-      if (er < 0.11) return "laserBlue";
+      if (relDifficultySurvivalSec() >= BLUE_LASER_SPAWN_SEC && er < 0.11) return "laserBlue";
     }
     const boneCrypt = bonePathActive() && getRunLevel() >= 2;
     const cryptChance = boneCrypt ? 0.22 + 0.55 * getDangerRamp01() : 0;
@@ -4018,7 +4025,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function tickSpawnWavesAndLifetime() {
     const elapsed = getSimElapsed();
     const bossNoSpawn = depthsBossSuppressNormalSpawns();
+    /** Halls display level 4: no ambient waves (chess events / specials only). Level 5 re-enables normal spawns. */
+    const hallsNoPassiveSpawn = hallsPathActive() && !isHallsBossPathwaySpawnYConstrained();
     if (bossNoSpawn) {
+      spawnState.spawnScheduled.length = 0;
+      if (spawnState.nextSpawnAt < elapsed + 1e6) spawnState.nextSpawnAt = elapsed + 1e6;
+    }
+    if (hallsNoPassiveSpawn) {
       spawnState.spawnScheduled.length = 0;
       if (spawnState.nextSpawnAt < elapsed + 1e6) spawnState.nextSpawnAt = elapsed + 1e6;
     }
@@ -4035,10 +4048,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       }
     }
     while (spawnState.spawnScheduled.length && spawnState.spawnScheduled[0].at <= elapsed) {
-      if (bossNoSpawn) spawnState.spawnScheduled.shift();
+      if (bossNoSpawn || hallsNoPassiveSpawn) spawnState.spawnScheduled.shift();
       else spawnState.spawnScheduled.shift()?.fn();
     }
-    if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn) advanceSpawnWave();
+    if (elapsed >= spawnState.nextSpawnAt && !bossNoSpawn && !hallsNoPassiveSpawn) advanceSpawnWave();
     if (isHallsBossPathwaySpawnYConstrained()) {
       if (!(hallsDisplayFiveChessBurstState.nextSpawnAt > 0)) {
         hallsDisplayFiveChessBurstState.nextSpawnAt = elapsed + HALLS_DISPLAY_FIVE_CHESS_BURST_INTERVAL_SEC;
@@ -4335,6 +4348,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     entities,
     spawnState,
     getDangerRamp01,
+    getLootDangerRamp01,
     hasEnemyLineOfSightToPlayer,
     tick,
     draw,

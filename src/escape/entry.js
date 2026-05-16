@@ -22,6 +22,9 @@ import {
   LUNATIC_SPRINT_TIER_FX_DUR_T4,
   SET_BONUS_SUIT_THRESHOLD,
   SET_BONUS_SUIT_MAX,
+  MAP_CARD_DROPS_MAX_RUN_LEVEL,
+  LOOT_SPAWN_DANGER_RAMP_SEC,
+  lootSpawnIntervalMultFromDangerRamp,
   VALIANT_BUNNY_PICKUP_R,
   BULWARK_POST_HIT_INVULN_SEC,
   BULWARK_FLAG_MAX_HP,
@@ -4943,8 +4946,19 @@ function boot() {
         return;
       }
       if (srcSuit === "clubs") {
-        add(`clubs:dodge`, "clubs dodge", { kind: "dodge", value: (2 + rank) / 100 }, srcSuit);
-        add(`clubs:stun`, "clubs stun", { kind: "stun", value: 0.2 * rank }, srcSuit);
+        if (activeCharacterId === "knight") {
+          const fortify = Math.floor(0.5 * rank);
+          add(
+            `clubs:decoyFortify`,
+            "clubs decoy fortify",
+            { kind: "decoyFortify", value: fortify },
+            srcSuit,
+          );
+          add(`clubs:stunOnDecoy`, "clubs stun on decoy (E)", { kind: "stunOnDecoy", value: 0.2 * rank }, srcSuit);
+        } else {
+          add(`clubs:dodge`, "clubs dodge", { kind: "dodge", value: (2 + rank) / 100 }, srcSuit);
+          add(`clubs:stun`, "clubs stun", { kind: "stun", value: 0.2 * rank }, srcSuit);
+        }
         add(`clubs:invisBurst`, "clubs invis on burst", { kind: "invisBurst", value: invisBurstDurationSeconds(rank) }, srcSuit);
         return;
       }
@@ -5087,6 +5101,19 @@ function boot() {
     runLogger.log("debug", "depths whirlpool: triggered manually");
   });
 
+  function stunNearbyEnemiesFromPlayer(secs) {
+    if (!hunterRuntime) return;
+    const stunSecs = pathRuntime.getCurrentPathId() === "halls" ? secs * 0.1 : secs;
+    for (const h of hunterRuntime.entities.hunters) {
+      if (h.type === "depthsEldritchBarrageBolt") continue;
+      const dx = h.x - player.x;
+      const dy = h.y - player.y;
+      if (dx * dx + dy * dy <= 220 * 220) {
+        h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + stunSecs);
+      }
+    }
+  }
+
   function buildAbilityContext(dt) {
     return {
       player,
@@ -5094,6 +5121,7 @@ function boot() {
       dt,
       obstacles,
       inventory,
+      stunNearbyEnemies: stunNearbyEnemiesFromPlayer,
       resolvePlayer: (x, y, r) => resolvePlayerAgainstRects(x, y, r, obstaclesForPlayerCollision()),
       circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstaclesForPlayerCollision()),
       spawnAttackRing: (x, y, r, color, durationSec) => {
@@ -5319,11 +5347,22 @@ function boot() {
 
   function isLootForbiddenForSpawns(q, r) {
     if (specials.isSpecialTile(q, r)) return true;
+    for (const d of HEX_DIRS) {
+      if (specials.isSafehouseHexTile(q + d.q, r + d.r)) return true;
+    }
     if (activeCharacterId === "lunatic" && typeof character.getHealExcludeHexKey === "function") {
       const ex = character.getHealExcludeHexKey();
       if (ex && hexKey(q, r) === ex) return true;
     }
     return false;
+  }
+
+  /** Heal/card spawn spacing: 2× interval at level start → baseline by `LOOT_SPAWN_DANGER_RAMP_SEC` (in-level danger clock). */
+  function lootSpawnIntervalMult() {
+    const ramp01 = hunterRuntime
+      ? hunterRuntime.getLootDangerRamp01()
+      : clamp(safehouseHexFlow.getDifficultyClockSec(simElapsed) / LOOT_SPAWN_DANGER_RAMP_SEC, 0, 1);
+    return lootSpawnIntervalMultFromDangerRamp(ramp01);
   }
 
   /** Viewport top-left in world space (same convention as legacy `game.js`). */
@@ -6050,18 +6089,17 @@ function boot() {
               : onHallsHeal
                 ? HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT
                 : 1;
-        nextHealSpawnAt = simElapsed + (PICKUP_SPAWN_INTERVAL * healSpawnMult + randRange(-0.45, 0.85));
+        nextHealSpawnAt =
+          simElapsed +
+          (PICKUP_SPAWN_INTERVAL * healSpawnMult * lootSpawnIntervalMult() + randRange(-0.45, 0.85));
       }
-
-      const hallsCardItemsDisabled = pathRuntime.getCurrentPathId() === "halls";
 
       if (simElapsed >= nextCardSpawnAt) {
         if (
           !runDead &&
           !runVictory &&
           activeCharacterId !== "lunatic" &&
-          runLevel !== DISPLAY_LEVEL_FIVE_RUN_LEVEL &&
-          !hallsCardItemsDisabled
+          runLevel <= MAP_CARD_DROPS_MAX_RUN_LEVEL
         ) {
           if (collectibles.filter((c) => c.kind === "card").length < MAX_CARD_PICKUPS) {
             const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: CARD_PICKUP_HIT_R });
@@ -6081,7 +6119,8 @@ function boot() {
             }
           }
         }
-        nextCardSpawnAt = simElapsed + (CARD_SPAWN_INTERVAL + randRange(-1.6, 3.4));
+        nextCardSpawnAt =
+          simElapsed + (CARD_SPAWN_INTERVAL * lootSpawnIntervalMult() + randRange(-1.6, 3.4));
       }
 
       if (USE_HALLS_CHESS_TRIGGERS && !isHallsBossPathwayLevel() && simElapsed >= nextChessTriggerSpawnAt) {

@@ -1,4 +1,13 @@
-import { makeDefaultCardEffect, describeDefaultCardEffect } from "./defaultCardEffects.js";
+import {
+  makeDefaultCardEffect,
+  describeDefaultCardEffect,
+  invisBurstDurationSeconds,
+} from "./defaultCardEffects.js";
+
+/** Per-card bonus from clubs `decoyFortify` (`floor(0.5 × rank)`). */
+export function knightDecoyFortifyBonusFromRank(rank) {
+  return Math.floor(0.5 * rank);
+}
 
 const ABILITY_LABELS = {
   dash: "Dash",
@@ -21,10 +30,29 @@ export function createKnightItemRules() {
     characterId: "knight",
 
     makeCardEffect(suit, rank) {
+      if (suit === "clubs") {
+        const picks = ["decoyFortify", "stunOnDecoy", "invisBurst"];
+        const pick = picks[Math.floor(Math.random() * picks.length)];
+        if (pick === "decoyFortify") {
+          return { kind: "decoyFortify", value: knightDecoyFortifyBonusFromRank(rank) };
+        }
+        if (pick === "stunOnDecoy") {
+          return { kind: "stunOnDecoy", value: 0.2 * rank };
+        }
+        return { kind: "invisBurst", value: invisBurstDurationSeconds(rank) };
+      }
       return makeDefaultCardEffect(suit, rank, ctx);
     },
 
     describeCardEffect(card) {
+      const e = card.effect;
+      if (e?.kind === "decoyFortify") {
+        const n = Number(e.value) || 0;
+        return `Decoy +${n} max hit${n === 1 ? "" : "s"} and +${n * 48}px lure range`;
+      }
+      if (e?.kind === "stunOnDecoy") {
+        return `Stun nearby enemies ${Number(e.value).toFixed(1)}s when you deploy Decoy (E)`;
+      }
       return describeDefaultCardEffect(card, {
         abilityLabel: (id) => ABILITY_LABELS[id] ?? id,
       });

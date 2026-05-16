@@ -8,7 +8,7 @@ import {
   ARENA_NEXUS_RING_LASER_SPAWN_INTERVAL,
   ARENA_NEXUS_RING_SNIPER_SPAWN_INTERVAL,
   ARENA_NEXUS_REWARD_MODAL_DELAY_SEC,
-  LATE_GAME_ELITE_SPAWN_SEC,
+  BLUE_LASER_SPAWN_SEC,
 } from "../../balance.js";
 import { TAU } from "../../constants.js";
 import {
@@ -113,8 +113,8 @@ export function createArenaHexEvent(deps) {
 
   function spawnRingLaserHunter() {
     const elapsed = getSimElapsed();
-    const late = elapsed >= LATE_GAME_ELITE_SPAWN_SEC;
-    const type = late && Math.random() < 0.38 ? "laserBlue" : "laser";
+    const blueEligible = elapsed >= BLUE_LASER_SPAWN_SEC;
+    const type = blueEligible && Math.random() < 0.38 ? "laserBlue" : "laser";
     const p = randomPointOnRing();
     spawnHunter(type, p.x, p.y, { arenaNexusSpawn: true });
   }

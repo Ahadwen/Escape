@@ -26,6 +26,22 @@ export const CAMERA_FOLLOW_LERP = 0.18;
 export const PICKUP_SPAWN_INTERVAL = 3.2;
 /** Seconds between floating card spawns (REFERENCE `CARD_SPAWN_INTERVAL`). */
 export const CARD_SPAWN_INTERVAL = 8.5;
+/**
+ * In-level danger time until heal/card spawns reach baseline cadence (matches hunter danger clock anchor).
+ * At 0 danger: intervals are `LOOT_SPAWN_INTERVAL_START_MULT`× longer (half spawn rate).
+ */
+export const LOOT_SPAWN_DANGER_RAMP_SEC = 240;
+/** Loot spawn interval multiplier at danger 0 (2 ⇒ half as many spawns vs baseline). */
+export const LOOT_SPAWN_INTERVAL_START_MULT = 2;
+
+/**
+ * @param {number} dangerRamp01 0..1 from in-level survival (`relDifficultySurvivalSec / LOOT_SPAWN_DANGER_RAMP_SEC`)
+ * @returns {number} Multiplier on `PICKUP_SPAWN_INTERVAL` / `CARD_SPAWN_INTERVAL` (2 → 1 as danger rises).
+ */
+export function lootSpawnIntervalMultFromDangerRamp(dangerRamp01) {
+  const t = Math.max(0, Math.min(1, dangerRamp01));
+  return LOOT_SPAWN_INTERVAL_START_MULT - (LOOT_SPAWN_INTERVAL_START_MULT - 1) * t;
+}
 /** Health crystal despawn timer (REFERENCE heal pickup `life`). */
 export const HEAL_CRYSTAL_LIFETIME_SEC = 7.2;
 /** Card pickup despawn timer (REFERENCE). */
@@ -46,12 +62,11 @@ export const HALLS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT = 2;
 export const HALLS_BOSS_MARBLE_CRYSTAL_SPAWN_INTERVAL_MULT = 3;
 /** Fifth sanctuary / boss tier: `runLevel` 4 (display level 5; Halls race, Depths chase). */
 export const LATE_PATH_BOSS_FLOOR_RUN_LEVEL = 4;
-/** Halls display levels 4–5 (`runLevel` 3–4): disable floating map card pickups. */
-export const HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MIN = 3;
-export const HALLS_DISABLE_CARD_ITEMS_RUN_LEVEL_MAX = 4;
+/** Last `runLevel` (0-based) with procedural map card drops; display level = runLevel + 1 (levels 1–3 only). */
+export const MAP_CARD_DROPS_MAX_RUN_LEVEL = 2;
 
 /** Rank 2 vs King spawn weight ratio (REFERENCE). */
-export const CARD_RANK_SPAWN_WEIGHT_MAX = 24;
+export const CARD_RANK_SPAWN_WEIGHT_MAX = 30;
 export const CARD_RANK_SPAWN_WEIGHT_MIN = 1;
 
 /** Set bonus: seven of a suit in the rank deck (REFERENCE). */
@@ -138,8 +153,10 @@ export const SPAWN_INTERVAL_START = 8;
 export const SPAWN_INTERVAL_FLOOR = 1.5;
 /** Survival time over which wave spacing eases from START → FLOOR (matches danger bar). */
 export const DANGER_RAMP_SECONDS = 300;
-/** From this many seconds, waves can include `airSpawner` and `laserBlue` elites. */
+/** From this many seconds of in-level danger time, waves can include `airSpawner` elites. */
 export const LATE_GAME_ELITE_SPAWN_SEC = 180;
+/** From this many seconds of in-level danger time, waves can include `laserBlue` (arena ring lasers use sim time). */
+export const BLUE_LASER_SPAWN_SEC = 240;
 /** After this many seconds, every `MIDGAME_ESCALATION_INTERVAL_SEC` adds +5% enemy speed and +1 spawn per wave. */
 export const MIDGAME_ESCALATION_START_SEC = 240;
 export const MIDGAME_ESCALATION_INTERVAL_SEC = 15;

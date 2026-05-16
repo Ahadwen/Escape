@@ -23,6 +23,9 @@ const DECOY_COOLDOWN = 8;
 const DECOY_DURATION = 5;
 const DECOY_MIN_UPTIME_SEC = 0.3;
 const DECOY_HITS_AFTER_ARM = 4;
+/** Cutter-style decoy lure radius (px); clubs fortify adds `48` per bonus point. */
+const KNIGHT_DECOY_LURE_R_BASE = 240;
+const KNIGHT_DECOY_LURE_R_PER_FORTIFY = 48;
 const KNIGHT_DIAMOND_DECOY_DURATION_BONUS_SEC = 2.5;
 const KNIGHT_DIAMOND_DECOY_HITS_BONUS = 3;
 const KNIGHT_DIAMOND_BURST_SPEED_MULT = 2.6;
@@ -73,6 +76,8 @@ export function createKnight() {
       obstacleTouchMult: 1,
       dodgeChanceWhenDashCd: 0,
       stunOnHitSecs: 0,
+      decoyFortifyBonus: 0,
+      stunOnDecoySecs: 0,
       invisOnBurst: 0,
       dashChargesBonus: 0,
       heartsShieldArc: 0,
@@ -96,6 +101,8 @@ export function createKnight() {
       else if (e.kind === "maxHp") p.maxHpBonus += e.value;
       else if (e.kind === "dodge") p.dodgeChanceWhenDashCd += e.value;
       else if (e.kind === "stun") p.stunOnHitSecs += e.value;
+      else if (e.kind === "decoyFortify") p.decoyFortifyBonus += e.value;
+      else if (e.kind === "stunOnDecoy") p.stunOnDecoySecs += e.value;
       else if (e.kind === "invisBurst") p.invisOnBurst += e.value;
       else if (e.kind === "speed") p.speedMult += e.value;
       else if (e.kind === "terrainBoost") p.obstacleTouchMult += e.value;
@@ -218,14 +225,19 @@ export function createKnight() {
     if (elapsed < decoyReadyAt) return;
     decoyReadyAt = elapsed + effectiveCooldown(passive, "decoy", DECOY_COOLDOWN, 0.4, inventory);
     const decoyEmpower = diamondDecoyEmpowerActive(passive, inventory);
+    const fortifyBonus = passive.decoyFortifyBonus;
     decoys.push({
       x: player.x,
       y: player.y,
       r: player.r * 0.85,
       until: elapsed + DECOY_DURATION + (decoyEmpower ? KNIGHT_DIAMOND_DECOY_DURATION_BONUS_SEC : 0),
       invulnerableUntil: elapsed + DECOY_MIN_UPTIME_SEC,
-      hp: DECOY_HITS_AFTER_ARM + (decoyEmpower ? KNIGHT_DIAMOND_DECOY_HITS_BONUS : 0),
+      hp: DECOY_HITS_AFTER_ARM + fortifyBonus + (decoyEmpower ? KNIGHT_DIAMOND_DECOY_HITS_BONUS : 0),
+      lureR: KNIGHT_DECOY_LURE_R_BASE + fortifyBonus * KNIGHT_DECOY_LURE_R_PER_FORTIFY,
     });
+    if (passive.stunOnDecoySecs > 0 && typeof ctx.stunNearbyEnemies === "function") {
+      ctx.stunNearbyEnemies(passive.stunOnDecoySecs);
+    }
     if (typeof spawnAttackRing === "function") {
       spawnAttackRing(player.x, player.y, player.r + 24, "#818cf8", 0.25);
     }
