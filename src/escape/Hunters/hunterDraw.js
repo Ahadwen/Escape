@@ -1221,70 +1221,90 @@ export function drawHunterBody(ctx, h, opts = {}) {
         ctx.restore();
       }
       if (prayer) {
-        // Prayer phase: light from heaven shines on the bishop itself.
+        // Prayer phase: heaven column gathering on the bishop.
         const pulse = 0.5 + 0.5 * Math.sin(tNow * 10.5);
+        const spin = tNow * 2.4;
         ctx.save();
-        const cone = ctx.createRadialGradient(x, y - 22, 8, x, y, 130);
-        cone.addColorStop(0, `rgba(255,255,255,${0.24 + 0.18 * pulse})`);
-        cone.addColorStop(0.5, "rgba(250, 250, 255, 0.2)");
-        cone.addColorStop(1, "rgba(200, 210, 255, 0)");
+        ctx.globalCompositeOperation = "lighter";
+        const cone = ctx.createRadialGradient(x, y - 22, 8, x, y, 140);
+        cone.addColorStop(0, `rgba(255,255,255,${0.28 + 0.22 * pulse})`);
+        cone.addColorStop(0.45, "rgba(224, 231, 255, 0.22)");
+        cone.addColorStop(1, "rgba(199, 210, 254, 0)");
         ctx.fillStyle = cone;
         ctx.beginPath();
-        ctx.ellipse(x, y + 6, 84, 40, 0, 0, TAU);
+        ctx.ellipse(x, y + 6, 92, 44, 0, 0, TAU);
         ctx.fill();
-        ctx.strokeStyle = `rgba(255,255,255,${0.3 + 0.28 * pulse})`;
-        ctx.lineWidth = 5 + pulse * 2.6;
-        ctx.shadowColor = "rgba(255,255,255,0.75)";
-        ctx.shadowBlur = 14;
+        for (let ring = 0; ring < 3; ring++) {
+          const rr = 28 + ring * 22 + pulse * 10;
+          ctx.strokeStyle = `rgba(255,255,255,${(0.22 - ring * 0.05) * (0.65 + pulse * 0.35)})`;
+          ctx.lineWidth = 2.2 - ring * 0.35;
+          ctx.beginPath();
+          ctx.ellipse(x, y + 8, rr * 1.15, rr * 0.48, spin * 0.2 + ring * 0.4, 0, TAU);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = `rgba(255,255,255,${0.34 + 0.3 * pulse})`;
+        ctx.lineWidth = 5 + pulse * 2.8;
+        ctx.shadowColor = "rgba(255,255,255,0.85)";
+        ctx.shadowBlur = 18;
         ctx.beginPath();
-        ctx.moveTo(x, y - 480);
+        ctx.moveTo(x, y - 520);
         ctx.lineTo(x, y + 4);
+        ctx.stroke();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = `rgba(196, 181, 253,${0.35 + 0.25 * pulse})`;
+        ctx.beginPath();
+        ctx.moveTo(x - 18, y - 420);
+        ctx.lineTo(x + 18, y + 2);
+        ctx.moveTo(x + 18, y - 420);
+        ctx.lineTo(x - 18, y + 2);
         ctx.stroke();
         ctx.shadowBlur = 0;
         ctx.restore();
       }
       if (activeHeaven) {
-        // Active phase: a separate heaven beam chases the player.
+        // Active phase: chasing heaven beam (particles / shock rings drawn in drawHallsBishopHeavenFx).
         const beamX = Number(h.hallsBishopHeavenX ?? x);
         const beamY = Number(h.hallsBishopHeavenY ?? y);
         const pulse = 0.5 + 0.5 * Math.sin(tNow * 9.2);
-        const drift = Math.sin(tNow * 8.5 + beamX * 0.02) * 1.8;
-        const shaftTopY = beamY - 460;
+        const drift = Math.sin(tNow * 8.5 + beamX * 0.02) * 2.4;
+        const spin = tNow * 3.1;
+        const shaftTopY = beamY - 500;
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
-        const pool = ctx.createRadialGradient(beamX, beamY - 8, 6, beamX, beamY, 108);
-        pool.addColorStop(0, `rgba(255,255,255,${0.34 + 0.2 * pulse})`);
-        pool.addColorStop(0.35, "rgba(219, 234, 254, 0.24)");
+
+        const pool = ctx.createRadialGradient(beamX, beamY - 8, 4, beamX, beamY, 128);
+        pool.addColorStop(0, `rgba(255,255,255,${0.42 + 0.24 * pulse})`);
+        pool.addColorStop(0.32, "rgba(233, 213, 255, 0.28)");
+        pool.addColorStop(0.62, "rgba(191, 219, 254, 0.14)");
         pool.addColorStop(1, "rgba(147, 197, 253, 0)");
         ctx.fillStyle = pool;
         ctx.beginPath();
-        ctx.ellipse(beamX, beamY + 5, 72 + pulse * 6, 34 + pulse * 3, 0, 0, TAU);
+        ctx.ellipse(beamX, beamY + 5, 84 + pulse * 8, 40 + pulse * 4, 0, 0, TAU);
         ctx.fill();
 
-        // Soft atmospheric column that clearly fades from the sky downward.
         const skyMist = ctx.createLinearGradient(beamX, shaftTopY - 30, beamX, beamY + 8);
         skyMist.addColorStop(0, "rgba(219, 234, 254, 0)");
-        skyMist.addColorStop(0.2, "rgba(219, 234, 254, 0.08)");
-        skyMist.addColorStop(0.68, "rgba(191, 219, 254, 0.2)");
-        skyMist.addColorStop(1, `rgba(255,255,255,${0.24 + 0.16 * pulse})`);
+        skyMist.addColorStop(0.15, "rgba(219, 234, 254, 0.1)");
+        skyMist.addColorStop(0.55, "rgba(191, 219, 254, 0.26)");
+        skyMist.addColorStop(1, `rgba(255,255,255,${0.3 + 0.2 * pulse})`);
         ctx.strokeStyle = skyMist;
-        ctx.lineWidth = 20 + pulse * 4;
-        ctx.shadowColor = "rgba(191, 219, 254, 0.38)";
-        ctx.shadowBlur = 14;
+        ctx.lineWidth = 24 + pulse * 5;
+        ctx.shadowColor = "rgba(191, 219, 254, 0.45)";
+        ctx.shadowBlur = 18;
         ctx.beginPath();
-        ctx.moveTo(beamX + drift * 0.2, shaftTopY - 18);
+        ctx.moveTo(beamX + drift * 0.15, shaftTopY - 18);
         ctx.lineTo(beamX, beamY + 4);
         ctx.stroke();
 
         const outer = ctx.createLinearGradient(beamX, shaftTopY, beamX, beamY + 6);
         outer.addColorStop(0, "rgba(191, 219, 254, 0)");
-        outer.addColorStop(0.12, `rgba(219, 234, 254, ${0.1 + 0.06 * pulse})`);
-        outer.addColorStop(0.64, `rgba(147, 197, 253, ${0.4 + 0.15 * pulse})`);
-        outer.addColorStop(1, `rgba(255,255,255, ${0.34 + 0.2 * pulse})`);
+        outer.addColorStop(0.1, `rgba(219, 234, 254, ${0.14 + 0.08 * pulse})`);
+        outer.addColorStop(0.58, `rgba(167, 139, 250, ${0.38 + 0.14 * pulse})`);
+        outer.addColorStop(1, `rgba(255,255,255, ${0.42 + 0.22 * pulse})`);
         ctx.strokeStyle = outer;
-        ctx.lineWidth = 13 + pulse * 2.8;
-        ctx.shadowColor = "rgba(191, 219, 254, 0.65)";
-        ctx.shadowBlur = 12;
+        ctx.lineWidth = 15 + pulse * 3;
+        ctx.shadowColor = "rgba(196, 181, 253, 0.7)";
+        ctx.shadowBlur = 14;
         ctx.beginPath();
         ctx.moveTo(beamX + drift * 0.35, shaftTopY);
         ctx.lineTo(beamX, beamY + 3);
@@ -1292,28 +1312,37 @@ export function drawHunterBody(ctx, h, opts = {}) {
 
         const core = ctx.createLinearGradient(beamX, shaftTopY, beamX, beamY + 6);
         core.addColorStop(0, "rgba(255,255,255,0)");
-        core.addColorStop(0.2, `rgba(255,255,255,${0.55 + 0.16 * pulse})`);
-        core.addColorStop(0.8, `rgba(255,255,255,${0.9 + 0.1 * pulse})`);
-        core.addColorStop(1, `rgba(255,255,255,${0.96})`);
+        core.addColorStop(0.18, `rgba(255,255,255,${0.62 + 0.18 * pulse})`);
+        core.addColorStop(0.75, `rgba(255,255,255,${0.94 + 0.06 * pulse})`);
+        core.addColorStop(1, "rgba(255,255,255,1)");
         ctx.strokeStyle = core;
-        ctx.lineWidth = 3.8 + pulse * 1.1;
-        ctx.shadowColor = "rgba(255,255,255,0.8)";
-        ctx.shadowBlur = 16;
+        ctx.lineWidth = 4.2 + pulse * 1.2;
+        ctx.shadowColor = "rgba(255,255,255,0.9)";
+        ctx.shadowBlur = 20;
         ctx.beginPath();
         ctx.moveTo(beamX + drift, shaftTopY + 8);
         ctx.lineTo(beamX, beamY + 3);
         ctx.stroke();
 
+        for (let ring = 0; ring < 4; ring++) {
+          const t = ring / 3;
+          const rr = 22 + t * 58 + pulse * 12;
+          ctx.strokeStyle = `rgba(255,255,255,${(0.34 - t * 0.08) * (0.7 + pulse * 0.3)})`;
+          ctx.lineWidth = 2.4 - t * 0.45;
+          ctx.beginPath();
+          ctx.ellipse(beamX, beamY + 5, rr * 1.12, rr * 0.42, spin * 0.35 + ring * 0.55, 0, TAU);
+          ctx.stroke();
+        }
+
         ctx.shadowBlur = 0;
-        ctx.lineWidth = 1.8;
-        ctx.strokeStyle = `rgba(255,255,255,${0.3 + 0.28 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = `rgba(255,255,255,${0.38 + 0.32 * pulse})`;
         ctx.beginPath();
-        ctx.ellipse(beamX, beamY + 5, 26 + pulse * 6, 11 + pulse * 2.5, 0, 0, TAU);
+        ctx.ellipse(beamX, beamY + 5, 30 + pulse * 8, 12 + pulse * 3, spin * 0.2, 0, TAU);
         ctx.stroke();
-        ctx.lineWidth = 1.2;
-        ctx.strokeStyle = `rgba(186, 230, 253,${0.2 + 0.18 * pulse})`;
+        ctx.strokeStyle = `rgba(196, 181, 253,${0.28 + 0.22 * pulse})`;
         ctx.beginPath();
-        ctx.ellipse(beamX, beamY + 5, 38 + pulse * 8, 16 + pulse * 3, 0, 0, TAU);
+        ctx.ellipse(beamX, beamY + 5, 48 + pulse * 10, 20 + pulse * 4, -spin * 0.15, 0, TAU);
         ctx.stroke();
         ctx.restore();
       }
@@ -2371,6 +2400,71 @@ export function drawSwampBlastBursts(ctx, bursts, now) {
       ctx.arc(b.x, b.y, rr * (0.72 + 0.15 * (1 - t)), 0, TAU);
       ctx.stroke();
     }
+  }
+}
+
+/** Spiralling holy motes + radial shock waves for bishop heaven laser. */
+export function drawHallsBishopHeavenFx(ctx, particles, impacts, now) {
+  for (const b of impacts) {
+    const life = Math.max(0.001, Number(b.life ?? 0.72));
+    const u = clamp((now - b.bornAt) / life, 0, 1);
+    if (u >= 1) continue;
+    const easeOut = 1 - Math.pow(1 - u, 2.4);
+    const fade = Math.pow(1 - u, 1.15);
+    const x = b.x;
+    const y = b.y;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+
+    for (let ring = 0; ring < 3; ring++) {
+      const t = ring / 2;
+      const shockR = 14 + easeOut * (88 + ring * 38);
+      const alpha = (0.5 - t * 0.14) * fade;
+      ctx.strokeStyle = ring === 0 ? `rgba(255,255,255,${alpha})` : `rgba(196, 181, 253,${alpha * 0.85})`;
+      ctx.lineWidth = (9 - ring * 2.5) * (1 - u * 0.45);
+      ctx.beginPath();
+      ctx.ellipse(x, y + 2, shockR * 1.08, shockR * 0.52, ring * 0.22, 0, TAU);
+      ctx.stroke();
+    }
+
+    const bloom = ctx.createRadialGradient(x, y, 0, x, y, 72 + easeOut * 64);
+    bloom.addColorStop(0, `rgba(255,255,255,${0.5 * fade})`);
+    bloom.addColorStop(0.22, `rgba(224, 231, 255, ${0.34 * fade})`);
+    bloom.addColorStop(0.5, `rgba(167, 139, 250, ${0.18 * fade})`);
+    bloom.addColorStop(1, "rgba(147, 197, 253, 0)");
+    ctx.fillStyle = bloom;
+    ctx.beginPath();
+    ctx.arc(x, y, 72 + easeOut * 64, 0, TAU);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  for (const p of particles) {
+    const life = Math.max(0.001, Number(p.life ?? 0.6));
+    const u = clamp((now - p.bornAt) / life, 0, 1);
+    if (u >= 1) continue;
+    const fade = Math.pow(1 - u, 1.35);
+    const px = Number(p.x ?? 0);
+    const py = Number(p.y ?? 0);
+    const sz = Number(p.size ?? 2) * (1 - u * 0.35);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const glow = ctx.createRadialGradient(px, py, 0, px, py, sz * 3.2);
+    glow.addColorStop(0, `rgba(255,255,255,${0.75 * fade})`);
+    glow.addColorStop(0.45, `rgba(196, 181, 253,${0.42 * fade})`);
+    glow.addColorStop(1, "rgba(147, 197, 253, 0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(px, py, sz * 3.2, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = `rgba(255,255,255,${0.9 * fade})`;
+    ctx.beginPath();
+    ctx.arc(px, py, sz, 0, TAU);
+    ctx.fill();
+    ctx.restore();
   }
 }
 

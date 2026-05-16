@@ -53,6 +53,7 @@ import {
   drawSwampPools,
   drawSwampBlastBursts,
   drawHallsPawnImpactBursts,
+  drawHallsBishopHeavenFx,
   drawSpawnerChargeClocks,
   drawHunterLifeBars,
   frogMudPoolGrowScale,
@@ -216,8 +217,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   const HALLS_BISHOP_HOLY_TICK_SEC = 0.2;
   const HALLS_BISHOP_HOLY_AHEAD_FACING_PX = 220;
   const HALLS_BISHOP_HOLY_LEAD_SEC = 0.7;
-  const HALLS_BISHOP_HEAVEN_TRIGGER_SEC = 15;
+  const HALLS_BISHOP_HEAVEN_TRIGGER_SEC = 8;
   const HALLS_BISHOP_HEAVEN_PRAY_SEC = 2;
+  const HALLS_BISHOP_HEAVEN_PARTICLE_CAP = 110;
+  const HALLS_BISHOP_HEAVEN_IMPACT_WAVE_SEC = 0.38;
   const HALLS_BISHOP_HEAVEN_CHASE_R = 56;
   const HALLS_BISHOP_HEAVEN_TICK_SEC = 0.2;
   const HALLS_BISHOP_HEAVEN_CHASE_SPEED = 240;
@@ -312,6 +315,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     swampBursts: [],
     /** @type {any[]} */
     hallsPawnImpacts: [],
+    /** @type {any[]} */
+    hallsBishopHeavenParticles: [],
+    /** @type {any[]} */
+    hallsBishopHeavenImpacts: [],
   };
   let suppressRangedAttacksNow = false;
   /** Unique id per damaging laser beam — Bulwark flag takes at most 1 HP per beam from the segment. */
@@ -405,6 +412,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   /** Halls display level 5: ring spawns only in the half-plane above the player (+Y down ⇒ sin(angle) < 0). */
   function isHallsBossPathwaySpawnYConstrained() {
     return hallsPathActive() && getRunLevel() === LATE_PATH_BOSS_FLOOR_RUN_LEVEL;
+  }
+  /** Halls display L5 only — L4 chess triggers / events use normal glide without distance teleports. */
+  function hallsChessDistanceTeleportEnabled() {
+    return isHallsBossPathwaySpawnYConstrained();
   }
   function randomSpawnAngleAroundPlayer() {
     if (isHallsBossPathwaySpawnYConstrained()) {
@@ -982,6 +993,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         h.hallsBishopHeavenTargetX = h.x;
         h.hallsBishopHeavenTargetY = h.y;
         h.hallsBishopHeavenNextTickAt = 0;
+        h.hallsBishopHeavenLastWaveAt = 0;
+        h.hallsBishopHeavenParticleAt = 0;
       }
       if (type === HALLS_PIECE_IDS.ROOK) {
         h.hallsRookPhase = "approach";
@@ -1515,7 +1528,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   }
 
   function hallsChessCooldownFor(pieceType) {
-    if (pieceType === HALLS_PIECE_IDS.PAWN) return 0.62;
+    if (pieceType === HALLS_PIECE_IDS.PAWN) return 0.52;
     if (pieceType === HALLS_PIECE_IDS.ROOK) return 0.58;
     if (pieceType === HALLS_PIECE_IDS.KNIGHT) return 0.52;
     if (pieceType === HALLS_PIECE_IDS.BISHOP) return 0.52;
@@ -2179,9 +2192,13 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       h.hallsBishopHeavenTargetX = player.x;
       h.hallsBishopHeavenTargetY = player.y;
       h.hallsBishopHeavenNextTickAt = h.hallsBishopHeavenPrayUntil;
+      h.hallsBishopHeavenLastWaveAt = elapsed;
+      h.hallsBishopHeavenParticleAt = elapsed;
       h.hallsGliding = false;
       h.hallsDestX = null;
       h.hallsDestY = null;
+      pushHallsBishopHeavenImpact(h.x, h.y, elapsed, 0.95);
+      for (let i = 0; i < 14; i++) spawnHallsBishopHeavenParticle(h.x, h.y, elapsed, { fromSky: true });
     }
     h.hallsHolyGlow = false;
     if (h.hallsBishopHeavenState === "praying") {
@@ -2189,6 +2206,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       hallsChessFaceToward(h, player.x, player.y);
       if (elapsed < Number(h.hallsBishopHeavenPrayUntil ?? 0)) return;
       h.hallsBishopHeavenState = "active";
+      h.hallsBishopHeavenLastWaveAt = elapsed;
+      h.hallsBishopHeavenParticleAt = elapsed;
+      pushHallsBishopHeavenImpact(h.x, h.y, elapsed, 1.05);
+      for (let i = 0; i < 18; i++) spawnHallsBishopHeavenParticle(h.x, h.y, elapsed, { fromSky: true });
     }
     if (h.hallsBishopHeavenState === "active") {
       // Prayer spotlight ends, but the bishop remains holy-lit while resuming movement/chase.
@@ -2209,6 +2230,10 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       if (elapsed >= Number(h.hallsBishopHeavenNextTickAt ?? 0)) {
         h.hallsBishopHeavenNextTickAt = elapsed + HALLS_BISHOP_HEAVEN_TICK_SEC;
         if (distSq({ x: h.hallsBishopHeavenX, y: h.hallsBishopHeavenY }, player) <= (HALLS_BISHOP_HEAVEN_CHASE_R + player.r) ** 2) {
+          pushHallsBishopHeavenImpact(h.hallsBishopHeavenX, h.hallsBishopHeavenY, elapsed, 0.58);
+          for (let i = 0; i < 5; i++) {
+            spawnHallsBishopHeavenParticle(h.hallsBishopHeavenX, h.hallsBishopHeavenY, elapsed, { fromSky: false });
+          }
           damagePlayer(1, {
             sourceX: h.hallsBishopHeavenX,
             sourceY: h.hallsBishopHeavenY,
@@ -2476,12 +2501,14 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
   function hallsTickChessPieceMovement(h, elapsed, spDt, target) {
     const piece = h.type;
     const player = getPlayer();
-    const teleportAllowed = Number(h.dieAt ?? 0) - elapsed > HALLS_CHESS_TELEPORT_MIN_REMAINING_LIFE_SEC;
+    const distanceTeleportEnabled = hallsChessDistanceTeleportEnabled();
+    const teleportAllowed =
+      distanceTeleportEnabled && Number(h.dieAt ?? 0) - elapsed > HALLS_CHESS_TELEPORT_MIN_REMAINING_LIFE_SEC;
     if (!teleportAllowed && h.hallsUpTeleportActive) {
       h.hallsUpTeleportActive = false;
       h.hallsTeleportFxUntil = 0;
     }
-    if (h.hallsUpTeleportActive) {
+    if (distanceTeleportEnabled && h.hallsUpTeleportActive) {
       const tRel = elapsed - Number(h.hallsUpTeleportStartAt ?? elapsed);
       if (!h.hallsUpTeleportSwapped && tRel >= HALLS_CHESS_UPWARD_TELEPORT_SWAP_AT_SEC) {
         const teleX = Number(h.hallsUpTeleportTargetX ?? h.x);
@@ -2504,7 +2531,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
         return;
       }
     }
-    if (player.y <= h.y - HALLS_CHESS_UPWARD_TELEPORT_TRIGGER_PX) {
+    if (distanceTeleportEnabled && player.y <= h.y - HALLS_CHESS_UPWARD_TELEPORT_TRIGGER_PX) {
       if (!teleportAllowed) return;
       h.hallsUpTeleportActive = true;
       h.hallsUpTeleportStartAt = elapsed;
@@ -2517,7 +2544,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
       return;
     }
     const sideDx = h.x - player.x;
-    if (Math.abs(sideDx) >= HALLS_CHESS_SIDE_TELEPORT_TRIGGER_PX) {
+    if (distanceTeleportEnabled && Math.abs(sideDx) >= HALLS_CHESS_SIDE_TELEPORT_TRIGGER_PX) {
       if (!teleportAllowed) return;
       h.hallsUpTeleportActive = true;
       h.hallsUpTeleportStartAt = elapsed;
@@ -3797,6 +3824,85 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     }
   }
 
+  function pushHallsBishopHeavenImpact(x, y, elapsed, life = 0.72) {
+    entities.hallsBishopHeavenImpacts.push({ x, y, bornAt: elapsed, life });
+    if (entities.hallsBishopHeavenImpacts.length > 24) {
+      entities.hallsBishopHeavenImpacts.splice(0, entities.hallsBishopHeavenImpacts.length - 24);
+    }
+  }
+
+  function spawnHallsBishopHeavenParticle(x, y, elapsed, opts = {}) {
+    if (entities.hallsBishopHeavenParticles.length >= HALLS_BISHOP_HEAVEN_PARTICLE_CAP) return;
+    const ang = Math.random() * Math.PI * 2;
+    const band = opts.fromSky ? -220 - Math.random() * 180 : -40 - Math.random() * 90;
+    const orbitR = 10 + Math.random() * 34;
+    entities.hallsBishopHeavenParticles.push({
+      anchorX: x,
+      anchorY: y,
+      startOffsetY: band,
+      orbitR,
+      radiusShrink: 0.55 + Math.random() * 0.35,
+      phase: ang,
+      spiralRate: 4.5 + Math.random() * 5.5,
+      sink: 95 + Math.random() * 70,
+      wobble: 4 + Math.random() * 8,
+      bornAt: elapsed,
+      life: 0.42 + Math.random() * 0.55,
+      size: 1.2 + Math.random() * 2.4,
+    });
+  }
+
+  function updateHallsBishopHeavenFx(dt) {
+    const elapsed = getSimElapsed();
+    const spDt = Math.max(dt, 1 / 120);
+
+    for (let i = entities.hallsBishopHeavenParticles.length - 1; i >= 0; i--) {
+      const p = entities.hallsBishopHeavenParticles[i];
+      const age = elapsed - p.bornAt;
+      if (age >= p.life) {
+        entities.hallsBishopHeavenParticles.splice(i, 1);
+        continue;
+      }
+      const t = age / p.life;
+      p.phase += p.spiralRate * spDt;
+      const helixR = p.orbitR * (1 - t * p.radiusShrink);
+      p.x = p.anchorX + Math.cos(p.phase) * helixR + Math.sin(p.phase * 2.3 + age * 6) * p.wobble * (1 - t);
+      p.y = p.anchorY + p.startOffsetY + age * p.sink + Math.sin(p.phase * 1.7) * p.wobble * 0.35;
+    }
+
+    for (let i = entities.hallsBishopHeavenImpacts.length - 1; i >= 0; i--) {
+      const b = entities.hallsBishopHeavenImpacts[i];
+      if (elapsed - b.bornAt > b.life) entities.hallsBishopHeavenImpacts.splice(i, 1);
+    }
+
+    for (const h of entities.hunters) {
+      if (h.type !== HALLS_PIECE_IDS.BISHOP) continue;
+      const state = h.hallsBishopHeavenState;
+      if (state !== "praying" && state !== "active") continue;
+
+      const fxX =
+        state === "active" ? Number(h.hallsBishopHeavenX ?? h.x) : Number(h.x);
+      const fxY =
+        state === "active" ? Number(h.hallsBishopHeavenY ?? h.y) : Number(h.y);
+
+      if (elapsed >= Number(h.hallsBishopHeavenParticleAt ?? 0)) {
+        h.hallsBishopHeavenParticleAt = elapsed + (state === "praying" ? 0.05 : 0.032);
+        const n = state === "praying" ? 2 : 3;
+        for (let k = 0; k < n; k++) {
+          spawnHallsBishopHeavenParticle(fxX, fxY, elapsed, { fromSky: state === "active" || k === 0 });
+        }
+      }
+
+      if (
+        state === "active" &&
+        elapsed >= Number(h.hallsBishopHeavenLastWaveAt ?? 0) + HALLS_BISHOP_HEAVEN_IMPACT_WAVE_SEC
+      ) {
+        h.hallsBishopHeavenLastWaveAt = elapsed;
+        pushHallsBishopHeavenImpact(fxX, fxY, elapsed);
+      }
+    }
+  }
+
   function updateSpawners() {
     const elapsed = getSimElapsed();
     for (const h of entities.hunters) {
@@ -4155,6 +4261,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     updateSwampPools();
     updateSwampBursts();
     updateHallsPawnImpacts();
+    updateHallsBishopHeavenFx(dt);
     updateSpawners();
     updateLaserHazards();
     updateCollisions();
@@ -4240,6 +4347,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     entities.swampPools.length = 0;
     entities.swampBursts.length = 0;
     entities.hallsPawnImpacts.length = 0;
+    entities.hallsBishopHeavenParticles.length = 0;
+    entities.hallsBishopHeavenImpacts.length = 0;
     boneGhostNextSpawnAt = null;
     nextHunterUid = 0;
     spawnState.wave = 0;
@@ -4262,6 +4371,8 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     entities.swampPools.length = 0;
     entities.swampBursts.length = 0;
     entities.hallsPawnImpacts.length = 0;
+    entities.hallsBishopHeavenParticles.length = 0;
+    entities.hallsBishopHeavenImpacts.length = 0;
   }
 
   /** REFERENCE `applySafehouseLevelUp` spawn pacing reset. */
@@ -4289,6 +4400,7 @@ export function createHunterRuntime(/** @type {HunterRuntimeDeps} */ deps) {
     drawDangerZones(ctx, entities.dangerZones, now, SNIPER_ARTILLERY_BANG_DURATION);
     drawSwampPools(ctx, entities.swampPools, now);
     drawSwampBlastBursts(ctx, entities.swampBursts, now);
+    drawHallsBishopHeavenFx(ctx, entities.hallsBishopHeavenParticles, entities.hallsBishopHeavenImpacts, now);
     drawHallsPawnImpactBursts(ctx, entities.hallsPawnImpacts, now);
     drawSniperBullets(ctx, entities.bullets, now);
     drawSniperFireArcs(ctx, entities.fireArcs, now);

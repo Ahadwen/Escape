@@ -94,6 +94,9 @@ import {
   CARD_PICKUP_HIT_R,
   HEAL_PICKUP_PLUS_HALF,
   HEAL_PICKUP_ARM_THICK,
+  HALLS_MARBLE_HEAL_HIT_R,
+  HALLS_MARBLE_HEAL_PLUS_HALF,
+  HALLS_MARBLE_HEAL_ARM_THICK,
   CARD_PICKUP_REACH_EXTRA,
 } from "./constants.js";
 import { randRange } from "./rng.js";
@@ -104,7 +107,8 @@ import { makeRandomMapCard } from "./items/makeRandomCard.js";
 import { getItemRulesForCharacter } from "./items/itemRulesRegistry.js";
 import { countSuitsInActiveSlots } from "./items/setBonusPresentation.js";
 import { createCardPickupModal } from "./items/cardPickupModal.js";
-import { invisBurstDurationSeconds } from "./items/defaultCardEffects.js";
+import { clubsKnightTierEffectSeconds } from "./items/defaultCardEffects.js";
+import { isHallsChessEnemyType } from "./Hunters/hallsLogic.js";
 import { syncDeckSlotsFromInventory } from "./items/deckHudSync.js";
 import {
   getHudSetBonusCompactLine,
@@ -1246,16 +1250,7 @@ function boot() {
         },
         bumpScreenShake: (strength, sec) => playerDamage.bumpScreenShake(strength, sec),
         grantInvulnerabilityUntil: (until) => playerDamage.grantInvulnerabilityUntil(until),
-        stunNearbyEnemies: (secs) => {
-          if (!hunterRuntime) return;
-          const stunSecs = pathRuntime.getCurrentPathId() === "halls" ? secs * 0.1 : secs;
-          for (const h of hunterRuntime.entities.hunters) {
-            if (h.type === "depthsEldritchBarrageBolt") continue;
-            const dx = h.x - player.x;
-            const dy = h.y - player.y;
-            if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + stunSecs);
-          }
-        },
+        stunNearbyEnemies: stunNearbyEnemiesFromPlayer,
         onWillDeath: () => playerDamage.killPlayerImmediate(),
       }),
     isDashCoolingDown: () => (typeof character.isDashCoolingDown === "function" ? character.isDashCoolingDown(simElapsed) : false),
@@ -1265,16 +1260,7 @@ function boot() {
       simElapsed < character.getBulwarkParryUntil(),
     getPostHitInvulnerabilitySec: () =>
       activeCharacterId === "bulwark" ? BULWARK_POST_HIT_INVULN_SEC : null,
-    stunNearbyEnemies: (secs) => {
-      if (!hunterRuntime) return;
-      const stunSecs = pathRuntime.getCurrentPathId() === "halls" ? secs * 0.1 : secs;
-      for (const h of hunterRuntime.entities.hunters) {
-        if (h.type === "depthsEldritchBarrageBolt") continue;
-        const dx = h.x - player.x;
-        const dy = h.y - player.y;
-        if (dx * dx + dy * dy <= 220 * 220) h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + stunSecs);
-      }
-    },
+    stunNearbyEnemies: stunNearbyEnemiesFromPlayer,
     onPlayerDeath: () => {
       analytics.onDeath();
       manualPause = false;
@@ -4118,15 +4104,16 @@ function boot() {
       if (it.kind !== "heal") continue;
       if (Math.hypot(it.x - c.x, it.y - c.y) <= HEX_SIZE * 0.42) collectibles.splice(i, 1);
     }
+    const hallsMarbleCrystal = !hallsBossPathway;
     collectibles.push({
       kind: "heal",
       x: c.x,
       y: c.y,
-      r: HEAL_PICKUP_HIT_R,
-      plusHalf: HEAL_PICKUP_PLUS_HALF,
-      plusThick: HEAL_PICKUP_ARM_THICK,
+      r: hallsMarbleCrystal ? HALLS_MARBLE_HEAL_HIT_R : HEAL_PICKUP_HIT_R,
+      plusHalf: hallsMarbleCrystal ? HALLS_MARBLE_HEAL_PLUS_HALF : HEAL_PICKUP_PLUS_HALF,
+      plusThick: hallsMarbleCrystal ? HALLS_MARBLE_HEAL_ARM_THICK : HEAL_PICKUP_ARM_THICK,
       heal: HEAL_CRYSTAL_HP,
-      hallsMarbleCrystal: !hallsBossPathway,
+      hallsMarbleCrystal,
       bornAt: simElapsed,
       expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
     });
@@ -4992,12 +4979,22 @@ function boot() {
             { kind: "decoyFortify", value: fortify },
             srcSuit,
           );
-          add(`clubs:stunOnDecoy`, "clubs stun on decoy (E)", { kind: "stunOnDecoy", value: 0.2 * rank }, srcSuit);
+          add(
+            `clubs:stunOnDecoy`,
+            "clubs stun on decoy (E)",
+            { kind: "stunOnDecoy", value: clubsKnightTierEffectSeconds(rank) },
+            srcSuit,
+          );
         } else {
           add(`clubs:dodge`, "clubs dodge", { kind: "dodge", value: (2 + rank) / 100 }, srcSuit);
           add(`clubs:stun`, "clubs stun", { kind: "stun", value: 0.2 * rank }, srcSuit);
         }
-        add(`clubs:invisBurst`, "clubs invis on burst", { kind: "invisBurst", value: invisBurstDurationSeconds(rank) }, srcSuit);
+        add(
+          `clubs:invisBurst`,
+          "clubs invis on burst",
+          { kind: "invisBurst", value: clubsKnightTierEffectSeconds(rank) },
+          srcSuit,
+        );
         return;
       }
       if (srcSuit === "spades") {
@@ -5140,15 +5137,15 @@ function boot() {
   });
 
   function stunNearbyEnemiesFromPlayer(secs) {
-    if (!hunterRuntime) return;
-    const stunSecs = pathRuntime.getCurrentPathId() === "halls" ? secs * 0.1 : secs;
+    if (!hunterRuntime || secs <= 0) return;
     for (const h of hunterRuntime.entities.hunters) {
       if (h.type === "depthsEldritchBarrageBolt") continue;
       const dx = h.x - player.x;
       const dy = h.y - player.y;
-      if (dx * dx + dy * dy <= 220 * 220) {
-        h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + stunSecs);
-      }
+      if (dx * dx + dy * dy > 220 * 220) continue;
+      let stunSecs = secs;
+      if (isHallsChessEnemyType(h.type)) stunSecs *= 0.5;
+      h.stunnedUntil = Math.max(h.stunnedUntil || 0, simElapsed + stunSecs);
     }
   }
 
@@ -5159,6 +5156,7 @@ function boot() {
       dt,
       obstacles,
       inventory,
+      getPathId: () => pathRuntime.getCurrentPathId(),
       stunNearbyEnemies: stunNearbyEnemiesFromPlayer,
       resolvePlayer: (x, y, r) => resolvePlayerAgainstRects(x, y, r, obstaclesForPlayerCollision()),
       circleHitsObstacle: (x, y, r) => circleOverlapsAnyRect(x, y, r, obstaclesForPlayerCollision()),
@@ -6093,6 +6091,7 @@ function boot() {
 
       if (simElapsed >= nextHealSpawnAt) {
         const onHalls = pathRuntime.getCurrentPathId() === "halls";
+        const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
         const hallsBossHealSpawns = isHallsBossPathwayLevel();
         if (
           !runDead &&
@@ -6100,19 +6099,20 @@ function boot() {
           (!onHalls || hallsBossHealSpawns) &&
           collectibles.filter((c) => c.kind === "heal").length < MAX_HEAL_CRYSTALS
         ) {
-          const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: HEAL_PICKUP_HIT_R });
+          const hallsMarbleCrystal = onHalls && !onSwamp && !hallsBossHealSpawns;
+          const healHitR = hallsMarbleCrystal ? HALLS_MARBLE_HEAL_HIT_R : HEAL_PICKUP_HIT_R;
+          const pt = randomOpenLootPoint({ ...lootPlacementOpts(), hitR: healHitR });
           if (pt) {
-            const onSwamp = pathRuntime.getCurrentPathId() === "swamp";
             collectibles.push({
               kind: "heal",
               x: pt.x,
               y: pt.y,
-              r: HEAL_PICKUP_HIT_R,
-              plusHalf: HEAL_PICKUP_PLUS_HALF,
-              plusThick: HEAL_PICKUP_ARM_THICK,
+              r: healHitR,
+              plusHalf: hallsMarbleCrystal ? HALLS_MARBLE_HEAL_PLUS_HALF : HEAL_PICKUP_PLUS_HALF,
+              plusThick: hallsMarbleCrystal ? HALLS_MARBLE_HEAL_ARM_THICK : HEAL_PICKUP_ARM_THICK,
               heal: onSwamp ? SWAMP_BOOTLEG_CRYSTAL_HP : HEAL_CRYSTAL_HP,
               bootlegSwamp: onSwamp,
-              hallsMarbleCrystal: onHalls && !onSwamp && !hallsBossHealSpawns,
+              hallsMarbleCrystal,
               bornAt: simElapsed,
               expiresAt: simElapsed + HEAL_CRYSTAL_LIFETIME_SEC,
             });

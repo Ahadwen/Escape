@@ -1,7 +1,7 @@
 import {
   makeDefaultCardEffect,
   describeDefaultCardEffect,
-  invisBurstDurationSeconds,
+  clubsKnightTierEffectSeconds,
 } from "./defaultCardEffects.js";
 
 /** Per-card bonus from clubs `decoyFortify` (`floor(0.5 × rank)`). */
@@ -37,9 +37,9 @@ export function createKnightItemRules() {
           return { kind: "decoyFortify", value: knightDecoyFortifyBonusFromRank(rank) };
         }
         if (pick === "stunOnDecoy") {
-          return { kind: "stunOnDecoy", value: 0.2 * rank };
+          return { kind: "stunOnDecoy", value: clubsKnightTierEffectSeconds(rank) };
         }
-        return { kind: "invisBurst", value: invisBurstDurationSeconds(rank) };
+        return { kind: "invisBurst", value: clubsKnightTierEffectSeconds(rank) };
       }
       return makeDefaultCardEffect(suit, rank, ctx);
     },

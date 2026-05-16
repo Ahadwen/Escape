@@ -208,7 +208,8 @@ export function createKnight() {
     burstReadyAt = elapsed + effectiveCooldown(passive, "burst", BURST_COOLDOWN, 0.4, inventory);
     const burstDurBonus = diamondSpeedEmpowerActive(passive, inventory) ? KNIGHT_DIAMOND_BURST_DURATION_BONUS_SEC : 0;
     burstUntil = elapsed + BURST_DURATION + burstDurBonus;
-    const invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck(inventory);
+    let invisSec = passive.invisOnBurst + sumInvisBurstSecondsFromDeck(inventory);
+    if (ctx.getPathId?.() === "halls") invisSec *= 0.5;
     if (invisSec > 0) {
       const invisUntil = Math.min(burstUntil, elapsed + invisSec);
       inventory.clubsInvisUntil = Math.max(inventory.clubsInvisUntil ?? 0, invisUntil);

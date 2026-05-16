@@ -12,6 +12,18 @@ export const HALLS_PIECE_IDS = Object.freeze({
   KING: "hallsKing",
 });
 
+/** @param {string | undefined} type */
+export function isHallsChessEnemyType(type) {
+  return (
+    type === HALLS_PIECE_IDS.PAWN ||
+    type === HALLS_PIECE_IDS.ROOK ||
+    type === HALLS_PIECE_IDS.KNIGHT ||
+    type === HALLS_PIECE_IDS.BISHOP ||
+    type === HALLS_PIECE_IDS.QUEEN ||
+    type === HALLS_PIECE_IDS.KING
+  );
+}
+
 /** Wave chess-coin hunters are removed after this many simulated seconds (`spawnHunter` → `dieAt`). */
 export const HALLS_ENEMY_LIFETIME_SEC = 20;
 

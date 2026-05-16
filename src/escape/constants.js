@@ -16,3 +16,7 @@ export const CARD_PICKUP_REACH_EXTRA = 12;
 export const HEAL_PICKUP_PLUS_HALF = 13;
 /** Default heal pickup arm thickness (world px); REFERENCE `HEAL_PICKUP_ARM_THICK`. */
 export const HEAL_PICKUP_ARM_THICK = 6;
+/** Halls marble sanctuary crystals — larger, high-contrast heal read on pale floor. */
+export const HALLS_MARBLE_HEAL_PLUS_HALF = 17;
+export const HALLS_MARBLE_HEAL_ARM_THICK = 8;
+export const HALLS_MARBLE_HEAL_HIT_R = 30;

@@ -35,6 +35,8 @@ export function createAnalytics(deps) {
     getRunLevel: deps.getRunLevel,
     getPathId: deps.getPathId,
     getInventory: deps.getInventory,
+    getSimElapsed: deps.getSimElapsed,
+    getDifficultyClockSec: deps.getDifficultyClockSec,
     getPendingCard: deps.getPendingCard,
     resolveSpecialHexAt: deps.resolveSpecialHexAt,
   });
@@ -60,7 +62,7 @@ export function createAnalytics(deps) {
     onSafehouseLevelUp() {
       const ctx = segmentContext();
       const closed = tracker.takeSegmentClose({ ...ctx, outcome: "safehouse_level_up" });
-      tracker.startSegment();
+      tracker.startSegment(ctx);
       ensureSupabaseClient().then((client) => {
         tracker.flushSegmentClose(closed, client);
       });

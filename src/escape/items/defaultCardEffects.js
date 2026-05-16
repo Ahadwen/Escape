@@ -37,14 +37,19 @@ export function makeDefaultCardEffect(suit, rank, ctx) {
 }
 
 /**
- * Clubs invis scaling:
- * - ranks 2-6: fixed 0.2s
- * - ranks 7+: 0.(rank-4)s (e.g. 7->0.3s, 8->0.4s)
+ * Knight clubs tier seconds (stun on decoy, invis on burst): 2–6 → 0.1, 7–9 → 0.2, 10–13 → 0.3.
  * @param {number} rank
  */
+export function clubsKnightTierEffectSeconds(rank) {
+  const r = Math.floor(Number(rank));
+  if (r <= 6) return 0.1;
+  if (r <= 9) return 0.2;
+  return 0.3;
+}
+
+/** @param {number} rank */
 export function invisBurstDurationSeconds(rank) {
-  if (rank <= 6) return 0.2;
-  return Math.max(0.2, (rank - 4) / 10);
+  return clubsKnightTierEffectSeconds(rank);
 }
 
 /**

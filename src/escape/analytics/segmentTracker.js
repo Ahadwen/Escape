@@ -21,6 +21,8 @@ import { getAnalyticsPlatform, getGameVersion } from "./platform.js";
  * @property {() => number} deps.getRunLevel
  * @property {() => string | null} deps.getPathId
  * @property {() => object} deps.getInventory
+ * @property {() => number} deps.getSimElapsed
+ * @property {() => number} deps.getDifficultyClockSec
  * @property {() => object | null} [deps.getPendingCard]
  * @property {(q: number, r: number) => string | null} [deps.resolveSpecialHexAt]
  */
@@ -32,6 +34,8 @@ export function createSegmentTracker(deps) {
     getRunLevel,
     getPathId,
     getInventory,
+    getSimElapsed,
+    getDifficultyClockSec,
     getPendingCard = () => null,
     resolveSpecialHexAt = () => null,
   } = deps;
@@ -40,7 +44,6 @@ export function createSegmentTracker(deps) {
   let runId = null;
   /** @type {object | null} */
   let openSegment = null;
-  let prevSafehouseDifficultyClock = 0;
   /** @type {{ sourceKey: string; amount: number } | null} */
   let lastDamageHit = null;
 
@@ -78,17 +81,22 @@ export function createSegmentTracker(deps) {
         outcome: null,
       },
     });
-    prevSafehouseDifficultyClock = 0;
-    startSegment();
+    startSegment({
+      simElapsed: getSimElapsed(),
+      difficultyClockSec: getDifficultyClockSec(),
+    });
   }
 
-  function startSegment() {
-    const simNow = openSegment?.simEndedAt ?? 0;
+  /**
+   * Begin tracking a level segment (one display level until safehouse / death / victory).
+   * @param {{ simElapsed: number; difficultyClockSec: number }} at
+   */
+  function startSegment(at) {
     openSegment = {
       id: createUuid(),
       runId,
-      simStartedAt: typeof simNow === "number" ? simNow : 0,
-      difficultyClockAtStart: prevSafehouseDifficultyClock,
+      simStartedAt: at.simElapsed,
+      difficultyClockAtStart: at.difficultyClockSec,
       damageBySource: {},
       buildStart: snapshotBuild(getInventory(), getHero(), getPendingCard()),
     };
@@ -119,7 +127,7 @@ export function createSegmentTracker(deps) {
   /**
    * Snapshot segment close synchronously (before async Supabase flush).
    * @param {SegmentCloseContext} ctx
-   * @returns {{ segmentRow: object; achievementKeys: string[]; safehouseClockSec: number | null } | null}
+   * @returns {{ segmentRow: object; achievementKeys: string[] } | null}
    */
   function takeSegmentClose(ctx) {
     if (!openSegment || !runId) return null;
@@ -128,12 +136,8 @@ export function createSegmentTracker(deps) {
     openSegment = null;
 
     const simEndedAt = ctx.simElapsed;
-    const survivalSec = Math.max(0, simEndedAt - seg.simStartedAt);
-    const difficultyClockSec = ctx.difficultyClockSec;
-    const secSincePrevSafehouse =
-      seg.difficultyClockAtStart > 0
-        ? Math.max(0, difficultyClockSec - seg.difficultyClockAtStart)
-        : difficultyClockSec;
+    /** Active level time: difficulty clock minus safehouse-tile freeze (same clock used for spawns). */
+    const levelDifficultyClockSec = Math.max(0, ctx.difficultyClockSec - seg.difficultyClockAtStart);
 
     const buildEnd = snapshotBuild(getInventory(), getHero(), getPendingCard());
 
@@ -162,9 +166,9 @@ export function createSegmentTracker(deps) {
       hero: getHero(),
       platform: getAnalyticsPlatform(),
       outcome: ctx.outcome,
-      survival_sec: survivalSec,
-      difficulty_clock_sec: difficultyClockSec,
-      sec_since_prev_safehouse: secSincePrevSafehouse,
+      survival_sec: levelDifficultyClockSec,
+      difficulty_clock_sec: levelDifficultyClockSec,
+      sec_since_prev_safehouse: null,
       sim_started_at: seg.simStartedAt,
       sim_ended_at: simEndedAt,
       wave_end: ctx.wave,
@@ -179,17 +183,16 @@ export function createSegmentTracker(deps) {
     return {
       segmentRow,
       achievementKeys: achievementKeysFromSegment(segmentRow),
-      safehouseClockSec: ctx.outcome === "safehouse_level_up" ? difficultyClockSec : null,
     };
   }
 
   /**
-   * @param {{ segmentRow: object; achievementKeys: string[]; safehouseClockSec: number | null } | null} prepared
+   * @param {{ segmentRow: object; achievementKeys: string[] } | null} prepared
    * @param {import('@supabase/supabase-js').SupabaseClient | null} client
    */
   function flushSegmentClose(prepared, client) {
     if (!prepared) return;
-    const { segmentRow, achievementKeys, safehouseClockSec } = prepared;
+    const { segmentRow, achievementKeys } = prepared;
     enqueueAnalyticsJob(client, { table: "analytics_level_segments", op: "insert", row: segmentRow });
     const unlockedAt = new Date().toISOString();
     for (const achievement_key of achievementKeys) {
@@ -202,9 +205,6 @@ export function createSegmentTracker(deps) {
           unlocked_at: unlockedAt,
         },
       });
-    }
-    if (safehouseClockSec != null) {
-      prevSafehouseDifficultyClock = safehouseClockSec;
     }
   }
 

@@ -53,7 +53,8 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
   const maxHpCrystal = !!opts.lunaticMaxHpCrystal;
   const bootlegSwamp = !!opts.bootlegSwampCrystal;
   const hallsMarble = !!opts.hallsMarbleCrystal;
-  const pulse = 0.94 + 0.06 * (0.5 + 0.5 * Math.sin(elapsed * 5));
+  const pulseWave = 0.5 + 0.5 * Math.sin(elapsed * (hallsMarble ? 5.2 : 5));
+  const pulse = hallsMarble ? 0.86 + 0.14 * pulseWave : 0.94 + 0.06 * pulseWave;
   const h = (p.plusHalf ?? HEAL_PICKUP_PLUS_HALF) * pulse;
   const t = p.plusThick ?? HEAL_PICKUP_ARM_THICK;
   const { x, y } = p;
@@ -77,25 +78,44 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
     ctx.globalAlpha = 1;
     ctx.strokeStyle = "rgba(254, 240, 138, 0.55)";
   } else if (hallsMarble) {
-    ctx.shadowColor = "rgba(199, 210, 254, 0.85)";
-    ctx.shadowBlur = 22;
-    ctx.fillStyle = "#334155";
+    const ringPulse = 0.86 + 0.14 * Math.sin(elapsed * 4.6);
+    const ringR = h * 2.15 * ringPulse;
+    const ring = ctx.createRadialGradient(0, 0, ringR * 0.08, 0, 0, ringR);
+    ring.addColorStop(0, "rgba(110, 231, 183, 0.72)");
+    ring.addColorStop(0.42, "rgba(52, 211, 153, 0.38)");
+    ring.addColorStop(0.78, "rgba(16, 185, 129, 0.12)");
+    ring.addColorStop(1, "rgba(16, 185, 129, 0)");
+    ctx.fillStyle = ring;
+    ctx.beginPath();
+    ctx.arc(0, 0, ringR, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(167, 243, 208, 0.55)";
+    ctx.lineWidth = 2.25;
+    ctx.beginPath();
+    ctx.arc(0, 0, ringR * 0.92, 0, TAU);
+    ctx.stroke();
+
+    ctx.shadowColor = "rgba(52, 211, 153, 0.98)";
+    ctx.shadowBlur = 30;
+    ctx.fillStyle = "#047857";
     ctx.fillRect(-h, -t / 2, 2 * h, t);
     ctx.fillRect(-t / 2, -h, t, 2 * h);
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = "#475569";
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = "#10b981";
     ctx.fillRect(-h + 0.8, -t / 2 + 0.5, 2 * h - 1.6, t - 1);
     ctx.fillRect(-t / 2 + 0.5, -h + 0.8, t - 1, 2 * h - 1.6);
     ctx.shadowBlur = 0;
-    ctx.globalAlpha = 0.88;
-    ctx.fillStyle = "#e2e8f0";
+    ctx.globalAlpha = 0.96;
+    ctx.fillStyle = "#ecfdf5";
     ctx.fillRect(-h * 0.52, -t * 0.32, h * 1.04, t * 0.64);
     ctx.fillRect(-t * 0.32, -h * 0.52, t * 0.64, h * 1.04);
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = "#a78bfa";
-    ctx.fillRect(-h * 0.35, -t * 0.22, h * 0.7, t * 0.44);
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = "#6ee7b7";
+    ctx.fillRect(-h * 0.38, -t * 0.24, h * 0.76, t * 0.48);
+    ctx.fillRect(-t * 0.24, -h * 0.38, t * 0.48, h * 0.76);
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = "rgba(241, 245, 249, 0.62)";
+    ctx.strokeStyle = "rgba(255, 251, 235, 0.88)";
+    ctx.lineWidth = 2;
   } else if (maxHpCrystal) {
     ctx.shadowColor = "rgba(251, 191, 36, 0.9)";
     ctx.shadowBlur = 20;
@@ -131,7 +151,7 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
     ctx.globalAlpha = 1;
     ctx.strokeStyle = "rgba(236, 253, 245, 0.55)";
   }
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = hallsMarble ? 2 : 1.5;
   ctx.strokeRect(-h, -t / 2, 2 * h, t);
   ctx.strokeRect(-t / 2, -h, t, 2 * h);
   const lifeSpan = Math.max(1e-3, (p.expiresAt ?? elapsed) - (p.bornAt ?? elapsed - 1));
@@ -148,8 +168,8 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
       : "rgba(217, 119, 6, 0.9)"
     : hallsMarble
       ? frac > 0.35
-        ? "rgba(196, 181, 253, 0.92)"
-        : "rgba(148, 163, 184, 0.9)"
+        ? "rgba(110, 231, 183, 0.98)"
+        : "rgba(251, 146, 60, 0.95)"
       : maxHpCrystal
         ? frac > 0.35
           ? "rgba(251, 191, 36, 0.95)"
@@ -161,7 +181,7 @@ export function drawHealPickup(ctx, p, elapsed, opts = {}) {
   ctx.strokeStyle = bootlegSwamp
     ? "rgba(253, 224, 71, 0.65)"
     : hallsMarble
-      ? "rgba(226, 232, 240, 0.72)"
+      ? "rgba(167, 243, 208, 0.85)"
       : maxHpCrystal
         ? "rgba(254, 243, 199, 0.75)"
         : "rgba(236, 253, 245, 0.7)";
