@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Redirecting…</title>
+    <script>
+      (function () {
+        var path = location.pathname;
+        var suffix = "game.html";
+        var idx = path.length - suffix.length;
+        var next =
+          idx >= 0 && path.slice(idx).toLowerCase() === suffix
+            ? path.slice(0, idx) + "index.html"
+            : path.replace(/\/[^/]*$/, "/") + "index.html";
+        location.replace(next + location.search + location.hash);
+      })();
+    </script>
+    <meta http-equiv="refresh" content="0; url=index.html" />
+  </head>
+  <body
+    style="margin: 0; min-height: 100dvh; display: grid; place-items: center; background: #111827; color: #e2e8f0; font-family: system-ui, sans-serif"
+  >
+    <p>Opening <a href="./index.html" style="color: #38bdf8">Escape</a>…</p>
+  </body>
+</html>
