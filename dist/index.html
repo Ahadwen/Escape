@@ -2857,6 +2857,7 @@
       <div class="play-row">
         <div class="canvas-col canvas-stage">
           <canvas id="game" width="1120" height="700"></canvas>
+          <div id="escape-achievement-toasts" class="escape-achievement-toasts" aria-live="polite"></div>
           <div id="death-screen" class="death-screen" hidden aria-hidden="true" role="dialog" aria-labelledby="death-screen-title">
             <div class="death-screen-inner">
               <h2 id="death-screen-title" class="death-screen-title">You Died!</h2>
@@ -3283,6 +3284,508 @@
       }
     </style>
 
+    <div id="escape-pregame" class="escape-pregame" role="dialog" aria-modal="true" aria-label="Escape account and menu">
+      <div class="escape-pregame-card">
+        <header class="escape-pregame-brand">
+          <h1 class="escape-pregame-title">Escape</h1>
+          <p class="escape-pregame-tagline">Sign in to save progress and achievements</p>
+        </header>
+
+        <p id="pregame-accounts-unavailable" class="pregame-banner" hidden>
+          Accounts need Supabase — add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> (and run migration
+          005).
+        </p>
+
+        <section id="pregame-login" class="pregame-panel" hidden>
+          <div class="pregame-tabs" role="tablist">
+            <button type="button" id="pregame-show-login" class="pregame-tab pregame-tab--active" role="tab">
+              Log in
+            </button>
+            <button type="button" id="pregame-show-register" class="pregame-tab" role="tab">Create account</button>
+          </div>
+
+          <div class="pregame-oauth-block" hidden data-google-oauth="off">
+            <button type="button" id="pregame-google-login" class="pregame-btn pregame-btn--google" hidden>
+              <span class="pregame-google-icon" aria-hidden="true">G</span>
+              Continue with Google
+            </button>
+            <p class="pregame-oauth-divider" role="presentation"><span>or</span></p>
+          </div>
+
+          <form id="pregame-login-form" class="pregame-form" autocomplete="on">
+            <label class="pregame-field">
+              <span>Email</span>
+              <input type="email" name="email" required autocomplete="email" />
+            </label>
+            <label class="pregame-field">
+              <span>Password</span>
+              <input type="password" name="password" required minlength="8" autocomplete="current-password" />
+            </label>
+            <p id="pregame-login-error" class="pregame-error" hidden></p>
+            <button type="submit" class="pregame-btn pregame-btn--primary">Log in</button>
+          </form>
+
+          <form id="pregame-register-form" class="pregame-form" hidden autocomplete="on">
+            <label class="pregame-field">
+              <span>Username</span>
+              <input type="text" name="username" required minlength="2" maxlength="32" autocomplete="username" />
+            </label>
+            <label class="pregame-field">
+              <span>Email</span>
+              <input type="email" name="email" required autocomplete="email" />
+            </label>
+            <label class="pregame-field">
+              <span>Password</span>
+              <input type="password" name="password" required minlength="8" autocomplete="new-password" />
+            </label>
+            <label class="pregame-field">
+              <span>Confirm password</span>
+              <input type="password" name="confirm" required minlength="8" autocomplete="new-password" />
+            </label>
+            <p id="pregame-register-error" class="pregame-error" hidden></p>
+            <button type="submit" class="pregame-btn pregame-btn--primary">Create account</button>
+          </form>
+        </section>
+
+        <section id="pregame-menu" class="pregame-panel" hidden>
+          <p id="pregame-menu-welcome" class="pregame-welcome"></p>
+          <div class="pregame-menu-actions">
+            <button type="button" id="pregame-start-game" class="pregame-btn pregame-btn--primary pregame-btn--large">
+              Start game
+            </button>
+            <button type="button" id="pregame-open-stats" class="pregame-btn pregame-btn--secondary">
+              Stats &amp; achievements
+            </button>
+            <button type="button" id="pregame-logout" class="pregame-btn pregame-btn--ghost">Log out</button>
+          </div>
+        </section>
+
+        <section id="pregame-stats" class="pregame-panel pregame-panel--stats" hidden>
+          <h2 class="pregame-stats-heading">Stats &amp; achievements</h2>
+          <div id="pregame-stats-summary" class="pregame-stats-summary"></div>
+          <div id="pregame-stats-achievements" class="pregame-stats-scroll"></div>
+          <button type="button" id="pregame-stats-back" class="pregame-btn pregame-btn--secondary">Back to menu</button>
+        </section>
+      </div>
+    </div>
+
+    <style>
+      body.escape-pregame-active .page-with-side {
+        visibility: hidden;
+        pointer-events: none;
+      }
+
+      .escape-pregame {
+        position: fixed;
+        inset: 0;
+        z-index: 200000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        background:
+          radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99, 102, 241, 0.22), transparent 55%),
+          radial-gradient(ellipse 70% 50% at 50% 100%, rgba(15, 23, 42, 0.95), #0b1220);
+        overflow: auto;
+      }
+
+      .escape-pregame[hidden] {
+        display: none !important;
+      }
+
+      .escape-pregame-card {
+        width: min(100%, 420px);
+        max-height: min(92dvh, 720px);
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 22px 20px 18px;
+        border-radius: 14px;
+        border: 1px solid var(--escape-ui-border-bright);
+        background: linear-gradient(165deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.99));
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+      }
+
+      .escape-pregame-brand {
+        text-align: center;
+      }
+
+      .escape-pregame-title {
+        margin: 0 0 4px;
+        font-size: 28px;
+        letter-spacing: 0.06em;
+        color: #f8fafc;
+      }
+
+      .escape-pregame-tagline {
+        margin: 0;
+        font-size: 13px;
+        color: #94a3b8;
+        line-height: 1.4;
+      }
+
+      .pregame-banner {
+        margin: 0;
+        padding: 10px 12px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #fde68a;
+        background: rgba(120, 53, 15, 0.35);
+        border: 1px solid rgba(251, 191, 36, 0.35);
+        border-radius: 8px;
+      }
+
+      .pregame-banner code {
+        font-size: 11px;
+        color: #fef3c7;
+      }
+
+      .pregame-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 4px;
+      }
+
+      .pregame-tab {
+        flex: 1;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--escape-ui-border);
+        background: rgba(var(--escape-ui-deep-rgb), 0.6);
+        color: #94a3b8;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      .pregame-tab--active {
+        color: #e2e8f0;
+        border-color: #6366f1;
+        background: rgba(99, 102, 241, 0.2);
+      }
+
+      .pregame-panel[hidden],
+      .pregame-form[hidden],
+      .pregame-oauth-block[hidden] {
+        display: none !important;
+      }
+
+      .pregame-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .pregame-oauth-block {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .pregame-oauth-divider {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 11px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .pregame-oauth-divider::before,
+      .pregame-oauth-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--escape-ui-border);
+      }
+
+      .pregame-btn--google {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        border-color: #475569;
+        background: #fff;
+        color: #1e293b;
+        font-weight: 600;
+      }
+
+      .pregame-btn--google:hover {
+        background: #f8fafc;
+      }
+
+      .pregame-google-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        font-weight: 800;
+        font-size: 14px;
+        font-family: Georgia, "Times New Roman", serif;
+        color: #4285f4;
+        background: #fff;
+        border: 1px solid #e2e8f0;
+      }
+
+      .pregame-field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+
+      .pregame-field input {
+        padding: 10px 11px;
+        border-radius: 8px;
+        border: 1px solid var(--escape-ui-border-bright);
+        background: rgba(var(--escape-ui-deep-rgb), 0.85);
+        color: #f1f5f9;
+        font-size: 14px;
+      }
+
+      .pregame-field input:focus {
+        outline: 2px solid rgba(99, 102, 241, 0.55);
+        outline-offset: 1px;
+      }
+
+      .pregame-error {
+        margin: 0;
+        font-size: 12px;
+        color: #fca5a5;
+        line-height: 1.4;
+      }
+
+      .pregame-btn {
+        border-radius: 8px;
+        border: 1px solid var(--escape-ui-border-bright);
+        padding: 10px 14px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        color: #e2e8f0;
+        background: rgba(var(--escape-ui-panel-rgb), 0.9);
+      }
+
+      .pregame-btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .pregame-btn--primary {
+        border-color: #6366f1;
+        background: linear-gradient(180deg, #6366f1, #4f46e5);
+        color: #fff;
+      }
+
+      .pregame-btn--secondary {
+        border-color: #475569;
+        background: rgba(51, 65, 85, 0.65);
+      }
+
+      .pregame-btn--ghost {
+        background: transparent;
+        border-color: transparent;
+        color: #94a3b8;
+        font-weight: 500;
+      }
+
+      .pregame-btn--large {
+        padding: 14px 16px;
+        font-size: 16px;
+      }
+
+      .pregame-welcome {
+        margin: 0 0 6px;
+        text-align: center;
+        font-size: 14px;
+        color: #cbd5e1;
+      }
+
+      .pregame-menu-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .pregame-panel--stats {
+        min-height: 0;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .pregame-stats-heading {
+        margin: 0;
+        font-size: 18px;
+        text-align: center;
+        color: #e2e8f0;
+      }
+
+      .pregame-stats-summary {
+        font-size: 13px;
+        line-height: 1.5;
+        color: #cbd5e1;
+      }
+
+      .pregame-stats-summary p {
+        margin: 0 0 4px;
+      }
+
+      .pregame-stats-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        overscroll-behavior: contain;
+        padding-right: 4px;
+      }
+
+      .pregame-stats-group-title {
+        margin: 12px 0 6px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+      }
+
+      .pregame-stats-group-title:first-child {
+        margin-top: 0;
+      }
+
+      .pregame-ach-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .pregame-ach {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--escape-ui-border);
+        background: rgba(var(--escape-ui-deep-rgb), 0.55);
+        opacity: 0.72;
+      }
+
+      .pregame-ach--done {
+        opacity: 1;
+        border-color: rgba(52, 211, 153, 0.45);
+        background: rgba(6, 78, 59, 0.25);
+      }
+
+      .pregame-ach-mark {
+        flex: 0 0 auto;
+        width: 20px;
+        text-align: center;
+        font-size: 14px;
+        color: #64748b;
+      }
+
+      .pregame-ach--done .pregame-ach-mark {
+        color: #34d399;
+      }
+
+      .pregame-ach-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        font-size: 12px;
+        color: #94a3b8;
+      }
+
+      .pregame-ach-text strong {
+        font-size: 13px;
+        color: #e2e8f0;
+      }
+
+      .canvas-stage > .escape-achievement-toasts {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        z-index: 12;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 10px;
+        pointer-events: none;
+        max-width: min(calc(100% - 16px), 300px);
+      }
+
+      .escape-ach-toast {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 11px 13px;
+        border-radius: 10px;
+        border: 1px solid rgba(52, 211, 153, 0.45);
+        background: linear-gradient(145deg, rgba(6, 78, 59, 0.94), rgba(15, 23, 42, 0.96));
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+        color: #ecfdf5;
+        opacity: 0;
+        transform: translateX(18px) scale(0.96);
+        transition:
+          opacity 0.28s ease,
+          transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      .escape-ach-toast--visible {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+      }
+
+      .escape-ach-toast--out {
+        opacity: 0;
+        transform: translateX(12px) scale(0.98);
+      }
+
+      .escape-ach-toast-mark {
+        flex: 0 0 auto;
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        background: rgba(16, 185, 129, 0.22);
+        color: #6ee7b7;
+        font-size: 14px;
+        line-height: 1;
+      }
+
+      .escape-ach-toast-body {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .escape-ach-toast-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #86efac;
+      }
+
+      .escape-ach-toast-title {
+        font-size: 14px;
+        color: #f8fafc;
+      }
+
+      .escape-ach-toast-detail {
+        font-size: 11px;
+        line-height: 1.35;
+        color: #a7f3d0;
+      }
+    </style>
+
     <div id="forge-modal" class="roulette-modal forge-modal" hidden aria-live="polite" aria-label="Forge">
       <div class="roulette-modal-inner forge-modal-inner" style="border-color: rgba(180, 83, 9, 0.85)">
         <div class="roulette-modal-head">
@@ -3312,6 +3815,6 @@
       </div>
     </div>
 
-      <script type="module" crossorigin src="./assets/main-BkLr_JrK.js"></script>
+      <script type="module" crossorigin src="./assets/main-Bw3F0UxT.js"></script>
   </body>
 </html>

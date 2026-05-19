@@ -53,7 +53,11 @@ export function ensureSupabaseClient() {
       return null;
     }
     client = createClient(creds.url, creds.key, {
-      auth: { persistSession: false, autoRefreshToken: false },
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
     });
     return client;
   })();

@@ -163,6 +163,7 @@ import { createRunLogger, instrumentObjectMethods } from "./debug/runLogger.js";
 import { createPathRuntime } from "./run/pathRuntime.js";
 import { applyPathShellTheme } from "./hud/pathShellTheme.js";
 import { createAnalytics } from "./analytics/index.js";
+import { whenGameAllowed } from "./accounts/preGameGate.js";
 
 /** Procedural hex floor — near REFERENCE slate fill (`rgba(15,23,42,…)` family). */
 const FLOOR_HEX_FILL = "#0f172a";
@@ -7251,7 +7252,9 @@ function boot() {
   );
 }
 
-function startBootWhenGameCanvasMounted() {
+async function startBootWhenGameCanvasMounted() {
+  await whenGameAllowed();
+
   const canvas = document.getElementById("game");
   if (canvas instanceof HTMLCanvasElement) {
     boot();
@@ -7259,7 +7262,7 @@ function startBootWhenGameCanvasMounted() {
   }
   /** Build output may execute before body subtree is observable in some hosts; defer until `#game` exists. */
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startBootWhenGameCanvasMounted, { once: true });
+    document.addEventListener("DOMContentLoaded", () => startBootWhenGameCanvasMounted(), { once: true });
     return;
   }
   let frames = 0;

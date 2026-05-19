@@ -73,6 +73,9 @@ export const CARD_RANK_SPAWN_WEIGHT_MIN = 1;
 export const SET_BONUS_SUIT_THRESHOLD = 7;
 export const SET_BONUS_SUIT_MAX = 13;
 
+/** Minimalist achievement: reach L1 safehouse after this many seconds on the level (danger clock). */
+export const MINIMALIST_SAFEHOUSE_SURVIVAL_SEC = 7 * 60;
+
 /** No procedural specials (except dev west-test hex) until this many seconds of sim time. */
 export const SPECIAL_PROCEDURAL_GRACE_SEC = 15;
 /** Minimum sim-time after a procedural special tile despawns (spent or leaves the tile cache) before another may spawn. */

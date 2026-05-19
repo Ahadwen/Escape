@@ -1,3 +1,5 @@
+import { queueAchievementPopupsFromKeys } from "../accounts/achievementPopups.js";
+import { maybeSyncAccountRunStarted, maybeSyncAccountSegmentClose } from "../accounts/sync.js";
 import { ensureSupabaseClient, getSupabaseClient } from "./client.js";
 import { flushAnalyticsQueue, migrateAnalyticsQueue } from "./flush.js";
 import { resolveDamageSourceKey } from "./damageSource.js";
@@ -54,26 +56,38 @@ export function createAnalytics(deps) {
     };
   }
 
+  /** @param {{ achievementKeys?: string[] } | null} closed */
+  function notifySegmentAchievements(closed) {
+    if (closed?.achievementKeys?.length) {
+      queueAchievementPopupsFromKeys(closed.achievementKeys);
+    }
+  }
+
   return {
     beginRun() {
+      maybeSyncAccountRunStarted();
       ensureSupabaseClient().then(() => tracker.beginRun());
     },
 
     onSafehouseLevelUp() {
       const ctx = segmentContext();
       const closed = tracker.takeSegmentClose({ ...ctx, outcome: "safehouse_level_up" });
+      notifySegmentAchievements(closed);
       tracker.startSegment(ctx);
       ensureSupabaseClient().then((client) => {
         tracker.flushSegmentClose(closed, client);
+        maybeSyncAccountSegmentClose(closed);
       });
     },
 
     onDeath() {
       const ctx = segmentContext();
       const closed = tracker.takeSegmentClose({ ...ctx, outcome: "death" });
+      notifySegmentAchievements(closed);
       const ended = tracker.takeEndRun("death");
       ensureSupabaseClient().then((client) => {
         tracker.flushSegmentClose(closed, client);
+        maybeSyncAccountSegmentClose(closed);
         tracker.flushEndRun(ended, client);
       });
     },
@@ -81,9 +95,11 @@ export function createAnalytics(deps) {
     onVictory() {
       const ctx = segmentContext();
       const closed = tracker.takeSegmentClose({ ...ctx, outcome: "victory" });
+      notifySegmentAchievements(closed);
       const ended = tracker.takeEndRun("victory");
       ensureSupabaseClient().then((client) => {
         tracker.flushSegmentClose(closed, client);
+        maybeSyncAccountSegmentClose(closed);
         tracker.flushEndRun(ended, client);
       });
     },

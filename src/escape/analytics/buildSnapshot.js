@@ -1,7 +1,11 @@
 import { deckKey } from "../items/cardUtils.js";
 import { countSuitsAcrossAllStowed } from "../items/setBonusPresentation.js";
 import { forEachDeckCard } from "../items/inventoryState.js";
-import { SET_BONUS_SUIT_MAX, SET_BONUS_SUIT_THRESHOLD } from "../balance.js";
+import {
+  MINIMALIST_SAFEHOUSE_SURVIVAL_SEC,
+  SET_BONUS_SUIT_MAX,
+  SET_BONUS_SUIT_THRESHOLD,
+} from "../balance.js";
 
 const SUITS = ["hearts", "diamonds", "clubs", "spades"];
 
@@ -120,15 +124,27 @@ export function snapshotBuild(inventory, hero, pendingCard = null) {
  */
 export function achievementKeysFromSegment(segmentRow) {
   const keys = [];
-  const { outcome, path_id, display_level, build_end } = segmentRow;
+  const { outcome, path_id, display_level, build_end, survival_sec } = segmentRow;
+  if (outcome === "victory") {
+    keys.push("victory");
+  }
   if (outcome === "safehouse_level_up" || outcome === "victory") {
     const pathKey = path_id ?? "base";
     keys.push(`clear:${pathKey}:L${display_level}`);
   }
-  const tiers = build_end?.set_tiers;
-  if (tiers && typeof tiers === "object") {
-    for (const suit of SUITS) {
-      if (tiers[suit] === 13) keys.push(`set13:${suit}`);
+  // Full suit set — only when reaching a safehouse with 13/13, not on picking up the last card mid-level.
+  if (outcome === "safehouse_level_up") {
+    const tiers = build_end?.set_tiers;
+    if (tiers && typeof tiers === "object") {
+      for (const suit of SUITS) {
+        if (tiers[suit] === 13) keys.push(`set13:${suit}`);
+      }
+    }
+    if (
+      display_level === 1 &&
+      Number(survival_sec) >= MINIMALIST_SAFEHOUSE_SURVIVAL_SEC
+    ) {
+      keys.push("minimalist");
     }
   }
   return keys;
