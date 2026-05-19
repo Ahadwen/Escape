@@ -1,5 +1,9 @@
 import { ensureSupabaseClient } from "../analytics/client.js";
-import { isValidAccountId, normalizeAccountProfile } from "./accountProfile.js";
+import {
+  isValidAccountId,
+  normalizeAccountProfile,
+  parseOAuthSyncResponse,
+} from "./accountProfile.js";
 
 /**
  * @param {unknown} err
@@ -145,9 +149,11 @@ export async function signInWithGoogle() {
 
 /**
  * After OAuth redirect, link Supabase Auth user to escape_accounts.
- * @returns {Promise<object | null>}
+ * New users without a row get `{ needsUsername: true, email }` until a username is submitted.
+ * @param {{ username?: string }} [opts]
+ * @returns {Promise<import('./session.js').EscapeAccountProfile | { needsUsername: true; email: string } | null>}
  */
-export async function syncOAuthAccountFromSession() {
+export async function syncOAuthAccountFromSession(opts = {}) {
   const client = await ensureSupabaseClient();
   if (!client) return null;
 
@@ -162,12 +168,36 @@ export async function syncOAuthAccountFromSession() {
     user.email.split("@")[0] ??
     "Player";
 
-  const { data: profile, error } = await client.rpc("escape_sync_oauth_account", {
+  const username = opts.username?.trim();
+  const { data: payload, error } = await client.rpc("escape_sync_oauth_account", {
     p_auth_user_id: user.id,
     p_email: user.email,
     p_display_name: displayName,
+    p_username: username || null,
   });
-  return assertAccountRpcOk(error, profile);
+  if (error) throw new Error(rpcErrorMessage(error));
+
+  const parsed = parseOAuthSyncResponse(payload);
+  if (!parsed) throw new Error("Invalid account response from server");
+  if ("needsUsername" in parsed) return parsed;
+
+  return parsed;
+}
+
+/**
+ * Finish Google sign-up after the player picks a username.
+ * @param {string} username
+ */
+export async function completeOAuthRegistration(username) {
+  const trimmed = username.trim();
+  if (trimmed.length < 2 || trimmed.length > 32) {
+    throw new Error("Username must be 2–32 characters");
+  }
+  const result = await syncOAuthAccountFromSession({ username: trimmed });
+  if (!result || "needsUsername" in result) {
+    throw new Error("Could not create account — try again");
+  }
+  return result;
 }
 
 export async function signOutSupabaseAuth() {

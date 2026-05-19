@@ -24,6 +24,27 @@ function toBool(value) {
  * @param {unknown} data
  * @returns {EscapeAccountProfile | null}
  */
+/**
+ * @param {unknown} data
+ * @returns {{ needsUsername: true; email: string } | null}
+ */
+export function parseOAuthNeedsUsername(data) {
+  if (data == null || typeof data !== "object" || Array.isArray(data)) return null;
+  const o = /** @type {Record<string, unknown>} */ (data);
+  if (o.needs_username !== true && o.needsUsername !== true) return null;
+  return { needsUsername: true, email: String(o.email ?? "") };
+}
+
+/**
+ * @param {unknown} data
+ * @returns {EscapeAccountProfile | { needsUsername: true; email: string } | null}
+ */
+export function parseOAuthSyncResponse(data) {
+  const pending = parseOAuthNeedsUsername(data);
+  if (pending) return pending;
+  return normalizeAccountProfile(data);
+}
+
 export function normalizeAccountProfile(data) {
   if (data == null) return null;
 

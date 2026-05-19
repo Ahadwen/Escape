@@ -3347,6 +3347,29 @@
           </form>
         </section>
 
+        <section id="pregame-oauth-setup" class="pregame-panel" hidden>
+          <h2 class="pregame-oauth-setup-title">Choose a username</h2>
+          <p class="pregame-oauth-setup-lead">
+            Signed in with Google as <strong id="pregame-oauth-setup-email"></strong>
+          </p>
+          <form id="pregame-oauth-username-form" class="pregame-form" autocomplete="on">
+            <label class="pregame-field">
+              <span>Username</span>
+              <input
+                type="text"
+                name="username"
+                required
+                minlength="2"
+                maxlength="32"
+                autocomplete="username"
+                placeholder="2–32 characters"
+              />
+            </label>
+            <p id="pregame-oauth-username-error" class="pregame-error" hidden></p>
+            <button type="submit" class="pregame-btn pregame-btn--primary">Continue</button>
+          </form>
+        </section>
+
         <section id="pregame-menu" class="pregame-panel" hidden>
           <p id="pregame-menu-welcome" class="pregame-welcome"></p>
           <div class="pregame-menu-actions">
@@ -3596,6 +3619,27 @@
       .pregame-btn--large {
         padding: 14px 16px;
         font-size: 16px;
+      }
+
+      .pregame-oauth-setup-title {
+        margin: 0 0 8px;
+        font-size: 18px;
+        font-weight: 600;
+        color: #f8fafc;
+        text-align: center;
+      }
+
+      .pregame-oauth-setup-lead {
+        margin: 0 0 14px;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #94a3b8;
+        text-align: center;
+      }
+
+      .pregame-oauth-setup-lead strong {
+        color: #e2e8f0;
+        font-weight: 600;
       }
 
       .pregame-welcome {

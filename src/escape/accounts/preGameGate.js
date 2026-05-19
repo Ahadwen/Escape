@@ -1,5 +1,6 @@
 import { ACHIEVEMENT_ENTRIES } from "./achievementRegistry.js";
 import {
+  completeOAuthRegistration,
   loginAccount,
   registerAccount,
   signInWithGoogle,
@@ -41,8 +42,12 @@ function initPreGameGate() {
   document.body.classList.add("escape-pregame-active");
 
   const loginView = document.getElementById("pregame-login");
+  const oauthSetupView = document.getElementById("pregame-oauth-setup");
   const menuView = document.getElementById("pregame-menu");
   const statsView = document.getElementById("pregame-stats");
+  const oauthUsernameForm = document.getElementById("pregame-oauth-username-form");
+  const oauthUsernameError = document.getElementById("pregame-oauth-username-error");
+  const oauthSetupEmail = document.getElementById("pregame-oauth-setup-email");
   const loginForm = document.getElementById("pregame-login-form");
   const registerForm = document.getElementById("pregame-register-form");
   const loginError = document.getElementById("pregame-login-error");
@@ -70,7 +75,7 @@ function initPreGameGate() {
     showRegisterTabBtn?.classList.toggle("pregame-tab--active", !isLogin);
   }
 
-  /** @param {"login" | "menu" | "stats"} view */
+  /** @param {"login" | "oauth-setup" | "menu" | "stats"} view */
   function showView(view) {
     const setPanel = (el, visible) => {
       if (!el) return;
@@ -78,8 +83,21 @@ function initPreGameGate() {
       else el.setAttribute("hidden", "");
     };
     setPanel(loginView, view === "login");
+    setPanel(oauthSetupView, view === "oauth-setup");
     setPanel(menuView, view === "menu");
     setPanel(statsView, view === "stats");
+  }
+
+  /** @param {string} email */
+  function enterOAuthUsernameSetup(email) {
+    if (oauthSetupEmail) oauthSetupEmail.textContent = email;
+    const usernameInput = oauthUsernameForm?.querySelector('input[name="username"]');
+    if (usernameInput instanceof HTMLInputElement) {
+      usernameInput.value = "";
+      usernameInput.focus();
+    }
+    setError(oauthUsernameError, "");
+    showView("oauth-setup");
   }
 
   /** @param {HTMLElement | null} el */
@@ -184,9 +202,13 @@ function initPreGameGate() {
   async function tryResumeOAuthSession() {
     if (!GOOGLE_OAUTH_ENABLED) return false;
     try {
-      const profile = await syncOAuthAccountFromSession();
-      if (profile) {
-        saveAccountProfile(profile);
+      const result = await syncOAuthAccountFromSession();
+      if (result && "needsUsername" in result) {
+        enterOAuthUsernameSetup(result.email);
+        return true;
+      }
+      if (result) {
+        saveAccountProfile(result);
         enterMenu();
         return true;
       }
@@ -292,6 +314,24 @@ function initPreGameGate() {
     enterMenu();
   });
 
+  oauthUsernameForm?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    setError(oauthUsernameError, "");
+    const fd = new FormData(oauthUsernameForm);
+    const username = String(fd.get("username") ?? "").trim();
+    const submitBtn = oauthUsernameForm.querySelector('button[type="submit"]');
+    if (submitBtn instanceof HTMLButtonElement) submitBtn.disabled = true;
+    try {
+      const profile = await completeOAuthRegistration(username);
+      saveAccountProfile(profile);
+      enterMenu();
+    } catch (err) {
+      setError(oauthUsernameError, err instanceof Error ? err.message : "Could not create account");
+    } finally {
+      if (submitBtn instanceof HTMLButtonElement) submitBtn.disabled = false;
+    }
+  });
+
   if (GOOGLE_OAUTH_ENABLED) {
     document.getElementById("pregame-google-login")?.addEventListener("click", async () => {
       setError(loginError, "");
@@ -313,6 +353,7 @@ function initPreGameGate() {
     enterLogin();
     setError(loginError, "");
     setError(registerError, "");
+    setError(oauthUsernameError, "");
   });
 }
 
