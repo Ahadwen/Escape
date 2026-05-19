@@ -1,4 +1,10 @@
-import { fetchAccount, recordAccountRunStarted, recordAccountSegmentProgress } from "./api.js";
+import {
+  fetchAccount,
+  linkAnalyticsPlayer,
+  recordAccountRunStarted,
+  recordAccountSegmentProgress,
+} from "./api.js";
+import { getOrCreatePlayerId } from "../analytics/session.js";
 import {
   clearBrowserAccountCookie,
   getBrowserAccountIdFromCookie,
@@ -22,6 +28,7 @@ export async function resumeAccountFromBrowserCookie() {
   try {
     const profile = await fetchAccount(accountId);
     saveAccountProfile(profile);
+    maybeLinkAccountAnalyticsPlayer();
     return profile;
   } catch (err) {
     console.warn("[Escape accounts] cookie resume failed:", err);
@@ -30,9 +37,28 @@ export async function resumeAccountFromBrowserCookie() {
   }
 }
 
+function getLocalAnalyticsPlayerId() {
+  try {
+    return getOrCreatePlayerId();
+  } catch {
+    return null;
+  }
+}
+
+/** Link browser analytics id to the logged-in account when possible. */
+export function maybeLinkAccountAnalyticsPlayer() {
+  const accountId = getLoggedInAccountId();
+  const playerId = getLocalAnalyticsPlayerId();
+  if (!accountId || !playerId) return;
+
+  linkAnalyticsPlayer(accountId, playerId).catch(() => {});
+}
+
 export function maybeSyncAccountRunStarted() {
   const accountId = getLoggedInAccountId();
   if (!accountId) return;
+
+  const analyticsPlayerId = getLocalAnalyticsPlayerId();
 
   const profile = loadAccountProfile();
   if (profile) {
@@ -42,7 +68,7 @@ export function maybeSyncAccountRunStarted() {
     });
   }
 
-  recordAccountRunStarted(accountId)
+  recordAccountRunStarted(accountId, analyticsPlayerId ?? undefined)
     .then(() => refreshLoggedInAccount())
     .catch(() => {});
 }
@@ -69,6 +95,7 @@ export async function refreshLoggedInAccount() {
   try {
     const profile = await fetchAccount(accountId);
     saveAccountProfile(profile);
+    maybeLinkAccountAnalyticsPlayer();
     return profile;
   } catch (err) {
     console.warn("[Escape accounts] refresh:", err);

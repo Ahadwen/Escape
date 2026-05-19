@@ -7,7 +7,11 @@ import {
   signOutSupabaseAuth,
   syncOAuthAccountFromSession,
 } from "./api.js";
-import { refreshLoggedInAccount, resumeAccountFromBrowserCookie } from "./sync.js";
+import {
+  maybeLinkAccountAnalyticsPlayer,
+  refreshLoggedInAccount,
+  resumeAccountFromBrowserCookie,
+} from "./sync.js";
 import { clearAccountProfile, loadAccountProfile, saveAccountProfile } from "./session.js";
 import { ensureSupabaseClient } from "../analytics/client.js";
 
@@ -209,6 +213,7 @@ function initPreGameGate() {
       }
       if (result) {
         saveAccountProfile(result);
+        maybeLinkAccountAnalyticsPlayer();
         enterMenu();
         return true;
       }
@@ -265,6 +270,7 @@ function initPreGameGate() {
     try {
       const profile = await loginAccount({ email, password });
       saveAccountProfile(profile);
+      maybeLinkAccountAnalyticsPlayer();
       enterMenu();
     } catch (err) {
       setError(loginError, err instanceof Error ? err.message : "Login failed");
@@ -290,6 +296,7 @@ function initPreGameGate() {
     try {
       const profile = await registerAccount({ username, email, password });
       saveAccountProfile(profile);
+      maybeLinkAccountAnalyticsPlayer();
       enterMenu();
     } catch (err) {
       setError(registerError, err instanceof Error ? err.message : "Registration failed");
@@ -324,6 +331,7 @@ function initPreGameGate() {
     try {
       const profile = await completeOAuthRegistration(username);
       saveAccountProfile(profile);
+      maybeLinkAccountAnalyticsPlayer();
       enterMenu();
     } catch (err) {
       setError(oauthUsernameError, err instanceof Error ? err.message : "Could not create account");

@@ -115,12 +115,35 @@ export async function fetchAccount(accountId) {
 /**
  * @param {string} accountId
  */
-export async function recordAccountRunStarted(accountId) {
+/**
+ * @param {string} accountId
+ * @param {string} [analyticsPlayerId]
+ */
+export async function linkAnalyticsPlayer(accountId, analyticsPlayerId) {
+  const client = await ensureSupabaseClient();
+  if (!client) return;
+
+  const playerId = analyticsPlayerId?.trim();
+  if (!playerId) return;
+
+  const { error } = await client.rpc("escape_link_analytics_player", {
+    p_account_id: requireAccountId(accountId),
+    p_analytics_player_id: playerId,
+  });
+  if (error) console.warn("[Escape accounts] link_analytics_player:", rpcErrorMessage(error));
+}
+
+/**
+ * @param {string} accountId
+ * @param {string} [analyticsPlayerId]
+ */
+export async function recordAccountRunStarted(accountId, analyticsPlayerId) {
   const client = await ensureSupabaseClient();
   if (!client) return;
 
   const { error } = await client.rpc("escape_record_run_started", {
     p_account_id: requireAccountId(accountId),
+    p_analytics_player_id: analyticsPlayerId?.trim() || null,
   });
   if (error) console.warn("[Escape accounts] record_run_started:", rpcErrorMessage(error));
 }
